@@ -3,6 +3,11 @@ load("@protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_go//go:def.bzl", "go_library")
 load("//bazel:proto.bzl", "cucina_proto_go")
 
+exports_files(
+    glob(["*.proto"]),
+    visibility = ["//visibility:public"],
+)
+
 proto_library(
     name = "cucinav1_proto",
     srcs = [

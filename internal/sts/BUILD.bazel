@@ -28,10 +28,9 @@ cucina_go_test(
     ],
     data = [
         "//internal/auth:sample_policies",
-        "//tools:bb_storage",
     ],
-    env = {
-        "BB_STORAGE": "$(rootpath //tools:bb_storage)",
+    runfiles_env = {
+        "BB_STORAGE": "//tools:bb_storage",
     },
     tier = "integration",
     deps = [

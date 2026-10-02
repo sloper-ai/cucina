@@ -10,17 +10,11 @@ cucina_go_test(
         "hostl2_test.go",
         "roundtrip_test.go",
     ],
-    data = [
-        "//tools:bb_runner",
-        "//tools:bb_scheduler",
-        "//tools:bb_storage",
-        "//tools:bb_worker",
-    ],
-    env = {
-        "BB_RUNNER": "$(rootpath //tools:bb_runner)",
-        "BB_SCHEDULER": "$(rootpath //tools:bb_scheduler)",
-        "BB_STORAGE": "$(rootpath //tools:bb_storage)",
-        "BB_WORKER": "$(rootpath //tools:bb_worker)",
+    runfiles_env = {
+        "BB_RUNNER": "//tools:bb_runner",
+        "BB_SCHEDULER": "//tools:bb_scheduler",
+        "BB_STORAGE": "//tools:bb_storage",
+        "BB_WORKER": "//tools:bb_worker",
     },
     tier = "integration",
     deps = [

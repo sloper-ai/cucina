@@ -74,5 +74,8 @@ cucina_go_test(
 filegroup(
     name = "sample_policies",
     srcs = glob(["testdata/policies/*.yaml"]),
-    visibility = ["//internal/sts:__pkg__"],
+    visibility = [
+        "//charts/cucina/tests/static:__pkg__",
+        "//internal/sts:__pkg__",
+    ],
 )

@@ -26,13 +26,9 @@ cucina_go_test(
     name = "buildqueue_test",
     timeout = "short",
     srcs = ["buildqueue_test.go"],
-    data = [
-        "//tools:bb_scheduler",
-        "//tools:bb_storage",
-    ],
-    env = {
-        "BB_SCHEDULER": "$(rootpath //tools:bb_scheduler)",
-        "BB_STORAGE": "$(rootpath //tools:bb_storage)",
+    runfiles_env = {
+        "BB_SCHEDULER": "//tools:bb_scheduler",
+        "BB_STORAGE": "//tools:bb_storage",
     },
     tier = "integration",
     deps = [

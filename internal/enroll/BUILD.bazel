@@ -37,6 +37,7 @@ go_library(
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/types",
         "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@org_golang_google_genproto_googleapis_rpc//errdetails",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//peer",
@@ -59,8 +60,9 @@ cucina_go_test(
         "t10h_test.go",
         "worker_test.go",
     ],
-    data = ["//tools:bb_scheduler"],
-    env = {"BB_SCHEDULER": "$(rootpath //tools:bb_scheduler)"},
+    runfiles_env = {
+        "BB_SCHEDULER": "//tools:bb_scheduler",
+    },
     tier = "integration",  # gRPC over loopback TLS, the pinned bb_scheduler (T10 h)
     deps = [
         ":enroll",

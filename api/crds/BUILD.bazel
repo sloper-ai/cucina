@@ -4,3 +4,9 @@ exports_files(
     glob(["*.yaml"]),
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "crds",
+    srcs = glob(["*.yaml"]),
+    visibility = ["//visibility:public"],
+)
