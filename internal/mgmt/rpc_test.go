@@ -315,6 +315,12 @@ func TestQueueAndOperationRPCs(t *testing.T) {
 			equal(t, "worker", op.GetWorkerNode(), "i-0aaaaaaaaaaaaaaa1")
 			equal(t, "thread", op.GetWorkerThread(), uint32(3))
 		}},
+		{name: "get completed returns the execute response", ctx: as(reader), call: func(ctx context.Context, s *mgmt.Server) (proto.Message, error) {
+			f.sched.ops = append(f.sched.ops, ports.Operation{Name: "op-5", Queue: qk("main", linuxNative), ActionDigest: "ee55-1", Stage: "completed", ExecuteResponse: []byte("er")})
+			return s.GetOperation(ctx, &cucinav1.GetOperationRequest{Name: "op-5"})
+		}, check: func(t *testing.T, m proto.Message) {
+			equal(t, "execute response", string(m.(*cucinav1.GetOperationResponse).GetExecuteResponse()), "er")
+		}},
 		{name: "get invisible", ctx: as(reader), code: codes.NotFound, call: func(ctx context.Context, s *mgmt.Server) (proto.Message, error) {
 			return s.GetOperation(ctx, &cucinav1.GetOperationRequest{Name: "op-4"})
 		}},

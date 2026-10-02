@@ -3526,10 +3526,15 @@ func (x *GetOperationRequest) GetName() string {
 }
 
 type GetOperationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Operation     *OperationSummary      `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Operation *OperationSummary      `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"`
+	// Serialized build.bazel.remote.execution.v2.ExecuteResponse of a completed operation (empty while
+	// queued or executing, and once the scheduler has forgotten the operation). It carries the exit
+	// code, stdout/stderr digests and timing of a just-failed action, which the action cache never
+	// stores (`cucinactl action inspect <operation>`).
+	ExecuteResponse []byte `protobuf:"bytes,2,opt,name=execute_response,json=executeResponse,proto3" json:"execute_response,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetOperationResponse) Reset() {
@@ -3565,6 +3570,13 @@ func (*GetOperationResponse) Descriptor() ([]byte, []int) {
 func (x *GetOperationResponse) GetOperation() *OperationSummary {
 	if x != nil {
 		return x.Operation
+	}
+	return nil
+}
+
+func (x *GetOperationResponse) GetExecuteResponse() []byte {
+	if x != nil {
+		return x.ExecuteResponse
 	}
 	return nil
 }
@@ -5060,9 +5072,10 @@ const file_cucina_v1_management_proto_rawDesc = "" +
 	"\fKIND_CHANGED\x10\x02\x12\x10\n" +
 	"\fKIND_REMOVED\x10\x03\")\n" +
 	"\x13GetOperationRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"Q\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"|\n" +
 	"\x14GetOperationResponse\x129\n" +
-	"\toperation\x18\x01 \x01(\v2\x1b.cucina.v1.OperationSummaryR\toperation\"\xaf\x01\n" +
+	"\toperation\x18\x01 \x01(\v2\x1b.cucina.v1.OperationSummaryR\toperation\x12)\n" +
+	"\x10execute_response\x18\x02 \x01(\fR\x0fexecuteResponse\"\xaf\x01\n" +
 	"\x15KillOperationsRequest\x12'\n" +
 	"\x0eoperation_name\x18\x01 \x01(\tH\x00R\roperationName\x12I\n" +
 	"\x15queue_without_workers\x18\x02 \x01(\v2\x13.cucina.v1.QueueRefH\x00R\x13queueWithoutWorkers\x12\x18\n" +

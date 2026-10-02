@@ -432,6 +432,11 @@ message GetOperationRequest {
 }
 message GetOperationResponse {
   OperationSummary operation = 1;
+  // Serialized build.bazel.remote.execution.v2.ExecuteResponse of a completed operation (empty while
+  // queued or executing, and once the scheduler has forgotten the operation). It carries the exit
+  // code, stdout/stderr digests and timing of a just-failed action, which the action cache never
+  // stores (`cucinactl action inspect <operation>`).
+  bytes execute_response = 2;
 }
 
 message KillOperationsRequest {

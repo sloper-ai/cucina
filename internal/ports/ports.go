@@ -396,6 +396,8 @@ type Operation struct {
 	InvocationID string
 	Priority     int32
 	Worker       WorkerID // when executing
+	// ExecuteResponse is the serialized REAPI ExecuteResponse of a completed operation (GetOperation only).
+	ExecuteResponse []byte
 }
 
 // OperationFilter selects operations to list.

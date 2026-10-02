@@ -158,7 +158,7 @@ func (s *Server) GetOperation(ctx context.Context, req *cucinav1.GetOperationReq
 	if !s.canSee(p, op.Queue.InstanceNamePrefix) {
 		return nil, notFound("operation %q not found", req.GetName())
 	}
-	return &cucinav1.GetOperationResponse{Operation: operationSummary(op)}, nil
+	return &cucinav1.GetOperationResponse{Operation: operationSummary(op), ExecuteResponse: op.ExecuteResponse}, nil
 }
 
 // KillOperations fails one operation, or every queued operation of a queue without

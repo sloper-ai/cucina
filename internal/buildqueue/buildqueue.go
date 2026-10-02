@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"os"
 	"slices"
 	"strconv"
@@ -411,6 +412,11 @@ func (c *Client) GetOperation(ctx context.Context, name string) (ports.Operation
 		return ports.Operation{}, mapError("GetOperation", err, false)
 	}
 	ops := []ports.Operation{toOperation(resp.GetOperation(), name)}
+	if done := resp.GetOperation().GetCompleted(); done != nil {
+		if b, err := proto.Marshal(done); err == nil {
+			ops[0].ExecuteResponse = b
+		}
+	}
 	if err := c.attachWorkers(ctx, ops); err != nil {
 		return ports.Operation{}, err
 	}
