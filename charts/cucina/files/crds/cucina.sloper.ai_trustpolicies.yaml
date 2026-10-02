@@ -1,0 +1,362 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: trustpolicies.cucina.sloper.ai
+spec:
+  group: cucina.sloper.ai
+  names:
+    categories:
+    - cucina
+    kind: TrustPolicy
+    listKind: TrustPolicyList
+    plural: trustpolicies
+    shortNames:
+    - tp
+    singular: trustpolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.issuer.url
+      name: Issuer
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Valid")].status
+      name: Valid
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          TrustPolicy tells the Cucina STS which external identities may obtain Cucina
+          JWTs and what those JWTs allow. It is modeled on Kubernetes'
+          AuthenticationConfiguration (apiserver.config.k8s.io/v1): an issuer, CEL claim
+          validation rules and claim mappings, extended with grants (verbs × instance names).
+
+          Evaluation (internal/auth): the external token is verified with go-oidc (exact iss,
+          aud, exp, signature); every claimValidationRule must evaluate to true; the mapped
+          subject becomes the principal; the union of the grants whose condition is true gives
+          the JWT's `cucina` claim. A token matching no policy is rejected. CEL is compiled at
+          load time, must return bool, has a cost limit and a per-evaluation timeout, and fails
+          closed.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TrustPolicySpec is one trust rule.
+            properties:
+              claimMappings:
+                description: ClaimMappings derive the principal from the claims.
+                properties:
+                  displayName:
+                    description: DisplayName is for audit/UI only.
+                    properties:
+                      expression:
+                        type: string
+                    required:
+                    - expression
+                    type: object
+                  groups:
+                    description: Groups yields a list of group strings.
+                    properties:
+                      expression:
+                        type: string
+                    required:
+                    - expression
+                    type: object
+                  subject:
+                    description: |-
+                      Subject is the stable principal, e.g. `'google:' + claims.sub` or
+                      `'github:' + claims.repository_id + ':' + claims.workflow`. Never key on email.
+                    properties:
+                      expression:
+                        type: string
+                    required:
+                    - expression
+                    type: object
+                required:
+                - subject
+                type: object
+              claimValidationRules:
+                description: ClaimValidationRules are CEL expressions over `claims`;
+                  all must be true.
+                items:
+                  description: ClaimValidationRule is a CEL expression over `claims`
+                    that must evaluate to true.
+                  properties:
+                    expression:
+                      description: Expression is CEL, e.g. `claims.hd in ['example.com']
+                        && string(claims.email_verified) == 'true'`.
+                      type: string
+                    message:
+                      description: Message is returned (and audited) when the rule
+                        is false.
+                      type: string
+                  required:
+                  - expression
+                  type: object
+                type: array
+              disabled:
+                description: Disabled keeps the object but ignores it.
+                type: boolean
+              grants:
+                description: |-
+                  Grants are evaluated independently; the result is their union. A grant with a CEL
+                  condition applies only when the condition is true (fail closed).
+                items:
+                  description: Grant gives verbs on instance names.
+                  properties:
+                    condition:
+                      description: Condition is an optional CEL expression over `claims`,
+                        `subject` and `groups`.
+                      type: string
+                    instanceNames:
+                      description: InstanceNames the verbs apply to; "*" = every configured
+                        instance name.
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                    maxTTL:
+                      description: MaxTTL caps the JWT lifetime for this grant (default
+                        and maximum 15m for humans and CI).
+                      type: string
+                    name:
+                      description: Name labels the grant in audit logs.
+                      type: string
+                    verbs:
+                      description: 'Verbs: cas-read, cas-write, ac-read, ac-write,
+                        execute, admin.'
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                  required:
+                  - instanceNames
+                  - verbs
+                  type: object
+                minItems: 1
+                type: array
+              groupLookup:
+                description: |-
+                  GroupLookup optionally resolves group membership at every exchange (cached 5–10 min),
+                  e.g. Google Cloud Identity searchDirectGroups (R-AUTH-2/-5).
+                properties:
+                  cacheTTL:
+                    description: CacheTTL of results (default 10m).
+                    type: string
+                  provider:
+                    description: 'Provider: "cloud-identity".'
+                    enum:
+                    - cloud-identity
+                    type: string
+                required:
+                - provider
+                type: object
+              issuer:
+                description: Issuer of the external token (type oidc).
+                properties:
+                  additionalIssuers:
+                    description: AdditionalIssuers lists extra accepted `iss` values
+                      (Google also emits "accounts.google.com").
+                    items:
+                      type: string
+                    type: array
+                  audiences:
+                    description: Audiences accepted in `aud`; for GitHub the audience
+                      used only by Cucina ("cucina").
+                    items:
+                      type: string
+                    minItems: 1
+                    type: array
+                  certificateAuthority:
+                    description: CertificateAuthority is a PEM bundle trusted for
+                      discovery/JWKS fetches (optional).
+                    type: string
+                  discoveryURL:
+                    description: DiscoveryURL overrides {url}/.well-known/openid-configuration.
+                    type: string
+                  url:
+                    description: URL is the exact `iss` value (e.g. https://accounts.google.com,
+                      https://token.actions.githubusercontent.com).
+                    pattern: ^https://
+                    type: string
+                required:
+                - audiences
+                - url
+                type: object
+              login:
+                description: |-
+                  Login publishes interactive-login parameters in /.well-known/cucina-configuration so
+                  `cucinactl login <url>` needs no other config (R-AUTH-1, R-AUTH-5).
+                properties:
+                  clientID:
+                    description: |-
+                      ClientID of the OAuth2 "Desktop app" client; ClientSecret is non-confidential by design
+                      (Google desktop clients) and is shipped in the discovery document.
+                    type: string
+                  clientSecret:
+                    type: string
+                  hostedDomainHint:
+                    description: HostedDomainHint is passed as `hd` (a hint only;
+                      trust comes from claimValidationRules).
+                    type: string
+                  name:
+                    description: Name of the identity provider shown by the CLI ("google",
+                      "github", …).
+                    type: string
+                  redirectPorts:
+                    description: RedirectPorts restricts loopback ports for providers
+                      that need registered ports (empty = any).
+                    items:
+                      format: int32
+                      type: integer
+                    type: array
+                  scopes:
+                    description: Scopes requested; default [openid, email, profile]
+                      (+ offline_access for non-Google).
+                    items:
+                      type: string
+                    type: array
+                required:
+                - clientID
+                - name
+                type: object
+              requireUniqueJTI:
+                description: RequireUniqueJTI enables the jti replay cache for this
+                  issuer (GitHub, R-AUTH-7).
+                type: boolean
+              serviceAccount:
+                description: ServiceAccount configures type serviceAccount.
+                properties:
+                  breakGlass:
+                    description: Break-glass marks the bootstrap admin account generated
+                      by `helm install` (R-AUTH-12).
+                    type: boolean
+                  name:
+                    description: Name is the principal name (subject becomes `sa:<name>`).
+                    type: string
+                required:
+                - name
+                type: object
+              subjectTokenType:
+                description: |-
+                  SubjectTokenType is the RFC 8693 subject_token_type this policy accepts:
+                  "urn:ietf:params:oauth:token-type:id_token" (default) or "urn:ietf:params:oauth:token-type:jwt"
+                  (GitHub Actions).
+                type: string
+              type:
+                default: oidc
+                description: |-
+                  Type is "oidc" (default) for external identity providers or "serviceAccount" for opt-in
+                  long-lived keys (R-AUTH-10), which are exchanged at the STS like any other subject token.
+                enum:
+                - oidc
+                - serviceAccount
+                type: string
+            required:
+            - grants
+            - type
+            type: object
+            x-kubernetes-validations:
+            - message: issuer is required for type oidc
+              rule: self.type != 'oidc' || has(self.issuer)
+            - message: serviceAccount is required for type serviceAccount
+              rule: self.type != 'serviceAccount' || has(self.serviceAccount)
+            - message: claimMappings.subject is required for type oidc
+              rule: self.type != 'oidc' || has(self.claimMappings)
+          status:
+            description: TrustPolicyStatus is written by the controller's STS.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

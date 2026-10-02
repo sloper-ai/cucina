@@ -1,0 +1,130 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Sample TrustPolicy values (R-AUTH-2, R-AUTH-7, R-AUTH-12): pass with -f and edit the
+# domains, client ids, admin e-mails and repository ids. The specs are identical to the
+# ones the trust-policy engine is tested with (internal/auth/testdata/policies; a chart
+# test keeps them equal), so they are known to compile and to accept/reject as documented.
+trustPolicies:
+  - name: google-workspace
+    spec:
+      type: oidc
+      issuer:
+        url: https://accounts.google.com
+        # Google also emits the scheme-less issuer.
+        additionalIssuers: ["accounts.google.com"]
+        audiences: ["000000000000-cucinaexample.apps.googleusercontent.com"]
+      claimValidationRules:
+        - expression: "claims.email_verified == true || claims.email_verified == 'true'"
+          message: the Google account's e-mail address is not verified
+        - expression: "has(claims.hd) && claims.hd in ['example.com']"
+          message: the Google account is not in an allowed Google Workspace domain
+      claimMappings:
+        subject:
+          expression: "'google:' + claims.sub"
+        displayName:
+          expression: "claims.email"
+      grants:
+        - name: developers
+          instanceNames: ["*"]
+          verbs: [cas-read, cas-write, ac-read, execute]
+        - name: admins
+          # E-mail is safe here only because hd and email_verified are pinned above.
+          condition: "claims.email in ['admin@example.com']"
+          instanceNames: ["*"]
+          verbs: [admin]
+      login:
+        name: google
+        clientID: 000000000000-cucinaexample.apps.googleusercontent.com
+        # Desktop-app client secrets are non-confidential by design (shipped to every client).
+        clientSecret: example-desktop-client-secret
+        hostedDomainHint: example.com
+  - name: github-example-org-app
+    spec:
+      type: oidc
+      issuer:
+        # GitHub Enterprise Cloud with a custom issuer: https://token.actions.githubusercontent.com/<enterprise-slug>
+        url: https://token.actions.githubusercontent.com
+        audiences: ["cucina"]
+      subjectTokenType: urn:ietf:params:oauth:token-type:jwt
+      requireUniqueJTI: true
+      claimValidationRules:
+        - expression: "claims.repository_owner_id == '1000001' && claims.repository_id == '2000002'"
+          message: the token was not issued to example-org/app
+        - expression: "claims.event_name != 'pull_request_target'"
+          message: pull_request_target workflows are never trusted
+        - expression: "claims.event_name in ['push', 'merge_group', 'schedule', 'workflow_dispatch', 'pull_request']"
+          message: the workflow event is not allowed
+        # The repository's own workflows, or the organisation's pinned reusable build workflow.
+        - expression: >-
+            claims.job_workflow_ref.startsWith('example-org/app/.github/workflows/') || claims.job_workflow_ref.startsWith('example-org/shared-workflows/.github/workflows/bazel.yml@refs/tags/v')
+          message: the job's workflow is not allowed
+      claimMappings:
+        subject:
+          expression: "'github:' + claims.repository_id + ':' + claims.workflow"
+        displayName:
+          expression: "claims.job_workflow_ref"
+      grants:
+        - name: cache-read
+          instanceNames: [main]
+          verbs: [cas-read, ac-read]
+        - name: build
+          condition: "claims.event_name in ['push', 'merge_group', 'schedule', 'workflow_dispatch']"
+          instanceNames: [main]
+          verbs: [cas-write, execute]
+        - name: ac-write-protected
+          condition: >-
+            claims.event_name in ['push', 'merge_group'] && (claims.ref_protected == true || claims.ref_protected == 'true')
+          instanceNames: [main]
+          verbs: [ac-write]
+        - name: ac-write-release-environment
+          # `environment` is present only for jobs that target a (reviewer-gated) environment.
+          condition: "has(claims.environment) && claims.environment == 'release' && claims.event_name != 'pull_request'"
+          instanceNames: [main]
+          verbs: [ac-write]
+  - name: github-sloper-ai-cucina
+    spec:
+      type: oidc
+      issuer:
+        url: https://token.actions.githubusercontent.com
+        audiences: ["cucina"]
+      subjectTokenType: urn:ietf:params:oauth:token-type:jwt
+      requireUniqueJTI: true
+      claimValidationRules:
+        - expression: "claims.repository_owner_id == '310369022' && claims.repository_id == '1401027334'"
+          message: the token was not issued to the sloper-ai/cucina repository
+        - expression: "claims.event_name != 'pull_request_target'"
+          message: pull_request_target workflows run untrusted code with repository secrets and are never trusted
+        - expression: "claims.event_name in ['push', 'merge_group', 'schedule', 'workflow_dispatch', 'pull_request']"
+          message: the workflow event is not allowed
+        - expression: "claims.job_workflow_ref.startsWith('sloper-ai/cucina/.github/workflows/')"
+          message: only workflows defined in sloper-ai/cucina may authenticate
+        - expression: "claims.runner_environment == 'github-hosted'"
+          message: only GitHub-hosted runners may authenticate
+      claimMappings:
+        subject:
+          expression: "'github:' + claims.repository_id + ':' + claims.workflow"
+        displayName:
+          expression: "claims.job_workflow_ref"
+      grants:
+        # Every allowed event, including pull requests (fork PRs at most read-only).
+        - name: cache-read
+          instanceNames: [main]
+          verbs: [cas-read, ac-read]
+        - name: build
+          condition: "claims.event_name in ['push', 'merge_group', 'schedule', 'workflow_dispatch']"
+          instanceNames: [main]
+          verbs: [cas-write, execute]
+        # Action-cache writes only from pushes to the protected main branch.
+        - name: ac-write-main
+          condition: "claims.event_name == 'push' && claims.ref == 'refs/heads/main' && (claims.ref_protected == true || claims.ref_protected == 'true')"
+          instanceNames: [main]
+          verbs: [ac-write]
+  - name: sa-nightly-cache
+    spec:
+      type: serviceAccount
+      serviceAccount:
+        name: nightly-cache
+      grants:
+        - name: cache-warmer
+          instanceNames: [main]
+          verbs: [cas-read, cas-write, ac-read, ac-write]
+          maxTTL: 10m

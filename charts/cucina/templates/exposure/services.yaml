@@ -1,0 +1,38 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Externally reachable endpoints (R-CP-5). Each is a Service of the configured type
+selecting the pods that terminate it; on k3s ServiceLB they share the node
+addresses, on EKS each LoadBalancer Service is its own NLB (docs/operations/exposure.md).
+  client endpoint : frontend client listener (remote execution, TLS + JWT)
+  api endpoint    : STS (HTTPS) and management API (gRPC TLS)
+  worker endpoint : frontend worker listener, scheduler worker API, enrollment, host API (mTLS)
+*/}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $client := .Values.exposure.client -}}
+{{- if has $client.type (list "LoadBalancer" "NodePort" "ClusterIP") }}
+---
+{{ include "cucina.exposedService" (dict "ctx" . "name" (include "cucina.client.name" .) "component" "frontend" "endpoint" "client" "exposure" $client
+  "ports" (list (dict "name" "grpc" "port" .Values.endpoints.client.port "targetPort" "grpc-client" "nodePort" $client.nodePort))) }}
+{{- end }}
+{{- $api := .Values.exposure.api }}
+---
+{{ include "cucina.exposedService" (dict "ctx" . "name" (printf "%s-api-sts" (include "cucina.fullname" .)) "component" "sts" "endpoint" "api" "exposure" $api
+  "ports" (list (dict "name" "https" "port" .Values.endpoints.sts.port "targetPort" "https" "nodePort" $api.nodePorts.sts))) }}
+---
+{{- /* The autoscaler state behind the management API lives on the leader only: the
+       Service selects the Pod the leader labels cucina.sloper.ai/leader=true. */}}
+{{ include "cucina.exposedService" (dict "ctx" . "name" (printf "%s-api-management" (include "cucina.fullname" .)) "component" "controller" "endpoint" "api" "exposure" $api
+  "extraSelector" (dict "cucina.sloper.ai/leader" "true")
+  "ports" (list (dict "name" "grpc-management" "port" .Values.endpoints.management.port "targetPort" "grpc-management" "nodePort" $api.nodePorts.management))) }}
+{{- $worker := .Values.exposure.worker }}
+---
+{{ include "cucina.exposedService" (dict "ctx" . "name" (printf "%s-storage" (include "cucina.worker.name" .)) "component" "frontend" "endpoint" "worker" "exposure" $worker
+  "ports" (list (dict "name" "grpc-storage" "port" .Values.endpoints.worker.storagePort "targetPort" "grpc-worker" "nodePort" $worker.nodePorts.storage))) }}
+---
+{{ include "cucina.exposedService" (dict "ctx" . "name" (printf "%s-scheduler" (include "cucina.worker.name" .)) "component" "scheduler" "endpoint" "worker" "exposure" $worker
+  "ports" (list (dict "name" "grpc-scheduler" "port" .Values.endpoints.worker.schedulerPort "targetPort" "grpc-worker" "nodePort" $worker.nodePorts.scheduler))) }}
+---
+{{ include "cucina.exposedService" (dict "ctx" . "name" (printf "%s-controller" (include "cucina.worker.name" .)) "component" "controller" "endpoint" "worker" "exposure" $worker
+  "ports" (list
+    (dict "name" "grpc-enrollment" "port" .Values.endpoints.worker.enrollmentPort "targetPort" "grpc-enrollment" "nodePort" $worker.nodePorts.enrollment)
+    (dict "name" "grpc-host" "port" .Values.endpoints.hosts.port "targetPort" "grpc-host" "nodePort" $worker.nodePorts.host))) }}

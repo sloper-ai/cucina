@@ -1,0 +1,75 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+`helm test` (R-CP-7, T0): the cache canary through the client endpoint with the
+break-glass key (or hooks.test.credentialSecret): STS token exchange, GetCapabilities,
+CAS write/read and AC write/read. It starts no workers.
+*/}}
+{{- if .Values.hooks.test.enabled }}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $scheme := ternary "grpcs" "grpc" (eq (include "cucina.clientTLSAtFrontend" .) "true") -}}
+{{- $secret := default (include "cucina.breakGlassSecret" .) .Values.hooks.test.credentialSecret -}}
+{{- /* In-cluster Service names, unless the public certificate cannot carry them (ACME). */ -}}
+{{- $inCluster := or (ne .Values.tls.public.source "certManager") .Values.tls.public.certManager.includeServiceNames -}}
+{{- $endpoint := printf "%s://%s:%d" $scheme (include "cucina.fqdn" (list . (include "cucina.frontend.name" .))) (int $ports.frontendClient) -}}
+{{- $sts := printf "https://%s:%d" (include "cucina.fqdn" (list . (include "cucina.sts.name" .))) (int $ports.controllerSTS) -}}
+{{- if not $inCluster -}}
+{{- $endpoint = printf "grpcs://%s:%d" (include "cucina.clientHost" .) (int .Values.endpoints.client.port) -}}
+{{- $sts = include "cucina.stsUrl" . -}}
+{{- end -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "cucina.fullname" . }}-test-canary
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "test") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 2 }}{{- end }}
+  securityContext:
+    {{- include "cucina.podSecurityContext" . | nindent 4 }}
+  containers:
+    - name: canary
+      image: {{ include "cucina.controllerImage" . }}
+      imagePullPolicy: {{ .Values.images.pullPolicy }}
+      args:
+        - canary
+        - cache
+        - --endpoint={{ $endpoint }}
+        - --sts-url={{ $sts }}
+        - --ca-file=/cucina/test-ca/ca.crt
+        - --key-file=/cucina/credential/{{ .Values.hooks.test.credentialKey }}
+      resources:
+        {{- toYaml .Values.hooks.resources | nindent 8 }}
+      securityContext:
+        {{- include "cucina.containerSecurityContext" . | nindent 8 }}
+      volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: credential
+          mountPath: /cucina/credential
+          readOnly: true
+        - name: test-ca
+          mountPath: /cucina/test-ca
+          readOnly: true
+  volumes:
+    - name: tmp
+      emptyDir: {sizeLimit: 64Mi}
+    - name: credential
+      secret:
+        secretName: {{ $secret }}
+    # Trust anchor of the public certificate: its ca.crt (chart-generated and cert-manager
+    # Secrets carry one); absent for public-CA certificates, then system roots apply.
+    - name: test-ca
+      secret:
+        secretName: {{ include "cucina.tlsSecret" (list . "frontend") }}
+        optional: true
+        items:
+          - key: ca.crt
+            path: ca.crt
+{{- end }}

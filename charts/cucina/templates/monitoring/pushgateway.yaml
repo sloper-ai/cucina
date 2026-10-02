@@ -1,0 +1,67 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Optional Prometheus Pushgateway for workers Prometheus cannot scrape (NAT'd Mac VMs
+push through hostd's relay by default; R-OBS-1). In-cluster ClusterIP only: expose it
+deliberately (and behind authentication) if workers push from outside the cluster.
+*/}}
+{{- if .Values.monitoring.pushgateway.enabled }}
+{{- $pg := .Values.monitoring.pushgateway -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cucina.fullname" . }}-pushgateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "pushgateway") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cucina.selectorLabels" (dict "ctx" . "component" "pushgateway") | nindent 4 }}
+  ports:
+    - name: http
+      port: 9091
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cucina.fullname" . }}-pushgateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "pushgateway") | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "pushgateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "pushgateway") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: pushgateway
+          image: {{ include "cucina.image" $pg.image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9091
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+          resources:
+            {{- toYaml $pg.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+{{- end }}

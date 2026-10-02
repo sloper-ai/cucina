@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+apiVersion: v2
+name: cucina
+description: >-
+  Cucina: a managed Buildbarn distribution for Bazel remote execution and caching
+  (frontend, sharded persistent storage, scheduler with predeclared queues, the
+  cucina-controller fleet manager and STS), configured entirely from Helm values.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+# Kubernetes 1.32+ (CRD CEL transition rules, StatefulSet PVC retention policy,
+# PDB unhealthyPodEvictionPolicy); tested against 1.36 (k3s v1.36.5+k3s1). The -0
+# suffix admits distribution builds such as v1.36.5+k3s1 and v1.36.x-eks-….
+kubeVersion: ">=1.32.0-0"
+home: https://github.com/sloper-ai/cucina
+sources:
+  - https://github.com/sloper-ai/cucina
+  - https://github.com/buildbarn/bb-storage
+  - https://github.com/buildbarn/bb-remote-execution
+keywords:
+  - bazel
+  - buildbarn
+  - remote-execution
+  - remote-cache
+  - reapi
+annotations:
+  # Pinned upstream Buildbarn releases whose configuration schema the templates
+  # render (ADR 0001). Bumping them requires the config-render check (R-OPS-1).
+  cucina.sloper.ai/bb-storage: "20260930T153215Z-086b011"
+  cucina.sloper.ai/bb-remote-execution: "20260930T173749Z-1a3be95"
+  # SPDX identifier of the chart itself; ported Buildbarn dashboards and recording
+  # rules under files/ are Apache-2.0 (bb-deployments).
+  cucina.sloper.ai/license: FSL-1.1-ALv2

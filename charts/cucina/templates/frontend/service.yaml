@@ -1,0 +1,32 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $viaProxy := not (include "cucina.clientTLSAtFrontend" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cucina.frontend.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+  {{- with .Values.exposure.client.backendServiceAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cucina.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+  ports:
+    - name: grpc-client
+      port: {{ $ports.frontendClient }}
+      targetPort: grpc-client
+      {{- if $viaProxy }}
+      # Plaintext HTTP/2 behind the Ingress/Gateway (TLS terminates there, R-CP-5).
+      appProtocol: kubernetes.io/h2c
+      {{- end }}
+    - name: grpc-worker
+      port: {{ $ports.frontendWorker }}
+      targetPort: grpc-worker
+    - name: diagnostics
+      port: {{ $ports.diagnostics }}
+      targetPort: diagnostics

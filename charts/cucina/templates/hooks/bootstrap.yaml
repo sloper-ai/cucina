@@ -1,0 +1,181 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Helm hooks.
+  pre-install/pre-upgrade  `cucina-controller bootstrap`: idempotently creates the Cucina CA,
+      the chart-generated server certificates and the controller's BuildQueueState client
+      certificate (bootstrap.json), the JWT signing key with the JWKS and deny-list
+      ConfigMaps, and the break-glass admin key (R-AUTH-12). Never overwrites.
+  pre-delete  `cucina-controller uninstall-prep`: deletes every WorkerPool/MacHost and waits
+      until the finalizers drained and terminated controller-created instances and the
+      hosts stopped their VMs (R-OPS-3), while the controller is still running.
+Hook-scoped ServiceAccount/Role/ConfigMap exist only while hooks run (they must exist
+before the release's own objects on install).
+*/}}
+{{- $paths := include "cucina.paths" . | fromYaml -}}
+{{- $hookAnnotations := dict "helm.sh/hook" "pre-install,pre-upgrade,pre-delete" "helm.sh/hook-weight" "-10" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" -}}
+{{- if or .Values.hooks.bootstrap.enabled .Values.hooks.uninstallPrep.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "cucina.hooks.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "hooks") | nindent 4 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cucina.hooks.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "hooks") | nindent 4 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: ["cucina.sloper.ai"]
+    resources: ["workerpools", "machosts"]
+    verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cucina.hooks.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "hooks") | nindent 4 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cucina.hooks.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cucina.hooks.name" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cucina.hooks.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "hooks") | nindent 4 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+data:
+  controller.json: |
+    {{- include "cucina.controller.config" . | nindent 4 }}
+  platforms.json: |
+    {{- include "cucina.catalog" . | fromJson | toPrettyJson | nindent 4 }}
+  certs.json: |
+    {{- include "cucina.certsFile" . | nindent 4 }}
+{{- end }}
+{{- if .Values.hooks.bootstrap.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "cucina.fullname" . }}-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "bootstrap") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: {{ .Values.hooks.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "bootstrap") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cucina.hooks.name" . }}
+      restartPolicy: Never
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: bootstrap
+          image: {{ include "cucina.controllerImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args:
+            - bootstrap
+            - --config={{ $paths.controllerConfig }}
+            - --certs={{ $paths.certs }}
+          resources:
+            {{- toYaml .Values.hooks.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ $paths.configDir }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cucina.hooks.name" . }}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}
+{{- if .Values.hooks.uninstallPrep.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "cucina.fullname" . }}-uninstall-prep
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "uninstall-prep") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "uninstall-prep") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cucina.hooks.name" . }}
+      restartPolicy: Never
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: uninstall-prep
+          image: {{ include "cucina.controllerImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args:
+            - uninstall-prep
+            - --config={{ $paths.controllerConfig }}
+            - --timeout={{ .Values.hooks.uninstallPrep.timeout }}
+          resources:
+            {{- toYaml .Values.hooks.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ $paths.configDir }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cucina.hooks.name" . }}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}

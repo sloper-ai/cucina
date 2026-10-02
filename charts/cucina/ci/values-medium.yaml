@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Size profile "medium" (default production shape) behind an Ingress (Traefik, TLS at
+# the ingress, h2c to the frontend) with cert-manager certificates, Prometheus Operator
+# monitoring and Grafana dashboards. Placeholders only (RFC 2606 / RFC 5737).
+sizeProfile: medium
+instanceNames: [main, team-b]
+endpoints:
+  client:
+    host: cucina.example.com
+  worker:
+    host: cucina-workers.example.internal
+exposure:
+  client:
+    type: Ingress
+    backendServiceAnnotations:
+      traefik.ingress.kubernetes.io/service.serversscheme: h2c
+    ingress:
+      className: traefik
+      tlsSecretName: cucina-ingress-tls
+  api:
+    type: LoadBalancer
+  worker:
+    type: NodePort
+    nodePorts:
+      storage: 30981
+      scheduler: 30983
+      enrollment: 30445
+      host: 30446
+tls:
+  public:
+    source: certManager
+    certManager:
+      issuerRef: {name: letsencrypt, kind: ClusterIssuer}
+  internal:
+    source: certManager
+    certManager:
+      issuerRef: {name: cucina-ca, kind: Issuer}
+monitoring:
+  labels:
+    release: kube-prometheus-stack
+  serviceMonitors: {enabled: true}
+  workerScrapeConfig: {enabled: true}
+  prometheusRules: {enabled: true}
+  grafanaDashboards: {enabled: true}
+pools:
+  - name: linux-x86-64
+    platform: linux-x86-64
+    provider: ec2
+    capacity: {minRunning: 0, max: 8}
+    image:
+      amiSelector: {cucina:image: linux-x86-64}
+    ec2:
+      instanceTypes: [c8i.8xlarge, c7i.8xlarge]
+      subnetIDs: [subnet-00000000000000000]
+      securityGroupIDs: [sg-00000000000000000]
+      instanceProfile: cucina-worker
+  - name: linux-x86-64-team-b
+    platform: linux-x86-64
+    provider: ec2
+    instanceNames: [team-b]
+    capacity: {minRunning: 0, max: 4}
+    image:
+      amiSelector: {cucina:image: linux-x86-64}
+    ec2:
+      instanceTypes: [c8i.4xlarge]
+      subnetIDs: [subnet-00000000000000000]
+      securityGroupIDs: [sg-00000000000000000]
+      instanceProfile: cucina-worker

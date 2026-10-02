@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Sloth (v0.16.0) SLO specs; `make -C charts/cucina slo` regenerates files/rules/slo.yaml
+# (multi-window multi-burn-rate alerts, R-TEST-7). A test fails when the generated file is stale.
+version: "prometheus/v1"
+service: "cucina"
+labels:
+  owner: cucina
+slos:
+  - name: "frontend-availability"
+    objective: 99.9
+    description: "Remote cache and execution requests at the frontend complete without server-side errors."
+    sli:
+      events:
+        error_query: sum(rate(grpc_server_handled_total{cucina_component="frontend", grpc_code=~"Unavailable|Internal|Unknown|DataLoss|DeadlineExceeded"}[{{.window}}]))
+        total_query: sum(rate(grpc_server_handled_total{cucina_component="frontend"}[{{.window}}]))
+    alerting:
+      name: CucinaFrontendAvailabilityBudgetBurn
+      labels:
+        category: availability
+      annotations:
+        summary: "The frontend is burning its availability error budget."
+      page_alert:
+        labels:
+          severity: critical
+      ticket_alert:
+        labels:
+          severity: warning
+  - name: "cold-start"
+    objective: 95
+    description: "Worker VMs started from zero run their first action within 90 s (NFR-P1 Linux/macOS maximum)."
+    sli:
+      events:
+        error_query: sum(rate(cucina_vm_start_seconds_count{phase="to_first_action"}[{{.window}}])) - sum(rate(cucina_vm_start_seconds_bucket{phase="to_first_action", le="90"}[{{.window}}]))
+        total_query: sum(rate(cucina_vm_start_seconds_count{phase="to_first_action"}[{{.window}}]))
+    alerting:
+      name: CucinaColdStartBudgetBurn
+      labels:
+        category: latency
+      annotations:
+        summary: "Worker cold starts are slower than 90 s too often."
+      page_alert:
+        labels:
+          severity: warning
+      ticket_alert:
+        labels:
+          severity: info

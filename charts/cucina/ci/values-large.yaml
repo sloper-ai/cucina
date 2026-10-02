@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Size profile "large" on EKS (documented, not deployed; R-CP-8): raw Block volumes from
+# the EBS CSI driver for the CAS, internal NLBs, IRSA, existing TLS Secrets, a pushgateway
+# and every Grafana/Prometheus object. Placeholders only (RFC 2606 / RFC 5737).
+sizeProfile: large
+endpoints:
+  client:
+    host: cucina.example.com
+  worker:
+    host: 192.0.2.20
+    serverName: workers.cucina.example.internal
+exposure:
+  client:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: external
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    loadBalancerClass: service.k8s.aws/nlb
+    loadBalancerSourceRanges: [198.51.100.0/24]
+  api:
+    type: LoadBalancer
+    loadBalancerClass: service.k8s.aws/nlb
+    loadBalancerSourceRanges: [198.51.100.0/24]
+  worker:
+    type: LoadBalancer
+    loadBalancerClass: service.k8s.aws/nlb
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+      service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=false
+    externalTrafficPolicy: Local
+tls:
+  public:
+    source: existingSecret
+    existingSecret: cucina-public-tls
+  internal:
+    source: existingSecret
+    existingSecret: cucina-internal-tls
+storage:
+  mode: block
+  storageClassName: ebs-gp3-block
+  supplementalGroups: [6]
+controller:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/cucina-controller
+  aws:
+    enabled: true
+    region: us-west-2
+    accountId: "000000000000"
+monitoring:
+  serviceMonitors: {enabled: true}
+  workerScrapeConfig: {enabled: true}
+  prometheusRules: {enabled: true}
+  grafanaDashboards: {enabled: true}
+  pushgateway: {enabled: true}
+pools:
+  - name: linux-x86-64
+    platform: linux-x86-64
+    provider: ec2
+    capacity: {minRunning: 0, max: 32}
+    image:
+      amiSelector: {cucina:image: linux-x86-64}
+    ec2:
+      instanceTypes: [c8i.16xlarge, c7i.16xlarge]
+      subnetIDs: [subnet-00000000000000000]
+      securityGroupIDs: [sg-00000000000000000]
+      instanceProfile: cucina-worker
+  - name: macos-arm64-xcode27-0
+    platform: macos-arm64-xcode27.0
+    provider: tart
+    capacity: {minRunning: 0, max: 8}
+    image:
+      reference: ghcr.io/sloper-ai/cucina-worker-macos:27.0-0.1.0
+    tart: {vmsPerHost: 2}
+platforms:
+  extra:
+    - name: macos-arm64-xcode27.1
+      description: macOS 27 with Xcode 27.1 (a second Xcode served at the same time, UC3/UC18).
+      provider: tart
+      os: macos
+      arch: arm64
+      xcodeVersion: "27.1"
+      defaults: {idleTimeout: 10m, drainTimeout: 30m, startupTimeout: 5m, buildDirectory: auto, l1Placement: vm-disk}
+      sizeClasses: [{name: default, sizeClass: 1}]
+      runners:
+        - name: xcode
+          properties: {OSFamily: macos, ISA: arm-a64, xcode-version: "27.1"}
+          concurrency: {vcpusFactor: 1.0}
+        - name: generic
+          properties: {OSFamily: macos, ISA: arm-a64}
+          concurrency: {vcpusFactor: 1.0}
+          generic: true

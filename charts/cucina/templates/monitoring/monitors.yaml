@@ -1,0 +1,92 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Prometheus Operator scrape objects (R-OBS-1). Buildbarn targets get the labels the
+ported bb-deployments recording rules aggregate by (kubernetes_service, kubernetes_shard,
+kubernetes_replica) plus cucina_buildbarn/cucina_component. EC2 workers are discovered
+through the controller's Prometheus HTTP service discovery endpoint (/sd/workers).
+*/}}
+{{- $m := .Values.monitoring -}}
+{{- if $m.serviceMonitors.enabled }}
+{{- $components := list
+  (dict "component" "frontend" "port" "diagnostics" "buildbarn" true)
+  (dict "component" "storage" "port" "diagnostics" "buildbarn" true)
+  (dict "component" "scheduler" "port" "diagnostics" "buildbarn" true)
+  (dict "component" "controller" "port" "metrics" "buildbarn" false)
+  (dict "component" "sts" "port" "metrics" "buildbarn" false) -}}
+{{- if $m.pushgateway.enabled }}
+{{- $components = append $components (dict "component" "pushgateway" "port" "http" "buildbarn" true "honorLabels" true) -}}
+{{- end }}
+{{- range $components }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "cucina.fullname" $ }}-{{ .component }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" $ "component" .component) | nindent 4 }}
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" $ "component" .component) | nindent 6 }}
+    matchExpressions:
+      # Only the in-cluster Services, not the exposure Services of the same pods.
+      - key: cucina.sloper.ai/endpoint
+        operator: DoesNotExist
+  namespaceSelector:
+    matchNames: [{{ $.Release.Namespace }}]
+  endpoints:
+    - port: {{ .port }}
+      path: /metrics
+      interval: {{ $m.serviceMonitors.interval }}
+      {{- if .honorLabels }}
+      honorLabels: true
+      {{- end }}
+      relabelings:
+        - targetLabel: cucina_component
+          replacement: {{ .component }}
+        {{- if .buildbarn }}
+        - targetLabel: cucina_buildbarn
+          replacement: "true"
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: kubernetes_service
+        {{- end }}
+        {{- if eq .component "storage" }}
+        - sourceLabels: [__meta_kubernetes_pod_label_apps_kubernetes_io_pod_index]
+          targetLabel: kubernetes_shard
+        - targetLabel: kubernetes_replica
+          replacement: "0"
+        {{- end }}
+{{- end }}
+{{- end }}
+{{- if $m.workerScrapeConfig.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  name: {{ include "cucina.fullname" . }}-workers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "worker") | nindent 4 }}
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  httpSDConfigs:
+    - url: {{ printf "http://%s:9090/sd/workers" (include "cucina.fqdn" (list . (include "cucina.controller.name" .))) }}
+      refreshInterval: {{ $m.workerScrapeConfig.refreshInterval }}
+  metricsPath: /metrics
+  relabelings:
+    - targetLabel: namespace
+      replacement: {{ .Release.Namespace }}
+    - targetLabel: cucina_component
+      replacement: worker
+    - targetLabel: cucina_buildbarn
+      replacement: "true"
+    - sourceLabels: [pool]
+      targetLabel: kubernetes_service
+      replacement: worker-$1
+{{- end }}

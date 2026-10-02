@@ -1,0 +1,28 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Grafana dashboards as ConfigMaps for the Grafana dashboard sidecar (R-OBS-2): the
+bb-deployments dashboards ported to the chart's labels (Apache-2.0, files/dashboards/
+buildbarn-*.json) and the Cucina overview (queues, workers, cold start, cache tiers,
+retention, spend).
+*/}}
+{{- if .Values.monitoring.grafanaDashboards.enabled }}
+{{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-dashboard-%s" (include "cucina.fullname" $) (base $path | trimSuffix ".json") | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" $ "component" "monitoring") | nindent 4 }}
+    {{- with $.Values.monitoring.grafanaDashboards.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $.Values.monitoring.grafanaDashboards.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{ base $path }}: {{ $.Files.Get $path | quote }}
+{{- end }}
+{{- end }}

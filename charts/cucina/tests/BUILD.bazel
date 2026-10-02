@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Chart checks (R-TEST-6 "Chart"): helm lint --strict + package, helm-unittest. The Go
+# checks live in static/ (schema, kubeconform, promtool, contracts) and boot/ (R-CP-2
+# config-render check against the pinned Buildbarn binaries). `ct lint` and Helm 3 lint
+# run in `make -C charts/cucina test` (tools not pinned in Bazel).
+load("//bazel:tiers.bzl", "cucina_sh_test")
+
+filegroup(
+    name = "fixtures",
+    srcs = glob([
+        "unittest/*_test.yaml",
+        "rules/*_test.yaml",
+        "kubeconform/schemas/**/*.json",
+    ]),
+    visibility = ["//charts/cucina:__subpackages__"],
+)
+
+_UNIX_ONLY = select({
+    "@platforms//os:windows": ["@platforms//:incompatible"],
+    "//conditions:default": [],
+})
+
+cucina_sh_test(
+    name = "lint_test",
+    srcs = ["lint_test.sh"],
+    data = [
+        "//charts/cucina:chart",
+        "//tools:helm",
+    ],
+    env = {"HELM": "$(rootpath //tools:helm)"},
+    target_compatible_with = _UNIX_ONLY,
+    tier = "static",
+)
+
+cucina_sh_test(
+    name = "unittest_test",
+    srcs = ["unittest_test.sh"],
+    data = [
+        ":fixtures",
+        "//charts/cucina:chart",
+        "//tools:helm",
+        "@helm_unittest//:plugin",
+        "@helm_unittest//:plugin.yaml",
+    ],
+    env = {
+        "HELM": "$(rootpath //tools:helm)",
+        "HELM_UNITTEST_PLUGIN_YAML": "$(rootpath @helm_unittest//:plugin.yaml)",
+    },
+    target_compatible_with = _UNIX_ONLY,
+    tier = "static",
+)

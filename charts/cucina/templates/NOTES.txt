@@ -1,0 +1,47 @@
+{{- /* SPDX-License-Identifier: FSL-1.1-ALv2 */ -}}
+Cucina {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}" (size profile: {{ .Values.sizeProfile }}).
+
+Endpoints
+  Remote execution / cache : grpcs://{{ include "cucina.clientHost" . }}:{{ .Values.endpoints.client.port }}   (instance name: {{ first .Values.instanceNames }})
+  STS (token exchange)     : {{ include "cucina.stsUrl" . }}
+  Management API           : {{ include "cucina.managementHost" . }}:{{ .Values.endpoints.management.port }}
+  Worker endpoint (private): storage {{ include "cucina.workerStorageHost" . }}:{{ .Values.endpoints.worker.storagePort }}, scheduler {{ include "cucina.workerSchedulerHost" . }}:{{ .Values.endpoints.worker.schedulerPort }}, enrollment {{ include "cucina.workerEnrollmentHost" . }}:{{ .Values.endpoints.worker.enrollmentPort }}
+  Mac hosts                : {{ include "cucina.hostsHost" . }}:{{ .Values.endpoints.hosts.port }}
+{{- if not .Values.endpoints.client.host }}
+
+  WARNING: endpoints.client.host is empty, so the addresses above are in-cluster names.
+           Set it to the public DNS name or IP of the client endpoint.
+{{- end }}
+{{- if not .Values.endpoints.worker.host }}
+  WARNING: endpoints.worker.host is empty; workers outside the cluster cannot connect.
+{{- end }}
+
+1. Wait for the control plane and run the smoke test (CAS/AC round trip through the client endpoint):
+
+     kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "cucina.frontend.name" . }} deploy/{{ include "cucina.scheduler.name" . }} deploy/{{ include "cucina.controller.name" . }}
+     helm test -n {{ .Release.Namespace }} {{ .Release.Name }}
+
+2. Trust Cucina's CA (public data) when the client endpoint uses the chart-generated certificate:
+
+     kubectl -n {{ .Release.Namespace }} get secret {{ include "cucina.caSecret" . }} -o jsonpath='{.data.ca\.crt}' | base64 -d > cucina-ca.pem
+{{- if .Values.auth.breakGlass.enabled }}
+
+3. Log in as the break-glass administrator (R-AUTH-12). The key goes from the Secret to cucinactl
+   on stdin; do not store it in files or shell history:
+
+     kubectl -n {{ .Release.Namespace }} get secret {{ include "cucina.breakGlassSecret" . }} -o jsonpath='{.data.key}' | base64 -d \
+       | cucinactl login {{ include "cucina.stsUrl" . }} --ca-file cucina-ca.pem --key -
+
+   Once OIDC administrators exist (trustPolicies), disable the key: --set auth.breakGlass.enabled=false
+   (docs/operations/chart.md, Install step 4).
+{{- end }}
+
+4. First steps:
+
+     cucinactl status                       # pools, workers, queues (every pool at zero when idle)
+     cucinactl bazelrc --platform linux     # .bazelrc for remote execution through this cluster
+     kubectl -n {{ .Release.Namespace }} get workerpools,machosts,trustpolicies
+
+   Pools ({{ len .Values.pools }} configured) and trust policies ({{ len .Values.trustPolicies }} configured) come from values;
+   samples are in the chart's samples/ directory. Upgrades keep the cache (PVCs) and CRDs;
+   `helm uninstall` first drains and terminates every worker (allow --timeout 35m).

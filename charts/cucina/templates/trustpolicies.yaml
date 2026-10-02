@@ -1,0 +1,38 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+TrustPolicy objects (R-AUTH-2, UC15) from values.trustPolicies, plus the policy that
+scopes the Helm-generated break-glass admin key (R-AUTH-12). Disable the break-glass
+key once OIDC admins exist: auth.breakGlass.enabled=false (docs/operations/chart.md).
+*/}}
+{{- if .Values.auth.breakGlass.enabled }}
+---
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: {{ include "cucina.fullname" . }}-break-glass
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "auth") | nindent 4 }}
+spec:
+  type: serviceAccount
+  serviceAccount:
+    name: break-glass
+    breakGlass: true
+  grants:
+    - name: break-glass-admin
+      instanceNames: ["*"]
+      verbs: [cas-read, cas-write, ac-read, ac-write, execute, admin]
+      maxTTL: {{ .Values.auth.tokenTTL }}
+{{- end }}
+{{- range .Values.trustPolicies }}
+---
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" $ "component" "auth") | nindent 4 }}
+spec:
+  {{- toYaml .spec | nindent 2 }}
+{{- end }}

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Patterns to ignore when packaging the chart.
+.DS_Store
+.git/
+.gitignore
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+.idea/
+.vscode/
+# Development and test material (not part of the packaged chart).
+/tests/
+/ci/
+/Makefile
+/BUILD.bazel
+README.md.gotmpl

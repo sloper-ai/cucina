@@ -1,0 +1,32 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+PodDisruptionBudgets where they mean something (R-CP-6): replicated stateless parts
+keep one replica serving during voluntary disruptions; storage shards are drained
+one at a time (each holds a distinct slice of the cache). The single scheduler
+gets none: a PDB would only block node drains, and clients ride out its restart.
+*/}}
+{{- if .Values.podDisruptionBudgets.enabled }}
+{{- $budgets := list
+  (dict "component" "frontend" "replicas" (include "cucina.effective" (list . "frontend") | fromYaml).replicas)
+  (dict "component" "storage" "replicas" (include "cucina.effective" (list . "storage") | fromYaml).shards)
+  (dict "component" "controller" "replicas" (include "cucina.effective" (list . "controller") | fromYaml).replicas)
+  (dict "component" "sts" "replicas" (include "cucina.effective" (list . "sts") | fromYaml).replicas) -}}
+{{- range $budgets }}
+{{- if gt (int .replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "cucina.fullname" $ }}-{{ .component }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" $ "component" .component) | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" $ "component" .component) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

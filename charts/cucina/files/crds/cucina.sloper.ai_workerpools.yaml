@@ -1,0 +1,595 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: workerpools.cucina.sloper.ai
+spec:
+  group: cucina.sloper.ai
+  names:
+    categories:
+    - cucina
+    kind: WorkerPool
+    listKind: WorkerPoolList
+    plural: workerpools
+    shortNames:
+    - wp
+    singular: workerpool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.platform
+      name: Platform
+      type: string
+    - jsonPath: .spec.provider
+      name: Provider
+      type: string
+    - jsonPath: .spec.capacity.max
+      name: Max
+      type: integer
+    - jsonPath: .status.desired
+      name: Desired
+      type: integer
+    - jsonPath: .status.registered
+      name: Ready
+      type: integer
+    - jsonPath: .status.imageGeneration
+      name: Generation
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          WorkerPool is a set of identical workers for one platform: OS + ISA + toolchain
+          image, one size class, one provider. Pools can be created from Helm values
+          (the chart renders WorkerPool objects) or directly; changes apply without
+          restarting the control plane, except that a new platform/size-class queue needs
+          a scheduler config update (`helm upgrade`), see ConditionQueueDeclared.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WorkerPoolSpec declares one pool.
+            properties:
+              capacity:
+                description: Capacity bounds the pool. minRunning > 0 means standing
+                  cost and is opt-in.
+                properties:
+                  max:
+                    description: 'Max is the maximum number of VMs. 0 disables the
+                      pool: queued work is failed fast (R-RE-2).'
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  minRunning:
+                    default: 0
+                    description: MinRunning workers kept alive even when idle. Default
+                      0 (zero idle cost).
+                    format: int32
+                    minimum: 0
+                    type: integer
+                required:
+                - max
+                - minRunning
+                type: object
+              dailyInstanceHourCap:
+                description: |-
+                  DailyInstanceHourCap stops launching new instances once the pool consumed this
+                  many instance-hours since 00:00 UTC (R-SCALE-7). Unset = no cap.
+                format: int32
+                type: integer
+              ec2:
+                description: EC2 settings (provider ec2 only).
+                properties:
+                  associatePublicIP:
+                    description: AssociatePublicIP gives workers a public IPv4 — only
+                      when no other egress path exists.
+                    type: boolean
+                  capacityType:
+                    default: on-demand
+                    description: 'CapacityType: on-demand (default) or spot (SHOULD;
+                      falls back to on-demand when spotFallback).'
+                    enum:
+                    - on-demand
+                    - spot
+                    type: string
+                  dataVolume:
+                    description: |-
+                      DataVolume is an extra ephemeral gp3 volume for L1/filePool when the type has no
+                      instance store (DeleteOnTermination always true).
+                    properties:
+                      initializationRateMiBps:
+                        description: InitializationRateMiBps is the per-launch volume
+                          initialization rate (0 = off, R-POOL-2 SHOULD).
+                        format: int32
+                        type: integer
+                      iops:
+                        format: int32
+                        type: integer
+                      sizeGiB:
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      throughputMiBps:
+                        format: int32
+                        type: integer
+                      type:
+                        default: gp3
+                        type: string
+                    type: object
+                  extraTags:
+                    additionalProperties:
+                      type: string
+                    description: ExtraTags are added to every resource (e.g. the campaign
+                      tags).
+                    type: object
+                  fastLaunch:
+                    description: 'FastLaunch applies to Windows pools: pre-provisioned
+                      snapshots (user-approved standing cost).'
+                    properties:
+                      enabled:
+                        default: true
+                        type: boolean
+                      launchTemplateID:
+                        description: LaunchTemplateID of the small, cheap prep instance
+                          type; created by the controller when empty.
+                        type: string
+                      maxParallelLaunches:
+                        description: MaxParallelLaunches during snapshot preparation
+                          (within AWS limits).
+                        format: int32
+                        type: integer
+                      targetCount:
+                        description: TargetCount of pre-provisioned snapshots; default
+                          = capacity.max.
+                        format: int32
+                        type: integer
+                    required:
+                    - enabled
+                    type: object
+                  instanceProfile:
+                    description: InstanceProfile (name) with SSM core and own-pool
+                      parameter read, no EC2 permissions.
+                    type: string
+                  instanceTypes:
+                    description: InstanceTypes is the ordered preference list, e.g.
+                      [c8i.8xlarge, c7i.8xlarge, c7a.8xlarge].
+                    items:
+                      type: string
+                    minItems: 1
+                    type: array
+                  rootVolume:
+                    description: 'RootVolume: smallest that fits; gp3 baseline.'
+                    properties:
+                      initializationRateMiBps:
+                        description: InitializationRateMiBps is the per-launch volume
+                          initialization rate (0 = off, R-POOL-2 SHOULD).
+                        format: int32
+                        type: integer
+                      iops:
+                        format: int32
+                        type: integer
+                      sizeGiB:
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      throughputMiBps:
+                        format: int32
+                        type: integer
+                      type:
+                        default: gp3
+                        type: string
+                    type: object
+                  securityGroupIDs:
+                    description: SecurityGroupIDs for the instances.
+                    items:
+                      type: string
+                    minItems: 1
+                    type: array
+                  spotFallback:
+                    description: SpotFallback allows on-demand launches when spot
+                      capacity is unavailable.
+                    type: boolean
+                  subnetIDs:
+                    description: SubnetIDs in preference order; a single AZ by default
+                      (R-DATA-4).
+                    items:
+                      type: string
+                    minItems: 1
+                    type: array
+                required:
+                - instanceProfile
+                - instanceTypes
+                - securityGroupIDs
+                - subnetIDs
+                type: object
+              floorSchedule:
+                description: FloorSchedule raises minRunning during windows (opt-in
+                  standing cost, R-SCALE-7).
+                items:
+                  description: FloorWindow raises the pool floor during a recurring
+                    window (UTC cron-like).
+                  properties:
+                    days:
+                      description: Days are weekday names ("Mon"…"Sun").
+                      items:
+                        type: string
+                      type: array
+                    end:
+                      type: string
+                    minRunning:
+                      description: MinRunning during the window.
+                      format: int32
+                      minimum: 1
+                      type: integer
+                    name:
+                      description: Name of the window (for status/audit).
+                      type: string
+                    start:
+                      description: Start and End are "HH:MM" in UTC.
+                      type: string
+                  required:
+                  - days
+                  - end
+                  - minRunning
+                  - name
+                  - start
+                  type: object
+                type: array
+              image:
+                description: Image selects the AMI or Tart image. Changing it starts
+                  a new pool generation (R-OPS-2).
+                properties:
+                  ami:
+                    description: AMI is an explicit AMI ID (EC2).
+                    type: string
+                  amiSelector:
+                    additionalProperties:
+                      type: string
+                    description: AMISelector picks the newest AMI owned by the account
+                      whose tags match (EC2).
+                    type: object
+                  reference:
+                    description: |-
+                      Reference is the OCI image reference of the Tart image (Tart), e.g.
+                      ghcr.io/sloper-ai/cucina-worker-macos:27.0-0.1.0.
+                    type: string
+                  version:
+                    description: |-
+                      Version is the image version label; a change starts a new generation (R-POOL-8).
+                      Defaults to the resolved image's cucina:image-version tag.
+                    type: string
+                type: object
+              instanceNames:
+                description: |-
+                  InstanceNames lists the Buildbarn instance names (tenants) this pool serves.
+                  Empty means every configured instance name.
+                items:
+                  type: string
+                type: array
+              paused:
+                description: 'Paused cordons the pool: no new launches; running workers
+                  finish and idle out.'
+                type: boolean
+              platform:
+                description: |-
+                  Platform names an entry of platforms/pools.json (shipped in the controller and the
+                  chart), e.g. "linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0".
+                  The entry supplies the runners and their exact REAPI platform properties.
+                maxLength: 63
+                minLength: 1
+                type: string
+              provider:
+                description: Provider is "ec2" or "tart" and must match the platform's
+                  provider.
+                enum:
+                - ec2
+                - tart
+                type: string
+              rollout:
+                default: lazy
+                description: |-
+                  Rollout controls replacement of old-generation workers: "lazy" (default) replaces
+                  them when idle, "eager" drains and replaces them immediately.
+                enum:
+                - lazy
+                - eager
+                type: string
+              sizeClass:
+                default: default
+                description: |-
+                  SizeClass names a size class of the platform (pools differing only in machine
+                  size are size classes of one platform). Each platform in pools.json declares
+                  its size classes; "default" always exists.
+                type: string
+              tart:
+                description: Tart settings (provider tart only).
+                properties:
+                  cpu:
+                    description: CPU and memory override the host-derived defaults
+                      ((cores-2)/slots, (RAM-8GB)/slots).
+                    format: int32
+                    type: integer
+                  diskGiB:
+                    format: int32
+                    type: integer
+                  hostSelector:
+                    additionalProperties:
+                      type: string
+                    description: HostSelector matches MacHost labels.
+                    type: object
+                  maxAge:
+                    description: 'MaxAge: VMs older than this are re-cloned from the
+                      golden image (default 168h).'
+                    type: string
+                  memoryGiB:
+                    format: int32
+                    type: integer
+                  suspendable:
+                    description: Suspendable evaluates `tart suspend` as the "off"
+                      state (R-MAC-3 SHOULD).
+                    type: boolean
+                  vmsPerHost:
+                    default: 2
+                    description: VMsPerHost is 1 or 2 (Apple licence limit).
+                    format: int32
+                    maximum: 2
+                    minimum: 1
+                    type: integer
+                type: object
+              timers:
+                description: |-
+                  Timers default per platform: idle 5 m (EC2 Linux) / 10 m (EC2 Windows, macOS);
+                  startup 5 m (Linux, macOS) / 15 m (Windows); drain 30 m.
+                properties:
+                  drainTimeout:
+                    description: 'DrainTimeout: after this long a draining VM is stopped
+                      even if actions still run.'
+                    type: string
+                  idleTimeout:
+                    description: 'IdleTimeout: a VM idle this long (with an empty
+                      queue) is drained and stopped (R-SCALE-3).'
+                    type: string
+                  startupTimeout:
+                    description: 'StartupTimeout: a VM that has not registered by
+                      then is failed and replaced.'
+                    type: string
+                type: object
+              worker:
+                description: Worker tunes the bb_worker/bb_runner configuration.
+                properties:
+                  buildDirectory:
+                    default: auto
+                    description: |-
+                      BuildDirectory selects the build directory mode (R-CACHE-3); auto picks FUSE (Linux),
+                      WinFSP (Windows) and the measured choice on macOS.
+                    enum:
+                    - auto
+                    - fuse
+                    - winfsp
+                    - nfsv4
+                    - native
+                    type: string
+                  concurrency:
+                    description: Concurrency is the number of execution slots of the
+                      pool's primary runner; default = vCPUs.
+                    format: int32
+                    type: integer
+                  l1:
+                    description: L1 places the worker-local cache (R-CACHE-2).
+                    properties:
+                      placement:
+                        default: auto
+                        description: |-
+                          Placement: auto prefers instance-store NVMe, then an ephemeral gp3 volume, then memory
+                          (EC2); the VM disk on macOS. "vm-disk" is Tart only.
+                        enum:
+                        - auto
+                        - instance-store
+                        - ebs
+                        - memory
+                        - vm-disk
+                        type: string
+                      sizeGiB:
+                        description: SizeGiB of the L1 CAS; default 40 on macOS, derived
+                          from the instance elsewhere.
+                        format: int32
+                        type: integer
+                    type: object
+                  runnerConcurrency:
+                    additionalProperties:
+                      format: int32
+                      type: integer
+                    description: |-
+                      RunnerConcurrency overrides slots per runner name (e.g. "qemu-s390x": 2). Emulated
+                      runners default to a low concurrency documented in docs/sizing.md.
+                    type: object
+                type: object
+            required:
+            - capacity
+            - image
+            - platform
+            - provider
+            type: object
+            x-kubernetes-validations:
+            - message: spec.ec2 is required for provider ec2
+              rule: self.provider != 'ec2' || has(self.ec2)
+            - message: spec.tart is required for provider tart
+              rule: self.provider != 'tart' || has(self.tart)
+            - message: spec.tart is only valid for provider tart
+              rule: self.provider != 'ec2' || !has(self.tart)
+            - message: spec.ec2 is only valid for provider ec2
+              rule: self.provider != 'tart' || !has(self.ec2)
+            - message: capacity.minRunning must not exceed capacity.max
+              rule: self.capacity.minRunning <= self.capacity.max
+            - message: platform, provider and sizeClass are immutable
+              rule: self.platform == oldSelf.platform && self.provider == oldSelf.provider
+                && self.sizeClass == oldSelf.sizeClass
+          status:
+            description: WorkerPoolStatus is the observed state; written only by the
+              controller.
+            properties:
+              busy:
+                description: Busy VMs (running at least one operation) and Idle VMs.
+                format: int32
+                type: integer
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              desired:
+                description: Desired VMs from the last autoscaler decision.
+                format: int32
+                type: integer
+              draining:
+                description: Draining VMs.
+                format: int32
+                type: integer
+              estimatedCostTodayUSD:
+                type: string
+              idle:
+                format: int32
+                type: integer
+              imageGeneration:
+                description: ImageGeneration is the active generation label and ResolvedImage
+                  the AMI ID / Tart reference.
+                type: string
+              instanceSecondsToday:
+                description: InstanceSecondsToday and EstimatedCostTodayUSD feed `cucinactl
+                  cost` (R-OBS-5).
+                format: int64
+                type: integer
+              lastCapacityFailure:
+                description: LastCapacityFailure records the last ICE/quota/missing-image
+                  error and when it started.
+                properties:
+                  message:
+                    type: string
+                  reason:
+                    type: string
+                  since:
+                    format: date-time
+                    type: string
+                required:
+                - reason
+                - since
+                type: object
+              lastScaleTime:
+                description: LastScaleTime is when the controller last launched or
+                  stopped a VM.
+                format: date-time
+                type: string
+              launching:
+                description: Launching VMs (booting, not yet registered).
+                format: int32
+                type: integer
+              observedGeneration:
+                format: int64
+                type: integer
+              oldGenerationVMs:
+                description: OldGenerationVMs are VMs still running a previous generation.
+                format: int32
+                type: integer
+              queueDeclared:
+                description: QueueDeclared reports that the scheduler knows the pool's
+                  queues.
+                type: boolean
+              registered:
+                description: Registered VMs (at least one runner thread connected).
+                format: int32
+                type: integer
+              resolvedImage:
+                type: string
+              stopped:
+                description: Stopped VMs (Tart only; disk kept).
+                format: int32
+                type: integer
+            required:
+            - busy
+            - desired
+            - draining
+            - idle
+            - launching
+            - registered
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

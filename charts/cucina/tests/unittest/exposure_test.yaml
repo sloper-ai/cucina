@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# R-CP-5: LoadBalancer by default with TLS at the frontend; Ingress/Gateway terminate TLS
+# and reach the frontend over h2c; the management API reaches only the leader.
+suite: exposure
+templates:
+  - templates/exposure/services.yaml
+  - templates/exposure/ingress.yaml
+  - templates/frontend/service.yaml
+  - templates/frontend/deployment.yaml
+tests:
+  - it: exposes the client endpoint as a LoadBalancer by default
+    template: templates/exposure/services.yaml
+    documentSelector: {path: metadata.name, value: RELEASE-NAME-cucina-client}
+    asserts:
+      - equal: {path: spec.type, value: LoadBalancer}
+      - equal: {path: 'spec.ports[0].targetPort', value: grpc-client}
+  - it: routes the management API to the leader pod
+    template: templates/exposure/services.yaml
+    documentSelector: {path: metadata.name, value: RELEASE-NAME-cucina-api-management}
+    asserts:
+      - equal:
+          path: 'spec.selector["cucina.sloper.ai/leader"]'
+          value: "true"
+  - it: puts an Ingress in front of an h2c frontend
+    set:
+      endpoints.client.host: cucina.example.com
+      exposure.client.type: Ingress
+    asserts:
+      - hasDocuments: {count: 1}
+        template: templates/exposure/ingress.yaml
+      - equal: {path: 'spec.ports[0].appProtocol', value: kubernetes.io/h2c}
+        template: templates/frontend/service.yaml
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: tls-clients, secret: {secretName: RELEASE-NAME-cucina-tls-frontend}}
+        template: templates/frontend/deployment.yaml
+  - it: renders no client LoadBalancer behind an Ingress
+    set:
+      endpoints.client.host: cucina.example.com
+      exposure.client.type: Ingress
+    template: templates/exposure/services.yaml
+    asserts:
+      # api-sts, api-management and the three worker Services; no client Service.
+      - hasDocuments: {count: 5}
+  - it: renders the client Service otherwise
+    template: templates/exposure/services.yaml
+    asserts:
+      - hasDocuments: {count: 6}

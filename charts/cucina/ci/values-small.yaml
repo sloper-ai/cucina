@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Size profile "small": the single-node acceptance environment (k3s v1.36 on one
+# m8i.2xlarge, local-path volumes on a ~300 GiB data disk, ServiceLB). Hosts and IDs
+# here are documentation placeholders (RFC 2606 / RFC 5737); the e2e harness passes
+# the real ones with --set at install time and never commits them (§12).
+sizeProfile: small
+endpoints:
+  client:
+    host: cucina.example.com
+  worker:
+    host: 192.0.2.10
+exposure:
+  client:
+    type: LoadBalancer
+  api:
+    type: LoadBalancer
+  worker:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+storage:
+  mode: file
+  storageClassName: local-path
+controller:
+  aws:
+    enabled: true
+    region: us-west-1
+    accountId: "000000000000"
+    extraTags:
+      cucina:env: e2e
+pools:
+  - name: linux-x86-64
+    platform: linux-x86-64
+    provider: ec2
+    capacity: {minRunning: 0, max: 4}
+    image:
+      amiSelector:
+        cucina:image: linux-x86-64
+    ec2:
+      instanceTypes: [c8i.8xlarge, c7i.8xlarge, c7a.8xlarge, m6id.8xlarge]
+      subnetIDs: [subnet-00000000000000000]
+      securityGroupIDs: [sg-00000000000000000]
+      instanceProfile: cucina-e2e-worker
+  - name: linux-aarch64
+    platform: linux-aarch64
+    provider: ec2
+    capacity: {minRunning: 0, max: 2}
+    image:
+      amiSelector:
+        cucina:image: linux-aarch64
+    ec2:
+      instanceTypes: [c8g.8xlarge, c7g.8xlarge, c7gd.8xlarge]
+      subnetIDs: [subnet-00000000000000000]
+      securityGroupIDs: [sg-00000000000000000]
+      instanceProfile: cucina-e2e-worker
+  - name: windows-x86-64
+    platform: windows-x86-64
+    provider: ec2
+    capacity: {minRunning: 0, max: 4}
+    image:
+      amiSelector:
+        cucina:image: windows-x86-64
+    ec2:
+      instanceTypes: [c7a.8xlarge, c8i.8xlarge, c7i.8xlarge]
+      subnetIDs: [subnet-00000000000000000]
+      securityGroupIDs: [sg-00000000000000000]
+      instanceProfile: cucina-e2e-worker
+      fastLaunch:
+        enabled: true
+        targetCount: 4
+  - name: macos-arm64-xcode27-0
+    platform: macos-arm64-xcode27.0
+    provider: tart
+    capacity: {minRunning: 0, max: 1}
+    image:
+      reference: cucina-worker-macos:27.0-0.1.0
+    tart:
+      vmsPerHost: 1

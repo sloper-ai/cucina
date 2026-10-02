@@ -1,0 +1,106 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Namespaced RBAC for cucina-controller (docs/dev/controller.md lists the rules the
+controller self-checks at startup, R-TEST-7). Everything the controller touches
+lives in the release namespace; nothing cluster-scoped is needed.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cucina.controller.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "controller") | nindent 4 }}
+rules:
+  # docs/dev/controller.md §RBAC (the controller self-checks these at startup) and
+  # docs/dev/mgmt.md (management API).
+  - apiGroups: ["cucina.sloper.ai"]
+    resources: ["workerpools"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["cucina.sloper.ai"]
+    resources: ["workerpools/status", "machosts/status", "trustpolicies/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["cucina.sloper.ai"]
+    resources: ["workerpools/finalizers", "machosts/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["cucina.sloper.ai"]
+    resources: ["machosts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cucina.sloper.ai"]
+    resources: ["trustpolicies"]
+    verbs: ["get", "list", "watch"]
+  # Leader election and enrollment replay leases.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # CA, server certificates, signing keys, JWKS, deny-list, service keys, break-glass key,
+  # enrollment tokens (<release>-enroll-tokens), registry credential.
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Restart the frontends after a signing-key compromise, the scheduler after queue changes.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get", "list", "watch"]
+  # patch: the leader labels its own Pod cucina.sloper.ai/leader=true; the management
+  # Service selects that label (the autoscaler state lives on the leader).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cucina.controller.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "controller") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cucina.controller.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cucina.controller.name" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cucina.sts.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "sts") | nindent 4 }}
+rules:
+  - apiGroups: ["cucina.sloper.ai"]
+    resources: ["trustpolicies"]
+    verbs: ["get", "list", "watch"]
+  # Signing keys, hashed service-account keys, deny-list.
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["", "events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cucina.sts.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "sts") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cucina.sts.name" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cucina.sts.name" . }}
+    namespace: {{ .Release.Namespace }}

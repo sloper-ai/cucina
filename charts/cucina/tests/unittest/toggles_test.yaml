@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Defaults that matter: CRDs installed from templates and kept on uninstall (R-OPS-1),
+# monitoring objects only on request, NetworkPolicies on, hooks bound to the right phases.
+suite: toggles and hooks
+tests:
+  - it: installs the CRDs from templates, kept on uninstall
+    template: templates/crds.yaml
+    asserts:
+      - hasDocuments: {count: 3}
+      - equal:
+          path: 'metadata.annotations["helm.sh/resource-policy"]'
+          value: keep
+  - it: can leave CRDs to someone else
+    template: templates/crds.yaml
+    set:
+      crds.install: false
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: renders no monitoring objects by default
+    templates:
+      - templates/monitoring/monitors.yaml
+      - templates/monitoring/rules.yaml
+      - templates/monitoring/dashboards.yaml
+    asserts:
+      - hasDocuments: {count: 0}
+  - it: restricts the in-cluster ports by default
+    template: templates/networkpolicy.yaml
+    asserts:
+      - hasDocuments: {count: 2}
+  - it: bootstraps before install and upgrade
+    template: templates/hooks/bootstrap.yaml
+    documentSelector: {path: metadata.name, value: RELEASE-NAME-cucina-bootstrap}
+    asserts:
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook"]'
+          value: pre-install,pre-upgrade
+      - equal:
+          path: 'spec.template.spec.containers[0].args'
+          value: [bootstrap, --config=/etc/cucina/controller.json, --certs=/etc/cucina/certs.json]
+  - it: prepares uninstall before delete (R-OPS-3)
+    template: templates/hooks/bootstrap.yaml
+    documentSelector: {path: metadata.name, value: RELEASE-NAME-cucina-uninstall-prep}
+    asserts:
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook"]'
+          value: pre-delete
+      - equal:
+          path: 'spec.template.spec.containers[0].args[0]'
+          value: uninstall-prep
+  - it: makes PodDisruptionBudgets only for replicated components
+    template: templates/pdb.yaml
+    set:
+      sizeProfile: small
+    asserts:
+      # small: one frontend and one controller, two shards and two STS replicas.
+      - hasDocuments: {count: 2}

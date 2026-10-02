@@ -1,0 +1,120 @@
+{
+  "$comment": "Cucina platform catalog: pool platforms, their runners (exact REAPI platform property sets), size classes and defaults. Single source of truth for the chart (predeclaredPlatformQueues), the controller (worker settings), cucinactl (bazelrc) and the structural cross-platform test. Operators extend it through Helm values `platforms.extra` (e.g. a new Xcode version) with no code change (UC18). Buildbarn matches the ENTIRE property set exactly, so each runner has exactly one set. Bazel-side platforms/targets live in platforms/targets.json (cross-platform agent).",
+  "schemaVersion": 1,
+  "defaultInstanceName": "main",
+  "platforms": [
+    {
+      "name": "linux-x86-64",
+      "description": "Ubuntu 26.04 on EC2 x86_64; native runner plus qemu-user emulated runners for riscv64, s390x and armv7 tests.",
+      "provider": "ec2",
+      "os": "linux",
+      "arch": "x86_64",
+      "defaults": {
+        "idleTimeout": "5m",
+        "drainTimeout": "30m",
+        "startupTimeout": "5m",
+        "buildDirectory": "fuse",
+        "l1Placement": "auto"
+      },
+      "sizeClasses": [{ "name": "default", "sizeClass": 1 }],
+      "runners": [
+        {
+          "name": "native",
+          "properties": { "OSFamily": "linux", "ISA": "x86-64" },
+          "concurrency": { "vcpusFactor": 1.0 }
+        },
+        {
+          "name": "qemu-rv64g",
+          "properties": { "OSFamily": "linux", "ISA": "rv64g", "cucina-emulation": "qemu" },
+          "concurrency": { "fixed": 2 },
+          "emulator": "qemu-riscv64"
+        },
+        {
+          "name": "qemu-s390x",
+          "properties": { "OSFamily": "linux", "ISA": "s390x", "cucina-emulation": "qemu" },
+          "concurrency": { "fixed": 2 },
+          "emulator": "qemu-s390x"
+        },
+        {
+          "name": "qemu-arm-a32",
+          "properties": { "OSFamily": "linux", "ISA": "arm-a32", "cucina-emulation": "qemu" },
+          "concurrency": { "fixed": 2 },
+          "emulator": "qemu-arm"
+        }
+      ]
+    },
+    {
+      "name": "linux-aarch64",
+      "description": "Ubuntu 26.04 on EC2 Graviton (arm64); native runner.",
+      "provider": "ec2",
+      "os": "linux",
+      "arch": "arm64",
+      "defaults": {
+        "idleTimeout": "5m",
+        "drainTimeout": "30m",
+        "startupTimeout": "5m",
+        "buildDirectory": "fuse",
+        "l1Placement": "auto"
+      },
+      "sizeClasses": [{ "name": "default", "sizeClass": 1 }],
+      "runners": [
+        {
+          "name": "native",
+          "properties": { "OSFamily": "linux", "ISA": "arm-a64" },
+          "concurrency": { "vcpusFactor": 1.0 }
+        }
+      ]
+    },
+    {
+      "name": "windows-x86-64",
+      "description": "Windows Server 2025 on EC2 with VS 2026 Build Tools; one native runner serving both the MSVC and MinGW ABIs.",
+      "provider": "ec2",
+      "os": "windows",
+      "arch": "x86_64",
+      "defaults": {
+        "idleTimeout": "10m",
+        "drainTimeout": "30m",
+        "startupTimeout": "15m",
+        "buildDirectory": "winfsp",
+        "l1Placement": "auto"
+      },
+      "sizeClasses": [{ "name": "default", "sizeClass": 1 }],
+      "runners": [
+        {
+          "name": "native",
+          "properties": { "OSFamily": "windows", "ISA": "x86-64" },
+          "concurrency": { "vcpusFactor": 1.0 }
+        }
+      ]
+    },
+    {
+      "name": "macos-arm64-xcode27.0",
+      "description": "macOS 27 Tart VMs on Mac minis with exactly one Xcode (27.0): an Xcode runner (xcode-version) and a generic arm64 runner (no xcode-version) used for hermetic-llvm builds and cross-built tests. Both runners share the VM's CPUs: each offers vCPUs slots (workloads are rarely mixed); the autoscaler sizes VM count from total demand over vCPUs (docs/contracts.md).",
+      "provider": "tart",
+      "os": "macos",
+      "arch": "arm64",
+      "xcodeVersion": "27.0",
+      "defaults": {
+        "idleTimeout": "10m",
+        "drainTimeout": "30m",
+        "startupTimeout": "5m",
+        "buildDirectory": "auto",
+        "l1Placement": "vm-disk"
+      },
+      "sizeClasses": [{ "name": "default", "sizeClass": 1 }],
+      "runners": [
+        {
+          "name": "xcode",
+          "properties": { "OSFamily": "macos", "ISA": "arm-a64", "xcode-version": "27.0" },
+          "concurrency": { "vcpusFactor": 1.0 }
+        },
+        {
+          "name": "generic",
+          "properties": { "OSFamily": "macos", "ISA": "arm-a64" },
+          "concurrency": { "vcpusFactor": 1.0 },
+          "generic": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,154 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $paths := include "cucina.paths" . | fromYaml -}}
+{{- $eff := include "cucina.effective" (list . "storage") | fromYaml -}}
+{{- $pvc := include "cucina.storage.pvcSizes" . | fromJson -}}
+{{- $block := eq .Values.storage.mode "block" -}}
+{{- $fsVolume := ternary "meta" "data" $block -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cucina.storage.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "storage") | nindent 4 }}
+spec:
+  # Headless: the frontend and scheduler address every shard by its stable DNS name.
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "cucina.selectorLabels" (dict "ctx" . "component" "storage") | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ $ports.storage }}
+      targetPort: grpc
+    - name: diagnostics
+      port: {{ $ports.diagnostics }}
+      targetPort: diagnostics
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "cucina.storage.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "storage") | nindent 4 }}
+spec:
+  serviceName: {{ include "cucina.storage.name" . }}
+  replicas: {{ $eff.shards }}
+  podManagementPolicy: Parallel
+  revisionHistoryLimit: 3
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ .Values.storage.persistence.whenDeleted }}
+    whenScaled: {{ .Values.storage.persistence.whenScaled }}
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "storage") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "storage") | nindent 8 }}
+        {{- with $eff.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "cucina.storage.config" . | sha256sum }}
+        {{- with $eff.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # Let bb_storage flush its persistent state on shutdown (NFR-R2).
+      terminationGracePeriodSeconds: 60
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+        {{- with $eff.supplementalGroups }}
+        supplementalGroups:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      containers:
+        - name: bb-storage
+          image: {{ include "cucina.image" .Values.images.bbStorage }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["{{ $paths.config }}/storage.jsonnet"]
+          {{- with include "cucina.goEnv" $eff.resources }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ $ports.storage }}
+            - name: diagnostics
+              containerPort: {{ $ports.diagnostics }}
+          {{- include "cucina.bb.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml $eff.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ $paths.config }}
+              readOnly: true
+            - name: {{ $fsVolume }}
+              mountPath: {{ ternary $paths.storageMeta $paths.storageData $block }}
+            {{- /* Persistent-state directories must exist before bb_storage starts; kubelet
+                   creates subPath directories (with the volume root's mode), so no init
+                   container or extra image is needed. */}}
+            {{- range $store := list "cas" "ac" "fsac" "iscc" }}
+            - name: {{ $fsVolume }}
+              mountPath: {{ printf "%s/%s" $paths.storageState $store }}
+              subPath: {{ printf "state/%s" $store }}
+            {{- end }}
+          {{- if $block }}
+          volumeDevices:
+            - name: cas
+              devicePath: {{ $paths.casDevice }}
+          {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cucina.storage.name" . }}
+      {{- with include "cucina.scheduling" $eff }}{{ . | nindent 6 }}{{- end }}
+      {{- include "cucina.topologySpread" (list . "storage" $eff.topologySpreadConstraints) | nindent 6 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: {{ $fsVolume }}
+        labels:
+          {{- include "cucina.selectorLabels" (dict "ctx" . "component" "storage") | nindent 10 }}
+        {{- with .Values.storage.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        volumeMode: Filesystem
+        {{- with .Values.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $pvc.filesystem }}
+    {{- if $block }}
+    - metadata:
+        name: cas
+        labels:
+          {{- include "cucina.selectorLabels" (dict "ctx" . "component" "storage") | nindent 10 }}
+        {{- with .Values.storage.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # Raw block device for the CAS blocks (EBS CSI); bb_storage sizes blocks from the device.
+        volumeMode: Block
+        {{- with .Values.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $pvc.cas }}
+    {{- end }}

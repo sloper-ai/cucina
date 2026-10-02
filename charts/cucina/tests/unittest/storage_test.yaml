@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# R-CP-3: one PVC per shard; file-backed blocks on local-path volumes, raw volumeMode
+# Block for the CAS on EBS CSI; persistent-state directories exist before bb_storage starts.
+suite: storage modes
+templates:
+  - templates/storage/statefulset.yaml
+tests:
+  - it: file mode uses one filesystem PVC per shard
+    documentSelector: {path: kind, value: StatefulSet}
+    set:
+      storage: {mode: file, storageClassName: local-path}
+    asserts:
+      - lengthEqual: {path: spec.volumeClaimTemplates, count: 1}
+      - equal: {path: 'spec.volumeClaimTemplates[0].spec.volumeMode', value: Filesystem}
+      - equal: {path: 'spec.volumeClaimTemplates[0].spec.storageClassName', value: local-path}
+      - notExists: {path: 'spec.template.spec.containers[0].volumeDevices'}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: data, mountPath: /cucina/state/cas, subPath: state/cas}
+  - it: block mode gives the CAS a raw block device
+    documentSelector: {path: kind, value: StatefulSet}
+    set:
+      storage: {mode: block, storageClassName: ebs-gp3-block}
+    asserts:
+      - lengthEqual: {path: spec.volumeClaimTemplates, count: 2}
+      - equal: {path: 'spec.volumeClaimTemplates[1].metadata.name', value: cas}
+      - equal: {path: 'spec.volumeClaimTemplates[1].spec.volumeMode', value: Block}
+      - equal: {path: 'spec.volumeClaimTemplates[1].spec.resources.requests.storage', value: 500Gi}
+      - contains:
+          path: spec.template.spec.containers[0].volumeDevices
+          content: {name: cas, devicePath: /dev/cucina-cas}
+  - it: keeps the cache when the StatefulSet goes away (R-OPS-1)
+    documentSelector: {path: kind, value: StatefulSet}
+    asserts:
+      - equal: {path: spec.persistentVolumeClaimRetentionPolicy.whenDeleted, value: Retain}

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "charttest",
+    testonly = True,
+    srcs = [
+        "charttest.go",
+        "jwt.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/charts/cucina/tests/charttest",
+    visibility = ["//charts/cucina:__subpackages__"],
+    deps = [
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@io_k8s_sigs_yaml//:yaml",
+    ],
+)

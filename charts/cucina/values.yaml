@@ -1,0 +1,444 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Default values for the Cucina chart. values.schema.json validates every key
+# (unknown keys are an error) and README.md lists them with descriptions.
+# Sizing defaults come from the size profile (files/profiles.yaml); a null or
+# empty per-component value means "use the profile".
+
+# -- Size profile: small (single-node test), medium (default production), large.
+sizeProfile: medium
+
+nameOverride: ""
+fullnameOverride: ""
+# -- Kubernetes cluster DNS domain (used for in-cluster service addresses).
+clusterDomain: cluster.local
+# -- Installation ID: value of the cucina:cluster tag on every cloud resource the
+# controller creates. Must be unique per installation. Default: <namespace>-<release>.
+clusterId: ""
+# -- Buildbarn instance names (tenants, R-RE-3). The first one is the default.
+instanceNames:
+  - main
+# -- Labels added to every object.
+commonLabels: {}
+
+images:
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+  # Buildbarn images are pinned by digest (ADR 0001 pins).
+  bbStorage:
+    repository: ghcr.io/buildbarn/bb-storage
+    tag: 20260930T153215Z-086b011
+    digest: sha256:567265fa5fd8706d4965272c2e4c35c77577eefe0682983e014d5d5f62cf288f
+  bbScheduler:
+    repository: ghcr.io/buildbarn/bb-scheduler
+    tag: 20260930T173749Z-1a3be95
+    digest: sha256:3e61fd8824706c174b0c7e87ca02b5c1ae99ba27a1f586b2e1b3a0af909bb491
+  # Cucina images; the release workflow fills in the digest (R-OPS-7).
+  controller:
+    repository: ghcr.io/sloper-ai/cucina-controller
+    tag: 0.1.0
+    digest: ""
+  # Empty repository: use the controller image (the STS is a subcommand of it).
+  sts:
+    repository: ""
+    tag: ""
+    digest: ""
+
+crds:
+  # -- Render the CRDs from templates so `helm upgrade` upgrades them.
+  install: true
+  # -- Keep CRDs (and with them every WorkerPool/MacHost/TrustPolicy) on `helm uninstall`.
+  keep: true
+
+# --- Where clients, workers and Mac hosts connect (R-CP-5) -------------------
+endpoints:
+  client:
+    # -- Public DNS name or IP of the remote-execution endpoint (grpcs://host:port).
+    host: ""
+    # -- External port of the remote-execution gRPC endpoint.
+    port: 443
+    # -- Extra DNS names/IPs for the public certificate.
+    extraNames: []
+  sts:
+    # -- Issuer URL of Cucina JWTs and base URL of the STS. Default: https://<client.host>:<sts.port>.
+    url: ""
+    port: 8443
+  management:
+    # -- Host of the management API (cucinactl). Default: client.host.
+    host: ""
+    port: 8444
+  worker:
+    # -- Private IP or DNS name workers use (VPC only, never a public address; R-DATA-4).
+    host: ""
+    # -- TLS name workers verify (a DNS SAN of the internal certificate). Default: worker.host.
+    serverName: ""
+    # -- Per-service hosts when each worker Service has its own load balancer (EKS NLBs).
+    storageHost: ""
+    schedulerHost: ""
+    enrollmentHost: ""
+    # -- External ports of the worker endpoint.
+    storagePort: 8981
+    schedulerPort: 8983
+    enrollmentPort: 8445
+    # -- Extra DNS names/IPs for the internal certificate.
+    extraNames: []
+  hosts:
+    # -- Address Mac hosts use for the controller's HostService. Default: worker.host.
+    host: ""
+    port: 8446
+
+exposure:
+  # Remote-execution endpoint (the frontend's client listener).
+  client:
+    # -- LoadBalancer | NodePort | ClusterIP | Ingress | Gateway. With Ingress/Gateway TLS
+    # terminates at the proxy and the frontend serves h2c behind it (docs/operations/exposure.md).
+    type: LoadBalancer
+    annotations: {}
+    loadBalancerClass: ""
+    loadBalancerSourceRanges: []
+    externalTrafficPolicy: Cluster
+    nodePort: null
+    # -- Annotations on the frontend ClusterIP Service (e.g. Traefik serversscheme h2c).
+    backendServiceAnnotations: {}
+    ingress:
+      className: ""
+      annotations: {}
+      # -- Secret with the certificate the ingress presents.
+      tlsSecretName: ""
+    gateway:
+      # -- Gateway API parentRefs of the GRPCRoute (the Gateway terminates TLS).
+      parentRefs: []
+  # STS and management API (TLS terminated by the controller/STS pods).
+  api:
+    # -- LoadBalancer | NodePort | ClusterIP
+    type: LoadBalancer
+    annotations: {}
+    loadBalancerClass: ""
+    loadBalancerSourceRanges: []
+    externalTrafficPolicy: Cluster
+    nodePorts:
+      sts: null
+      management: null
+  # Worker endpoint: frontend worker listener, scheduler worker API, enrollment and host API.
+  worker:
+    # -- LoadBalancer | NodePort | ClusterIP (mTLS needs L4 pass-through: no Ingress/Gateway).
+    type: LoadBalancer
+    annotations: {}
+    loadBalancerClass: ""
+    loadBalancerSourceRanges: []
+    externalTrafficPolicy: Local
+    nodePorts:
+      storage: null
+      scheduler: null
+      enrollment: null
+      host: null
+
+# --- TLS (R-CP-5, UC22) -----------------------------------------------------
+tls:
+  # -- How often Buildbarn re-reads mounted certificates (rotation without restart).
+  refreshInterval: 300s
+  # -- Lifetime of chart-generated server certificates (renewed by the controller at 2/3).
+  serverCertificateDuration: 2160h
+  # Public group: the remote-execution endpoint (frontend client listener) and the STS
+  # (Secrets <fullname>-tls-frontend, <fullname>-tls-sts). ADR 0403.
+  public:
+    # -- generated (Cucina CA, bootstrap hook) | certManager | existingSecret
+    source: generated
+    # -- kubernetes.io/tls Secret (tls.crt, tls.key, ca.crt) used for the whole group when
+    # source=existingSecret.
+    existingSecret: ""
+    certManager:
+      issuerRef:
+        name: ""
+        kind: ClusterIssuer
+        group: cert-manager.io
+      duration: 2160h
+      renewBefore: 720h
+      # -- Also put the in-cluster Service names in the certificate (not with ACME issuers).
+      includeServiceNames: false
+  # Internal group: frontend worker listener, scheduler, controller (also serves the
+  # management API). Must chain to Cucina's CA: workers and hosts verify it with the CA
+  # bundle they get at enrollment.
+  internal:
+    source: generated
+    existingSecret: ""
+    certManager:
+      issuerRef:
+        name: ""
+        kind: Issuer
+        group: cert-manager.io
+      duration: 2160h
+      renewBefore: 720h
+
+# --- Cucina PKI for workers, hosts and the controller (R-SEC-2/3) ------------
+pki:
+  # -- Existing Secret with ca.crt and ca.key. Empty: <fullname>-ca, created by the bootstrap hook.
+  existingCASecret: ""
+  workerCertTTL: 24h
+  hostCertTTL: 168h
+  vmCertTTL: 12h
+  controllerClientCertTTL: 720h
+
+# --- Client authentication (R-AUTH) ------------------------------------------
+auth:
+  tokenTTL: 15m
+  audience: buildbarn
+  keyRotationPublishLead: 10m
+  rateLimitPerMinute: 60
+  breakGlass:
+    # -- Generate the break-glass admin service-account key and its TrustPolicy (R-AUTH-12).
+    enabled: true
+  # -- Optional Cloud Identity group lookup ({serviceAccountSecret, cacheTtl}).
+  groupLookup: null
+
+# -- TrustPolicy objects (R-AUTH-2): [{name, spec}] where spec is the TrustPolicy spec.
+# See samples/trust-policies.yaml (Google Workspace, GitHub Actions, sloper-ai/cucina).
+trustPolicies: []
+
+platforms:
+  # -- Additional platform catalog entries (same schema as platforms/pools.json), e.g. a
+  # second Xcode version (UC18). Merged after the built-in catalog.
+  extra: []
+
+# -- WorkerPool objects (R-POOL-1, UC11): [{name, enabled, ...spec}]. The scheduler gets
+# predeclared queues for every (instance name x runner x size class) of every pool
+# platform (ADR 0002). See samples/pools.yaml.
+pools: []
+
+# --- Buildbarn configuration (R-CP-2) ---------------------------------------
+buildbarn:
+  # -- maximumMessageSizeBytes / maximumReceivedMessageSizeBytes in every component (R-CP-6).
+  maximumMessageSizeBytes: 16777216
+  # -- Embed JMESPath test vectors in every authorizer (Buildbarn refuses to start if one fails).
+  authorizerTestVectors: true
+  frontend:
+    # -- FindMissingBlobs existence cache TTL; must stay below storage retention (R-CACHE-5).
+    existenceCacheDuration: 60s
+    # -- completenessChecking limit; above the largest toolchain Tree (R-DATA-2).
+    maximumTotalTreeSizeBytes: 268435456
+    # -- AC purge (R-CACHE-5): hide worker-produced action results completed before this
+    # RFC 3339 time (actionResultExpiring.minimumTimestamp). Empty = off.
+    actionCachePurgeBefore: ""
+    zstd:
+      encoderWindowSizeBytes: 4194304
+      decoderWindowSizeBytes: 8388608
+      # -- klauspost encoder level enum (1 fastest .. 4 best); 2 is roughly zstd level 3.
+      encoderLevel: 2
+  scheduler:
+    defaultExecutionTimeout: 1800s
+    # -- Must be >= 3600s (Abseil "eternal" tests, R-RE-2).
+    maximumExecutionTimeout: 7200s
+    platformQueueWithNoWorkersTimeout: 900s
+    # -- SPIFFE ID of the controller's BuildQueueState client certificate (R-SEC-4).
+    controllerIdentity: spiffe://cucina/controller
+    # -- Persist execution statistics in the ISCC (only useful with several size classes).
+    feedbackDrivenSizeClasses: false
+  storage:
+    # -- Key-location map entries per expected object (upstream: 2-10x).
+    keyLocationMapFactor: 4
+    # -- Average object size used to estimate object counts per store.
+    averageObjectSize:
+      cas: 32Ki
+      ac: 2Ki
+      fsac: 1Ki
+      iscc: 512
+    # -- fsync interval of the persistent state (upstream recommendation: 300s).
+    minimumEpochInterval: 300s
+
+# --- Components (null/empty = size profile) ----------------------------------
+frontend:
+  replicas: null
+  resources: {}
+  zstd: {}
+  existenceCacheSize: null
+  jwtCacheSize: null
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+storage:
+  shards: null
+  # -- file: file-backed blocks on a filesystem PVC (k3s local-path); block: raw
+  # volumeMode Block for CAS blocks (EBS CSI) plus a small filesystem PVC (ADR 0402).
+  mode: file
+  # -- StorageClass for the storage PVCs ("" = cluster default).
+  storageClassName: ""
+  stores:
+    cas: {}
+    ac: {}
+    fsac: {}
+    iscc: {}
+  persistence:
+    # -- Filesystem PVC size; empty = derived from the stores (+10% and 1Gi headroom).
+    # Immutable after install (StatefulSet volumeClaimTemplates); see docs/operations/chart.md.
+    size: ""
+    annotations: {}
+    # -- Delete or Retain PVCs when the StatefulSet is deleted/scaled down (cache is reconstructible).
+    whenDeleted: Retain
+    whenScaled: Retain
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+  # -- Container user; raw Block devices may need a supplemental group with access to the device.
+  supplementalGroups: []
+
+scheduler:
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+controller:
+  replicas: null
+  resources: {}
+  logLevel: info
+  # -- OTLP gRPC endpoint for traces (optional).
+  otlpEndpoint: ""
+  costEnabled: true
+  leaderElection:
+    leaseDuration: 15s
+    renewDeadline: 10s
+    retryPeriod: 2s
+  scheduler:
+    pollInterval: 1s
+    # -- Fail queued work of a pool that cannot get capacity after this long (R-RE-2).
+    queueFailAfter: 10m
+  autoscaler:
+    shadow: false
+    runInstancesBurst: 5
+    runInstancesRefillPerSecond: 2
+    deadmanIdleLimit: 30m
+    deadmanUnreachableLimit: 10m
+    deadmanMaxUptime: 12h
+    iceBackoffMin: 5s
+    iceBackoffMax: 2m
+  hosts:
+    defaultTokenTtl: 168h
+    staleAfter: 2m
+  # -- Tart image registry access for hosts (private GHCR package).
+  registry:
+    enabled: false
+    host: ghcr.io
+    mode: static-readonly
+  aws:
+    # -- Enable the EC2 provider.
+    enabled: false
+    region: ""
+    # -- Account that instance identity documents must carry. Set at install time; never commit it.
+    accountId: ""
+    pricingRegionCode: ""
+    sweepInterval: 5m
+    # -- Tags added to every resource the controller creates (e.g. the campaign tags).
+    extraTags: {}
+  serviceAccount:
+    # -- Annotations, e.g. eks.amazonaws.com/role-arn for IRSA (R-CP-8).
+    annotations: {}
+  # -- Worker defaults pushed at enrollment.
+  worker:
+    metricsPort: 9980
+    pushgatewayUrl: ""
+    wanCompressionForHosts: true
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+sts:
+  replicas: null
+  resources: {}
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+hooks:
+  bootstrap:
+    # -- pre-install/pre-upgrade Job: CA, server certificates, signing keys, JWKS,
+    # deny-list and break-glass key (idempotent, never overwrites).
+    enabled: true
+    activeDeadlineSeconds: 300
+  uninstallPrep:
+    # -- pre-delete Job: deletes WorkerPools/MacHosts and waits for their finalizers (R-OPS-3).
+    enabled: true
+    timeout: 30m
+  test:
+    # -- `helm test`: cache canary through the client endpoint (R-CP-7).
+    enabled: true
+    # -- Secret with the service-account key the canary uses. Default: the break-glass key.
+    credentialSecret: ""
+    credentialKey: key
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+networkPolicy:
+  # -- Restrict the in-cluster-only ports (storage gRPC, scheduler client and BuildQueueState).
+  enabled: true
+  # -- Pods (namespaceSelector/podSelector peers) allowed to scrape metrics.
+  metricsFrom: []
+
+podDisruptionBudgets:
+  enabled: true
+
+monitoring:
+  # -- Extra labels on ServiceMonitor/PodMonitor/PrometheusRule objects (Prometheus selectors).
+  labels: {}
+  serviceMonitors:
+    enabled: false
+    interval: 30s
+  # -- Prometheus HTTP service discovery for EC2 workers (controller /sd/workers) via a ScrapeConfig.
+  workerScrapeConfig:
+    enabled: false
+    refreshInterval: 30s
+  prometheusRules:
+    enabled: false
+    thresholds:
+      # -- Alert when the oldest queued action waited longer than this.
+      queueTime: 5m
+      # -- Minimum CAS retention: above Bazel's --experimental_remote_cache_ttl (3h) with margin.
+      casRetention: 6h
+      # -- Bazel's --experimental_remote_cache_ttl.
+      bazelRemoteCacheTTL: 3h
+      # -- Storage volume free-space ratio below which to alert.
+      storageFreeRatio: 0.1
+      # -- AC hit ratio below which to alert (when there is traffic).
+      cacheHitRatio: 0.5
+      # -- Certificates expiring sooner than this.
+      certificateExpiry: 168h
+      # -- Host heartbeat age considered offline.
+      hostOffline: 5m
+      # -- Client egress rate (bytes/s) above which to alert.
+      egressBytesPerSecond: 104857600
+  grafanaDashboards:
+    enabled: false
+    # -- Labels the Grafana sidecar selects dashboards by.
+    labels:
+      grafana_dashboard: "1"
+    annotations: {}
+  pushgateway:
+    # -- Optional Prometheus Pushgateway for NAT'd workers (Mac VMs relay through hostd by default).
+    enabled: false
+    image:
+      repository: quay.io/prometheus/pushgateway
+      tag: v1.11.3
+      digest: sha256:74fa117cef2d7e383112d25139ff1c2d2e309c35389a9e0554a47136a1482e48
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}

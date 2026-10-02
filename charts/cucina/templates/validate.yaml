@@ -1,0 +1,29 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Cross-field checks values.schema.json cannot express (fail fast at install/upgrade,
+R-TEST-7). Renders nothing.
+*/}}
+{{- $s := .Values.buildbarn.scheduler -}}
+{{- if lt (include "cucina.seconds" (trimSuffix "s" $s.maximumExecutionTimeout | printf "%ss" | regexFind "^[0-9]+s")  | int) 3600 -}}
+{{- fail (printf "buildbarn.scheduler.maximumExecutionTimeout is %s; it must be >= 3600s (R-RE-2, Abseil eternal tests)" $s.maximumExecutionTimeout) -}}
+{{- end -}}
+{{- if gt (include "cucina.seconds" (regexFind "^[0-9]+s" .Values.buildbarn.frontend.existenceCacheDuration) | int) 3600 -}}
+{{- fail (printf "buildbarn.frontend.existenceCacheDuration is %s; keep it <= 3600s, far below storage retention (R-CACHE-5)" .Values.buildbarn.frontend.existenceCacheDuration) -}}
+{{- end -}}
+{{- range .Values.pools -}}
+{{- if gt (int .capacity.minRunning) (int .capacity.max) -}}
+{{- fail (printf "pools[%s]: capacity.minRunning %v exceeds capacity.max %v" .name .capacity.minRunning .capacity.max) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (eq .Values.storage.mode "block") (not .Values.storage.storageClassName) -}}
+{{- fail "storage.mode=block needs storage.storageClassName (a StorageClass of a CSI driver that supports volumeMode: Block, e.g. EBS CSI)" -}}
+{{- end -}}
+{{- /* A blob must fit in one block: CAS blocks are size / 38 (old 8 + current 24 + new 3 + spare 3). */ -}}
+{{- $cas := (include "cucina.effective" (list . "storage") | fromYaml).stores.cas.size -}}
+{{- if lt (include "cucina.bytes" $cas | int64) (mul 38 536870912) -}}
+{{- fail (printf "storage.stores.cas.size %s gives CAS blocks below 512 MiB (size / 38), the largest blob the CAS could store; use at least 19Gi" $cas) -}}
+{{- end -}}
+{{- /* Evaluate the helpers that fail on inconsistent values even when their objects are disabled. */ -}}
+{{- $_ := include "cucina.pools" . -}}
+{{- $_ := include "cucina.storage.pvcSizes" . -}}
+{{- $_ := include "cucina.certSpecs" . -}}

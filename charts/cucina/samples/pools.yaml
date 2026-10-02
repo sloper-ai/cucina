@@ -1,0 +1,116 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Sample pools (R-POOL-1, UC11). Replace the subnet, security-group, instance-profile
+# and image values with your environment's; every EC2 field of the WorkerPool API is
+# shown on the first pool. Pools idle at zero instances (minRunning 0, zero idle cost).
+# The scheduler gets predeclared queues for every runner of every platform below
+# (ADR 0002); changing anything else (types, image, max, timers, caches) applies live.
+pools:
+  # Linux x86_64 (Ubuntu 26.04 AMI): native runner + qemu runners for rv64/s390x/armv7 tests.
+  - name: linux-x86-64
+    platform: linux-x86-64
+    provider: ec2
+    sizeClass: default
+    instanceNames: [main]
+    capacity:
+      minRunning: 0
+      max: 4
+    timers:
+      idleTimeout: 5m
+      drainTimeout: 30m
+      startupTimeout: 5m
+    worker:
+      # Execution slots of the native runner; default = vCPUs.
+      concurrency: 32
+      runnerConcurrency:
+        qemu-rv64g: 2
+        qemu-s390x: 2
+        qemu-arm-a32: 2
+      l1:
+        placement: auto          # instance-store NVMe, else the data volume, else memory
+        sizeGiB: 100
+      buildDirectory: fuse
+    image:
+      amiSelector:
+        cucina:image: linux-x86-64
+      # ami: ami-0123456789abcdef0   (explicit AMI instead of the selector)
+    ec2:
+      instanceTypes: [c8i.8xlarge, c7i.8xlarge, c7a.8xlarge]
+      capacityType: on-demand
+      spotFallback: false
+      subnetIDs: [subnet-0123456789abcdef0]
+      securityGroupIDs: [sg-0123456789abcdef0]
+      instanceProfile: cucina-worker
+      associatePublicIP: false
+      rootVolume:
+        sizeGiB: 30
+        type: gp3
+        iops: 3000
+        throughputMiBps: 125
+        initializationRateMiBps: 300
+      dataVolume:
+        sizeGiB: 200
+        type: gp3
+        iops: 6000
+        throughputMiBps: 500
+      extraTags:
+        team: build
+    rollout: lazy
+    paused: false
+    floorSchedule:
+      - name: office-hours
+        days: [Mon, Tue, Wed, Thu, Fri]
+        start: "09:00"
+        end: "18:00"
+        minRunning: 1
+    dailyInstanceHourCap: 200
+  # Linux arm64 (Graviton).
+  - name: linux-aarch64
+    platform: linux-aarch64
+    provider: ec2
+    capacity: {minRunning: 0, max: 2}
+    image:
+      amiSelector:
+        cucina:image: linux-aarch64
+    ec2:
+      instanceTypes: [c8g.8xlarge, c7g.8xlarge]
+      subnetIDs: [subnet-0123456789abcdef0]
+      securityGroupIDs: [sg-0123456789abcdef0]
+      instanceProfile: cucina-worker
+  # Windows Server 2025 with VS 2026 Build Tools; EC2 Fast Launch (user-approved standing cost).
+  - name: windows-x86-64
+    platform: windows-x86-64
+    provider: ec2
+    capacity: {minRunning: 0, max: 4}
+    timers:
+      idleTimeout: 10m
+      startupTimeout: 15m
+    image:
+      amiSelector:
+        cucina:image: windows-x86-64
+    ec2:
+      instanceTypes: [c7a.8xlarge, c8i.8xlarge, c7i.8xlarge]
+      subnetIDs: [subnet-0123456789abcdef0]
+      securityGroupIDs: [sg-0123456789abcdef0]
+      instanceProfile: cucina-worker
+      rootVolume: {sizeGiB: 100, type: gp3}
+      fastLaunch:
+        enabled: true
+        targetCount: 4
+        maxParallelLaunches: 6
+  # macOS 27 + Xcode 27.0 Tart VMs on Mac minis running cucina-hostd.
+  - name: macos-arm64-xcode27-0
+    platform: macos-arm64-xcode27.0
+    provider: tart
+    capacity: {minRunning: 0, max: 4}
+    worker:
+      l1:
+        placement: vm-disk
+        sizeGiB: 40
+    image:
+      reference: ghcr.io/sloper-ai/cucina-worker-macos:27.0-0.1.0
+    tart:
+      vmsPerHost: 2
+      diskGiB: 120
+      maxAge: 168h
+      hostSelector:
+        site: office

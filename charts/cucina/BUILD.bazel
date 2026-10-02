@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# The chart's files (templates, values, schema, files/, ci/, samples/) as one runfiles
+# input for the chart tests in //charts/cucina/tests/... (`make -C charts/cucina test`
+# runs the same checks without Bazel).
+filegroup(
+    name = "chart",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+    visibility = ["//charts/cucina:__subpackages__"],
+)

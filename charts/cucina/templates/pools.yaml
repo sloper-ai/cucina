@@ -1,0 +1,19 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+WorkerPool objects from values.pools (R-POOL-1, UC11). Changes apply live through
+the controller; a pool on a platform/size class the scheduler does not know yet
+also changes the scheduler's predeclared queues (ADR 0002). Removing a pool deletes
+the object; its finalizer drains and terminates the pool's workers (R-OPS-3).
+*/}}
+{{- range $pool := include "cucina.pools" . | fromJsonArray }}
+---
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: WorkerPool
+metadata:
+  name: {{ $pool.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" $ "component" "pool") | nindent 4 }}
+spec:
+  {{- toYaml $pool.spec | nindent 2 }}
+{{- end }}

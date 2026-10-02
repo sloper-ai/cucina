@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Size profiles (values: sizeProfile). Every key here can be overridden per
+# component in values.yaml (frontend.*, storage.*, scheduler.*, controller.*,
+# sts.*); a null/empty value there means "take it from the profile".
+# docs/sizing.md explains the numbers and records measured values.
+#
+# small  — the single-node acceptance environment (k3s on one m8i.2xlarge,
+#          ~300 GiB local-path volume): one frontend, one controller.
+# medium — default production shape: >= 2 replicas of every stateless part.
+# large  — busy fleets (hundreds of concurrent actions, multi-TiB cache).
+small:
+  frontend:
+    replicas: 1
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: "2", memory: 1Gi}
+    zstd: {maximumEncoders: 16, maximumDecoders: 16}
+    existenceCacheSize: 100000
+    jwtCacheSize: 10000
+  storage:
+    shards: 2
+    stores:
+      cas: {size: 100Gi}
+      ac: {size: 1Gi}
+      fsac: {size: 1Gi}
+      iscc: {size: 256Mi}
+    resources:
+      requests: {cpu: 250m, memory: 512Mi}
+      limits: {cpu: "2", memory: 4Gi}
+  scheduler:
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: "1", memory: 512Mi}
+  controller:
+    replicas: 1
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 256Mi}
+  sts:
+    replicas: 2
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
+medium:
+  frontend:
+    replicas: 2
+    resources:
+      requests: {cpu: 500m, memory: 512Mi}
+      limits: {cpu: "4", memory: 2Gi}
+    zstd: {maximumEncoders: 64, maximumDecoders: 64}
+    existenceCacheSize: 1000000
+    jwtCacheSize: 10000
+  storage:
+    shards: 2
+    stores:
+      cas: {size: 500Gi}
+      ac: {size: 4Gi}
+      fsac: {size: 2Gi}
+      iscc: {size: 1Gi}
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {cpu: "4", memory: 8Gi}
+  scheduler:
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+      limits: {cpu: "2", memory: 2Gi}
+  controller:
+    replicas: 2
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: "1", memory: 256Mi}
+  sts:
+    replicas: 2
+    resources:
+      requests: {cpu: 50m, memory: 32Mi}
+      limits: {cpu: 500m, memory: 128Mi}
+large:
+  frontend:
+    replicas: 3
+    resources:
+      requests: {cpu: "1", memory: 1Gi}
+      limits: {cpu: "8", memory: 6Gi}
+    zstd: {maximumEncoders: 256, maximumDecoders: 256}
+    existenceCacheSize: 4000000
+    jwtCacheSize: 50000
+  storage:
+    shards: 4
+    stores:
+      cas: {size: 2Ti}
+      ac: {size: 16Gi}
+      fsac: {size: 8Gi}
+      iscc: {size: 4Gi}
+    resources:
+      requests: {cpu: "2", memory: 4Gi}
+      limits: {cpu: "8", memory: 32Gi}
+  scheduler:
+    resources:
+      requests: {cpu: "1", memory: 1Gi}
+      limits: {cpu: "4", memory: 4Gi}
+  controller:
+    replicas: 2
+    resources:
+      requests: {cpu: 200m, memory: 128Mi}
+      limits: {cpu: "2", memory: 256Mi}
+  sts:
+    replicas: 3
+    resources:
+      requests: {cpu: 100m, memory: 64Mi}
+      limits: {cpu: "1", memory: 128Mi}

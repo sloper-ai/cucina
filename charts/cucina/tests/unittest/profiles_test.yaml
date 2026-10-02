@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# R-CP-1: replica defaults per size profile (1 in the test, >= 2 by default), the single
+# Recreate scheduler, and that per-component values override the profile.
+suite: size profiles
+templates:
+  - templates/frontend/deployment.yaml
+  - templates/controller/deployment.yaml
+  - templates/scheduler/deployment.yaml
+  - templates/storage/statefulset.yaml
+tests:
+  - it: small runs one frontend and one controller
+    set:
+      sizeProfile: small
+    asserts:
+      - equal: {path: spec.replicas, value: 1}
+        template: templates/frontend/deployment.yaml
+      - equal: {path: spec.replicas, value: 1}
+        template: templates/controller/deployment.yaml
+        documentSelector: {path: kind, value: Deployment}
+  - it: medium (the default) runs two frontends, two controllers and two storage shards
+    asserts:
+      - equal: {path: spec.replicas, value: 2}
+        template: templates/frontend/deployment.yaml
+      - equal: {path: spec.replicas, value: 2}
+        template: templates/controller/deployment.yaml
+        documentSelector: {path: kind, value: Deployment}
+      - equal: {path: spec.replicas, value: 2}
+        template: templates/storage/statefulset.yaml
+        documentSelector: {path: kind, value: StatefulSet}
+  - it: the scheduler is a single Recreate replica in every profile
+    set:
+      sizeProfile: large
+    template: templates/scheduler/deployment.yaml
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - equal: {path: spec.replicas, value: 1}
+      - equal: {path: spec.strategy.type, value: Recreate}
+  - it: a per-component value overrides the profile
+    set:
+      sizeProfile: small
+      frontend:
+        replicas: 3
+        resources:
+          limits: {memory: 3Gi}
+    template: templates/frontend/deployment.yaml
+    asserts:
+      - equal: {path: spec.replicas, value: 3}
+      - equal: {path: 'spec.template.spec.containers[0].resources.limits.memory', value: 3Gi}
+      - equal: {path: 'spec.template.spec.containers[0].resources.requests.memory', value: 256Mi}

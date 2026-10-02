@@ -1,0 +1,47 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+cert-manager as the TLS source (R-CP-5): one Certificate per server-certificate Secret
+of the group (same names, SANs and SPIFFE server URI as the chart-generated ones).
+Buildbarn re-reads them every tls.refreshInterval and the controller via fsnotify, so
+renewal needs no restart. The internal group's issuer must sign with Cucina's CA (a
+cert-manager CA Issuer over the <fullname>-ca Secret): workers and hosts verify the
+worker endpoint with Cucina's CA bundle.
+*/}}
+{{- range $spec := include "cucina.certSpecs" . | fromJsonArray }}
+{{- if and (ne $spec.group "controller") (eq (index $.Values.tls $spec.group).source "certManager") }}
+{{- $cm := (index $.Values.tls $spec.group).certManager }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $spec.secretName }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" $ "component" "tls") | nindent 4 }}
+spec:
+  secretName: {{ $spec.secretName }}
+  duration: {{ $cm.duration }}
+  renewBefore: {{ $cm.renewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages: ["server auth", "digital signature"]
+  {{- with $spec.dnsNames }}
+  dnsNames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $spec.ipAddresses }}
+  ipAddresses:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if eq $spec.group "internal" }}
+  uris:
+    - spiffe://cucina/server/{{ $spec.component }}
+  {{- end }}
+  issuerRef:
+    name: {{ required (printf "tls.%s.certManager.issuerRef.name is required for source certManager" $spec.group) $cm.issuerRef.name }}
+    kind: {{ $cm.issuerRef.kind }}
+    group: {{ $cm.issuerRef.group }}
+{{- end }}
+{{- end }}

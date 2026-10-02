@@ -1,0 +1,126 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/* Cucina STS (R-AUTH-1): stateless token exchange, its own Deployment (2 replicas). */}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $paths := include "cucina.paths" . | fromYaml -}}
+{{- $eff := include "cucina.effective" (list . "sts") | fromYaml -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "cucina.sts.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "sts") | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cucina.sts.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "sts") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cucina.selectorLabels" (dict "ctx" . "component" "sts") | nindent 4 }}
+  ports:
+    - name: https
+      port: {{ $ports.controllerSTS }}
+      targetPort: https
+    - name: metrics
+      port: {{ $ports.controllerMetrics }}
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cucina.sts.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "sts") | nindent 4 }}
+spec:
+  replicas: {{ $eff.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "sts") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "sts") | nindent 8 }}
+        {{- with $eff.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "cucina.controller.config" . | sha256sum }}
+        {{- with $eff.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "cucina.sts.name" . }}
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: sts
+          image: {{ include "cucina.stsImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["sts", "--config={{ $paths.controllerConfig }}"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- with include "cucina.goEnv" $eff.resources }}
+            {{- . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: probes
+              containerPort: {{ $ports.controllerProbes }}
+            - name: metrics
+              containerPort: {{ $ports.controllerMetrics }}
+            - name: https
+              containerPort: {{ $ports.controllerSTS }}
+          {{- include "cucina.controller.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml $eff.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ $paths.configDir }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: tls-server
+              mountPath: {{ $paths.tlsServer }}
+              readOnly: true
+            - name: ca
+              mountPath: {{ dir $paths.caBundle }}
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cucina.controller.name" . }}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: tls-server
+          secret:
+            secretName: {{ include "cucina.tlsSecret" (list . "sts") }}
+        - name: ca
+          secret:
+            secretName: {{ include "cucina.caSecret" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+      {{- with include "cucina.scheduling" $eff }}{{ . | nindent 6 }}{{- end }}
+      {{- include "cucina.topologySpread" (list . "sts" $eff.topologySpreadConstraints) | nindent 6 }}

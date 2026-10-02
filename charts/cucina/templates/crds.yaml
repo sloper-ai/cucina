@@ -1,0 +1,21 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+CRDs (WorkerPool, MacHost, TrustPolicy) from api/crds (copied to files/crds; a test
+keeps the copies identical). Rendered as templates, not from crds/, so `helm upgrade`
+applies CRD changes (R-OPS-1); kept on uninstall unless crds.keep=false, because
+deleting a CRD deletes every object of its kind.
+*/}}
+{{- if .Values.crds.install }}
+{{- range $path, $_ := .Files.Glob "files/crds/*.yaml" }}
+{{- $crd := $.Files.Get $path | fromYaml }}
+{{- $meta := $crd.metadata }}
+{{- $annotations := $meta.annotations | default dict }}
+{{- if $.Values.crds.keep }}
+{{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
+{{- end }}
+{{- $_ := set $meta "annotations" $annotations }}
+{{- $_ := set $meta "labels" (include "cucina.labels" (dict "ctx" $ "component" "crd") | fromYaml) }}
+---
+{{ toYaml $crd }}
+{{- end }}
+{{- end }}

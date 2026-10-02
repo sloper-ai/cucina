@@ -1,0 +1,266 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: machosts.cucina.sloper.ai
+spec:
+  group: cucina.sloper.ai
+  names:
+    categories:
+    - cucina
+    kind: MacHost
+    listKind: MacHostList
+    plural: machosts
+    shortNames:
+    - mh
+    singular: machost
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.serial
+      name: Serial
+      type: string
+    - jsonPath: .spec.site
+      name: Site
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.runningVMs
+      name: VMs
+      type: integer
+    - jsonPath: .status.facts.agentVersion
+      name: Agent
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          MacHost is one always-on Apple-silicon Mac mini running cucina-hostd. Objects
+          are created by `cucinactl hosts register <serial>…` (pre-registration),
+          by `cucinactl hosts approve <serial>` (approval of a pending enrollment), or by
+          the controller when an unknown serial enrolls with a valid site token (the new
+          object stays Pending until approved, R-SEC-3).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: MacHostSpec is the operator-declared intent for a host.
+            properties:
+              approved:
+                description: Approved admits the host to enrollment (set by `hosts
+                  register` / `hosts approve`).
+                type: boolean
+              cordoned:
+                description: 'Cordoned drains the host: VMs shut down, no new VMs
+                  (R-MAC-6).'
+                type: boolean
+              desiredImages:
+                description: DesiredImages are Tart image references the host should
+                  hold (pre-pull, R-MAC-5).
+                items:
+                  type: string
+                type: array
+              labels:
+                additionalProperties:
+                  type: string
+                description: Labels select hosts for pools (TartSpec.HostSelector).
+                type: object
+              serial:
+                description: Serial is the hardware serial number (the admission key,
+                  R-SEC-3).
+                minLength: 6
+                type: string
+              site:
+                description: Site groups hosts that share a LAN / site tier / image
+                  mirror.
+                type: string
+              slots:
+                description: Slots overrides the VM slots per host (1–2).
+                format: int32
+                maximum: 2
+                minimum: 1
+                type: integer
+            required:
+            - serial
+            type: object
+            x-kubernetes-validations:
+            - message: serial is immutable
+              rule: self.serial == oldSelf.serial
+          status:
+            description: MacHostStatus is the observed state; written only by the
+              controller.
+            properties:
+              certificateExpiry:
+                description: CertificateExpiry is when the host's mTLS certificate
+                  expires (renewed before expiry).
+                format: date-time
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              facts:
+                description: HostFacts are reported by hostd at every connect (R-MAC-5).
+                properties:
+                  agentVersion:
+                    type: string
+                  chip:
+                    type: string
+                  cores:
+                    format: int32
+                    type: integer
+                  diskFreeGiB:
+                    format: int32
+                    type: integer
+                  fileVault:
+                    type: string
+                  macOSVersion:
+                    type: string
+                  memoryGiB:
+                    format: int32
+                    type: integer
+                  model:
+                    type: string
+                  protocolVersion:
+                    description: ProtocolVersion of the hostd↔controller protocol
+                      (handshake, R-TEST-7).
+                    format: int32
+                    type: integer
+                  tartVersion:
+                    type: string
+                type: object
+              images:
+                items:
+                  type: string
+                type: array
+              l2:
+                description: HostCacheStatus is the L2 cache's effectiveness (R-CACHE-4,
+                  R-DATA-7).
+                properties:
+                  hitRatio:
+                    type: string
+                  sizeGiB:
+                    format: int32
+                    type: integer
+                  wanBytesReceived:
+                    format: int64
+                    type: integer
+                  wanBytesSent:
+                    format: int64
+                    type: integer
+                type: object
+              lastHeartbeat:
+                format: date-time
+                type: string
+              phase:
+                type: string
+              runningVMs:
+                format: int32
+                type: integer
+              vms:
+                items:
+                  description: HostVMStatus is one VM on a host.
+                  properties:
+                    generation:
+                      type: string
+                    image:
+                      type: string
+                    name:
+                      type: string
+                    pool:
+                      type: string
+                    registered:
+                      type: boolean
+                    state:
+                      type: string
+                  required:
+                  - name
+                  - state
+                  type: object
+                type: array
+            required:
+            - runningVMs
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

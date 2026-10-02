@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+cucina_go_test(
+    name = "static_test",
+    srcs = [
+        "authz_test.go",
+        "kubeconform_test.go",
+        "rules_test.go",
+        "schema_test.go",
+        "sync_test.go",
+    ],
+    data = [
+        "//api/crds",
+        "//charts/cucina:chart",
+        "//charts/cucina/tests:fixtures",
+        "//platforms:pools.json",
+        "//tools:helm",
+        "//tools:kubeconform",
+        "//tools:promtool",
+        "//tools/kubeconform:schemas",
+    ],
+    env = {
+        "HELM": "$(rlocationpath //tools:helm)",
+        "KUBECONFORM": "$(rlocationpath //tools:kubeconform)",
+        "PROMTOOL": "$(rlocationpath //tools:promtool)",
+    },
+    tier = "static",
+    deps = [
+        "//charts/cucina/tests/charttest",
+        "//internal/controller",
+        "//internal/keys",
+        "//internal/pki",
+        "@io_k8s_sigs_yaml//:yaml",
+    ],
+)

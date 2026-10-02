@@ -1,0 +1,61 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Remote-execution endpoint through an Ingress or a Gateway API GRPCRoute. TLS ends
+at the proxy; the frontend's client listener serves h2c (appProtocol kubernetes.io/h2c
+on its Service). The proxy must allow streams longer than the 2-minute worker
+long-poll and Bazel's Execute streams: Traefik needs `serversscheme: h2c` and
+entrypoint readTimeout=0 (docs/operations/exposure.md).
+*/}}
+{{- $client := .Values.exposure.client -}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- if eq $client.type "Ingress" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cucina.client.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+  {{- with $client.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $client.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  tls:
+    - hosts:
+        - {{ required "endpoints.client.host is required for exposure.client.type=Ingress" .Values.endpoints.client.host | quote }}
+      {{- with $client.ingress.tlsSecretName }}
+      secretName: {{ . }}
+      {{- end }}
+  rules:
+    - host: {{ .Values.endpoints.client.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "cucina.frontend.name" . }}
+                port:
+                  name: grpc-client
+{{- else if eq $client.type "Gateway" }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: {{ include "cucina.client.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+spec:
+  parentRefs:
+    {{- required "exposure.client.gateway.parentRefs is required for exposure.client.type=Gateway" $client.gateway.parentRefs | toYaml | nindent 4 }}
+  hostnames:
+    - {{ required "endpoints.client.host is required for exposure.client.type=Gateway" .Values.endpoints.client.host | quote }}
+  rules:
+    - backendRefs:
+        - name: {{ include "cucina.frontend.name" . }}
+          port: {{ $ports.frontendClient }}
+{{- end }}

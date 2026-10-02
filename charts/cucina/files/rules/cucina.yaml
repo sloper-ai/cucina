@@ -1,0 +1,187 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina recording rules and alerts (R-OBS-3, UC16, R-CP-4). Rendered with Helm `tpl`
+# (thresholds from monitoring.prometheusRules.thresholds); tests/rules/*.yaml unit-test
+# the rendered output with `promtool test rules`. Metric names: docs/contracts.md §6 and
+# the pinned Buildbarn releases.
+{{- $t := .Values.monitoring.prometheusRules.thresholds }}
+{{- $storagePVC := printf "(data|meta|cas)-%s-[0-9]+" (include "cucina.storage.name" .) }}
+groups:
+  - name: cucina-recording-rules
+    rules:
+      # Worst-case CAS retention over all shards (R-CP-4): time since the oldest block that
+      # was evicted had been written. Before the first eviction the gauge is 0, so the
+      # retention reads as "since 1970", i.e. unbounded.
+      - record: cucina:storage_retention_seconds
+        expr: min by (namespace, storage_type) (time() - buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{cucina_component="storage"})
+      - record: cucina:cas_retention_seconds
+        expr: cucina:storage_retention_seconds{storage_type="cas"}
+      # Action-cache hit ratio at the frontend (GetActionResult found vs not found).
+      - record: cucina:ac_requests:rate5m
+        expr: sum by (namespace, grpc_code) (rate(buildbarn_blobstore_blob_access_operations_duration_seconds_count{cucina_component="frontend", storage_type="ac", backend_type="completeness_checking", operation="Get"}[5m]))
+      - record: cucina:ac_hit_ratio:rate5m
+        expr: sum by (namespace) (cucina:ac_requests:rate5m{grpc_code="OK"}) / sum by (namespace) (cucina:ac_requests:rate5m{grpc_code=~"OK|NotFound"})
+      - record: cucina:ac_hit_ratio:rate1h
+        expr: sum by (namespace) (rate(buildbarn_blobstore_blob_access_operations_duration_seconds_count{cucina_component="frontend", storage_type="ac", backend_type="completeness_checking", operation="Get", grpc_code="OK"}[1h])) / sum by (namespace) (rate(buildbarn_blobstore_blob_access_operations_duration_seconds_count{cucina_component="frontend", storage_type="ac", backend_type="completeness_checking", operation="Get", grpc_code=~"OK|NotFound"}[1h]))
+      # Bytes read through the frontend (clients and workers) and over the Mac-site WAN.
+      - record: cucina:frontend_cas_read_bytes:rate5m
+        expr: sum by (namespace) (rate(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{cucina_component="frontend", storage_type="cas", backend_type="existence_caching", operation="Get"}[5m]))
+      - record: cucina:hostd_wan_received_bytes:rate5m
+        expr: sum by (namespace) (rate(cucina_hostd_wan_bytes_total{direction="received"}[5m]))
+      # Scheduler stages (bb-deployments: queued = scheduled - queued_count, executing = queued_count - executing_count).
+      - record: cucina:queue_tasks_queued:sum
+        expr: sum by (namespace, instance_name_prefix, platform, size_class) (buildbarn_builder_in_memory_build_queue_tasks_scheduled_total{cucina_component="scheduler"}) - sum by (namespace, instance_name_prefix, platform, size_class) (buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_count{cucina_component="scheduler"})
+      - record: cucina:queue_tasks_executing:sum
+        expr: sum by (namespace, instance_name_prefix, platform, size_class) (buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_count{cucina_component="scheduler"}) - sum by (namespace, instance_name_prefix, platform, size_class) (buildbarn_builder_in_memory_build_queue_tasks_executing_duration_seconds_count{cucina_component="scheduler"})
+
+  - name: cucina-alerts
+    rules:
+      # --- Queue time above threshold (UC16) ---
+      - alert: CucinaQueueTimeHigh
+        expr: max by (namespace, platform, size_class, instance) (cucina_queue_oldest_seconds) > {{ include "cucina.seconds" $t.queueTime }}
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Actions wait longer than {{ $t.queueTime }} in queue {{ "{{" }} $labels.platform {{ "}}" }}"
+          description: "The oldest queued action of {{ "{{" }} $labels.instance {{ "}}" }}/{{ "{{" }} $labels.platform {{ "}}" }} waited {{ "{{" }} $value | humanizeDuration {{ "}}" }}. Check the pool (cucinactl pools get), capacity errors and cold-start latency."
+      # --- Workers failing to start or register (UC16) ---
+      - alert: CucinaWorkersFailingToStart
+        expr: sum by (namespace, pool) (increase(cucina_vm_stops_total{reason="startup-timeout"}[30m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Workers of pool {{ "{{" }} $labels.pool {{ "}}" }} did not register within startupTimeout"
+          description: "VMs were replaced after the startup timeout in the last 30m (runbook: worker won't register)."
+      - alert: CucinaWorkersFailed
+        expr: max by (namespace, pool) (cucina_pool_vms{state="failed"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pool {{ "{{" }} $labels.pool {{ "}}" }} has failed VMs"
+          description: "{{ "{{" }} $value {{ "}}" }} VMs are in state failed for 10m."
+      - alert: CucinaCapacityErrors
+        expr: sum by (namespace, pool, kind) (increase(cucina_ec2_capacity_errors_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pool {{ "{{" }} $labels.pool {{ "}}" }} cannot obtain EC2 capacity ({{ "{{" }} $labels.kind {{ "}}" }})"
+          description: "Capacity errors persisted for 15m; queued work is failed after controller.scheduler.queueFailAfter (R-SCALE-4)."
+      # --- Storage nearly full or retention too short (UC16, R-CP-4) ---
+      - alert: CucinaCASRetentionLow
+        expr: cucina:cas_retention_seconds < {{ include "cucina.seconds" $t.casRetention }}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CAS retention is below {{ $t.casRetention }}"
+          description: "Grow storage.stores.cas.size or add shards (runbook: storage full). Retention must exceed the longest build and Bazel's remote cache TTL with margin."
+      - alert: CucinaCASRetentionBelowBazelTTL
+        expr: cucina:cas_retention_seconds < {{ include "cucina.seconds" $t.bazelRemoteCacheTTL }}
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CAS retention is below Bazel's --experimental_remote_cache_ttl ({{ $t.bazelRemoteCacheTTL }})"
+          description: "Clients may reference blobs that were evicted; builds fall back to eviction retries. Grow the CAS now."
+      - alert: CucinaStorageVolumeNearlyFull
+        expr: min by (namespace, persistentvolumeclaim) (kubelet_volume_stats_available_bytes{persistentvolumeclaim=~"{{ $storagePVC }}"} / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"{{ $storagePVC }}"}) < {{ $t.storageFreeRatio }}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage volume {{ "{{" }} $labels.persistentvolumeclaim {{ "}}" }} is nearly full"
+          description: "Only {{ "{{" }} $value | humanizePercentage {{ "}}" }} free. File-backed stores are sparse files; a full volume makes bb_storage crash (runbook: storage full)."
+      - alert: CucinaKeyLocationMapTooSmall
+        expr: sum by (namespace, name) (rate(buildbarn_lossymap_hash_map_put_too_many_iterations_total{cucina_component="storage"}[1h])) > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Key-location map {{ "{{" }} $labels.name {{ "}}" }} displaces live entries"
+          description: "Raise buildbarn.storage.keyLocationMapFactor or lower averageObjectSize (docs/sizing.md)."
+      # --- Cache hit-rate drop (UC16) ---
+      - alert: CucinaCacheHitRateLow
+        expr: (cucina:ac_hit_ratio:rate1h < {{ $t.cacheHitRatio }}) and on (namespace) (sum by (namespace) (cucina:ac_requests:rate5m) > 1)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Action-cache hit ratio is below {{ $t.cacheHitRatio }}"
+          description: "Below {{ $t.cacheHitRatio }} for 30m with traffic. Check for toolchain/platform changes, retention and AC purges."
+      - alert: CucinaCacheHitRateDrop
+        expr: (cucina:ac_hit_ratio:rate1h < 0.5 * (cucina:ac_hit_ratio:rate1h offset 1d)) and on (namespace) (sum by (namespace) (cucina:ac_requests:rate5m) > 1)
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Action-cache hit ratio halved compared with yesterday"
+          description: "The 1h hit ratio is less than half of the same time yesterday."
+      # --- Mac host offline (UC16) ---
+      - alert: CucinaHostOffline
+        expr: max by (namespace, serial) (cucina_host_heartbeat_age_seconds) > {{ include "cucina.seconds" $t.hostOffline }}
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mac host {{ "{{" }} $labels.serial {{ "}}" }} is offline"
+          description: "No heartbeat for {{ "{{" }} $value | humanizeDuration {{ "}}" }}; its in-flight actions are retried elsewhere (runbook: add or remove a Mac host)."
+      # --- Instances running with an empty queue: cost leak (UC16) ---
+      - alert: CucinaIdleInstancesWithEmptyQueue
+        expr: max by (namespace, pool) (cucina_idle_instances_with_empty_queue) > 0
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pool {{ "{{" }} $labels.pool {{ "}}" }} keeps idle instances with an empty queue"
+          description: "{{ "{{" }} $value {{ "}}" }} instances idle longer than idle timeout + drain grace: scale-in is stuck (runbook: scale-out stuck)."
+      # --- Orphaned pool volumes or ENIs (UC16) ---
+      - alert: CucinaOrphanedResources
+        expr: max by (namespace, kind) (cucina_orphans) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Orphaned pool {{ "{{" }} $labels.kind {{ "}}" }} exist"
+          description: "{{ "{{" }} $value {{ "}}" }} tagged resources without a running worker survived the periodic sweep; run `cucinactl pools gc`."
+      # --- Certificate expiry ---
+      - alert: CucinaCertificateExpiringSoon
+        expr: min by (namespace, role) (cucina_cert_expiry_seconds) < {{ include "cucina.seconds" $t.certificateExpiry }}
+        labels:
+          severity: warning
+        annotations:
+          summary: "A {{ "{{" }} $labels.role {{ "}}" }} certificate expires in {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
+          description: "Automatic renewal did not happen (runbook: rotate CA/credentials)."
+      - alert: CucinaCertificateExpiryImminent
+        expr: min by (namespace, role) (cucina_cert_expiry_seconds) < 86400
+        labels:
+          severity: critical
+        annotations:
+          summary: "A {{ "{{" }} $labels.role {{ "}}" }} certificate expires within a day"
+          description: "Renew it now (runbook: rotate CA/credentials)."
+      # --- Egress anomalies (R-DATA-7) ---
+      - alert: CucinaEgressAnomaly
+        expr: (cucina:frontend_cas_read_bytes:rate5m > {{ $t.egressBytesPerSecond | int64 }}) or (cucina:hostd_wan_received_bytes:rate5m > {{ $t.egressBytesPerSecond | int64 }})
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained data transfer above {{ $t.egressBytesPerSecond | int64 }} B/s"
+          description: "Reads through the frontend or the Mac-site WAN stayed above the threshold for 30m. Internet egress costs $0.09/GB; check Build-without-the-Bytes settings and WAN caches (R-DATA)."
+      # --- Production invariants (R-TEST-7) ---
+      - alert: CucinaInvariantViolated
+        expr: sum by (namespace, invariant) (increase(cucina_invariant_violations_total[10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Invariant {{ "{{" }} $labels.invariant {{ "}}" }} was violated"
+          description: "The controller aborted an operation to protect the fleet; inspect controller logs."
+      # --- Components down ---
+      - alert: CucinaBuildbarnDown
+        expr: max by (namespace, cucina_component) (up{cucina_buildbarn="true", cucina_component=~"frontend|storage|scheduler"} == 0)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Buildbarn {{ "{{" }} $labels.cucina_component {{ "}}" }} targets are down"
+          description: "A {{ "{{" }} $labels.cucina_component {{ "}}" }} pod has not been scrapeable for 5m."

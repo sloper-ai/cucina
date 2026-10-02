@@ -1,0 +1,97 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $paths := include "cucina.paths" . | fromYaml -}}
+{{- $eff := include "cucina.effective" (list . "frontend") | fromYaml -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cucina.frontend.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+spec:
+  replicas: {{ $eff.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 8 }}
+        {{- with $eff.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "cucina.frontend.config" . | sha256sum }}
+        {{- with $eff.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: bb-storage
+          image: {{ include "cucina.image" .Values.images.bbStorage }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["{{ $paths.config }}/frontend.jsonnet"]
+          {{- with include "cucina.goEnv" $eff.resources }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: grpc-client
+              containerPort: {{ $ports.frontendClient }}
+            - name: grpc-worker
+              containerPort: {{ $ports.frontendWorker }}
+            - name: diagnostics
+              containerPort: {{ $ports.diagnostics }}
+          {{- include "cucina.bb.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml $eff.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ $paths.config }}
+              readOnly: true
+            {{- if include "cucina.clientTLSAtFrontend" . }}
+            - name: tls-clients
+              mountPath: {{ $paths.tlsClients }}
+              readOnly: true
+            {{- end }}
+            - name: tls-workers
+              mountPath: {{ $paths.tlsWorkers }}
+              readOnly: true
+            - name: ca
+              mountPath: {{ dir $paths.caBundle }}
+              readOnly: true
+            - name: jwks
+              mountPath: {{ dir $paths.jwks }}
+              readOnly: true
+            - name: denylist
+              mountPath: {{ dir $paths.denyList }}
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cucina.frontend.name" . }}
+        {{- if include "cucina.clientTLSAtFrontend" . }}
+        - name: tls-clients
+          secret:
+            secretName: {{ include "cucina.tlsSecret" (list . "frontend") }}
+        {{- end }}
+        - name: tls-workers
+          secret:
+            secretName: {{ include "cucina.tlsSecret" (list . "frontend-workers") }}
+        {{- include "cucina.bb.authVolumes" . | nindent 8 }}
+      {{- with include "cucina.scheduling" $eff }}{{ . | nindent 6 }}{{- end }}
+      {{- include "cucina.topologySpread" (list . "frontend" $eff.topologySpreadConstraints) | nindent 6 }}

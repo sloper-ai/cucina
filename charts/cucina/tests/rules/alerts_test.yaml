@@ -1,0 +1,263 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# promtool unit tests of the chart's PrometheusRule (R-OBS-3, UC16, R-CP-4), run by
+# tests/static (TestPrometheusRules) against the rules rendered with default thresholds
+# into rules.yaml next to this file. One firing case per UC16 alert, plus the quiet
+# side where a threshold or `for` matters.
+rule_files:
+  - rules.yaml
+evaluation_interval: 1m
+tests:
+  # UC16: queue time above threshold (5m, for 2m).
+  - interval: 1m
+    input_series:
+      - series: 'cucina_queue_oldest_seconds{namespace="cucina",platform="linux-x86-64",size_class="1",instance="main"}'
+        values: '0 400 400 400 400 400'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CucinaQueueTimeHigh
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: CucinaQueueTimeHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, platform: linux-x86-64, size_class: "1", instance: main}
+            exp_annotations:
+              summary: Actions wait longer than 5m in queue linux-x86-64
+              description: The oldest queued action of main/linux-x86-64 waited 6m 40s. Check the pool (cucinactl pools get), capacity errors and cold-start latency.
+
+  # UC16: workers failing to start or register.
+  - interval: 1m
+    input_series:
+      - series: 'cucina_vm_stops_total{namespace="cucina",pool="linux-x86-64",reason="startup-timeout"}'
+        values: '0 0 1 1 1'
+      - series: 'cucina_vm_stops_total{namespace="cucina",pool="linux-x86-64",reason="idle"}'
+        values: '0 5 10 15 20'
+      - series: 'cucina_pool_vms{namespace="cucina",pool="windows-x86-64",state="failed"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CucinaWorkersFailingToStart
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, pool: linux-x86-64}
+            exp_annotations:
+              summary: Workers of pool linux-x86-64 did not register within startupTimeout
+              description: "VMs were replaced after the startup timeout in the last 30m (runbook: worker won't register)."
+      - eval_time: 12m
+        alertname: CucinaWorkersFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, pool: windows-x86-64}
+            exp_annotations:
+              summary: Pool windows-x86-64 has failed VMs
+              description: 1 VMs are in state failed for 10m.
+
+  # R-SCALE-4: persistent capacity errors.
+  - interval: 1m
+    input_series:
+      - series: 'cucina_ec2_capacity_errors_total{namespace="cucina",pool="linux-aarch64",type="c8g.8xlarge",kind="ice"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CucinaCapacityErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, pool: linux-aarch64, kind: ice}
+            exp_annotations:
+              summary: Pool linux-aarch64 cannot obtain EC2 capacity (ice)
+              description: Capacity errors persisted for 15m; queued work is failed after controller.scheduler.queueFailAfter (R-SCALE-4).
+
+  # UC16 / R-CP-4: retention too short. promtool's time() is seconds since the start of
+  # the test, so a block evicted at t=0 means retention == eval time (here 30m).
+  - interval: 1m
+    input_series:
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="cucina",cucina_component="storage",storage_type="cas",pod="cucina-storage-0"}'
+        values: '0x40'
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="cucina",cucina_component="storage",storage_type="cas",pod="cucina-storage-1"}'
+        values: '-100000x40'
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="healthy",cucina_component="storage",storage_type="cas",pod="cucina-storage-0"}'
+        values: '-100000x40'
+    promql_expr_test:
+      - expr: cucina:cas_retention_seconds
+        eval_time: 30m
+        exp_samples:
+          # The worst shard of each installation counts.
+          - labels: 'cucina:cas_retention_seconds{namespace="cucina",storage_type="cas"}'
+            value: 1800
+          - labels: 'cucina:cas_retention_seconds{namespace="healthy",storage_type="cas"}'
+            value: 101800
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CucinaCASRetentionLow
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, storage_type: cas}
+            exp_annotations:
+              summary: CAS retention is below 6h
+              description: "Grow storage.stores.cas.size or add shards (runbook: storage full). Retention must exceed the longest build and Bazel's remote cache TTL with margin."
+      - eval_time: 30m
+        alertname: CucinaCASRetentionBelowBazelTTL
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: cucina, storage_type: cas}
+            exp_annotations:
+              summary: CAS retention is below Bazel's --experimental_remote_cache_ttl (3h)
+              description: Clients may reference blobs that were evicted; builds fall back to eviction retries. Grow the CAS now.
+
+  # UC16: storage nearly full; key-location map too small.
+  - interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_available_bytes{namespace="cucina",persistentvolumeclaim="data-cucina-storage-0"}'
+        values: '5x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="cucina",persistentvolumeclaim="data-cucina-storage-0"}'
+        values: '100x30'
+      - series: 'kubelet_volume_stats_available_bytes{namespace="cucina",persistentvolumeclaim="data-other-app-0"}'
+        values: '1x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{namespace="cucina",persistentvolumeclaim="data-other-app-0"}'
+        values: '100x30'
+      - series: 'buildbarn_lossymap_hash_map_put_too_many_iterations_total{namespace="cucina",cucina_component="storage",name="KeyLocationMap:cas"}'
+        values: '0+1x150'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CucinaStorageVolumeNearlyFull
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, persistentvolumeclaim: data-cucina-storage-0}
+            exp_annotations:
+              summary: Storage volume data-cucina-storage-0 is nearly full
+              description: "Only 5% free. File-backed stores are sparse files; a full volume makes bb_storage crash (runbook: storage full)."
+      - eval_time: 140m
+        alertname: CucinaKeyLocationMapTooSmall
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, name: "KeyLocationMap:cas"}
+            exp_annotations:
+              summary: Key-location map KeyLocationMap:cas displaces live entries
+              description: Raise buildbarn.storage.keyLocationMapFactor or lower averageObjectSize (docs/sizing.md).
+
+  # UC16: cache hit-rate drop (1 hit per 4 misses with traffic).
+  - interval: 1m
+    input_series:
+      - series: 'buildbarn_blobstore_blob_access_operations_duration_seconds_count{namespace="cucina",cucina_component="frontend",storage_type="ac",backend_type="completeness_checking",operation="Get",grpc_code="OK"}'
+        values: '0+60x120'
+      - series: 'buildbarn_blobstore_blob_access_operations_duration_seconds_count{namespace="cucina",cucina_component="frontend",storage_type="ac",backend_type="completeness_checking",operation="Get",grpc_code="NotFound"}'
+        values: '0+240x120'
+    promql_expr_test:
+      - expr: cucina:ac_hit_ratio:rate1h
+        eval_time: 100m
+        exp_samples:
+          - labels: 'cucina:ac_hit_ratio:rate1h{namespace="cucina"}'
+            value: 0.2
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: CucinaCacheHitRateLow
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina}
+            exp_annotations:
+              summary: Action-cache hit ratio is below 0.5
+              description: Below 0.5 for 30m with traffic. Check for toolchain/platform changes, retention and AC purges.
+
+  # UC16: host offline; instances running with an empty queue; orphaned volumes/ENIs.
+  - interval: 1m
+    input_series:
+      - series: 'cucina_host_heartbeat_age_seconds{namespace="cucina",serial="C02XK0AAJGH6"}'
+        values: '400x30'
+      - series: 'cucina_host_heartbeat_age_seconds{namespace="cucina",serial="C02XK0AAJGH7"}'
+        values: '10x30'
+      - series: 'cucina_idle_instances_with_empty_queue{namespace="cucina",pool="linux-x86-64"}'
+        values: '2x30'
+      - series: 'cucina_orphans{namespace="cucina",kind="volumes"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CucinaHostOffline
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, serial: C02XK0AAJGH6}
+            exp_annotations:
+              summary: Mac host C02XK0AAJGH6 is offline
+              description: "No heartbeat for 6m 40s; its in-flight actions are retried elsewhere (runbook: add or remove a Mac host)."
+      - eval_time: 15m
+        alertname: CucinaIdleInstancesWithEmptyQueue
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CucinaIdleInstancesWithEmptyQueue
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, pool: linux-x86-64}
+            exp_annotations:
+              summary: Pool linux-x86-64 keeps idle instances with an empty queue
+              description: "2 instances idle longer than idle timeout + drain grace: scale-in is stuck (runbook: scale-out stuck)."
+      - eval_time: 18m
+        alertname: CucinaOrphanedResources
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, kind: volumes}
+            exp_annotations:
+              summary: Orphaned pool volumes exist
+              description: 1 tagged resources without a running worker survived the periodic sweep; run `cucinactl pools gc`.
+
+  # Certificate expiry (warning within 7 days, critical within a day).
+  - interval: 1m
+    input_series:
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="server"}'
+        values: '86500'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: CucinaCertificateExpiringSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, role: server}
+            exp_annotations:
+              summary: A server certificate expires in 1d 0h 1m 40s
+              description: "Automatic renewal did not happen (runbook: rotate CA/credentials)."
+      - eval_time: 0m
+        alertname: CucinaCertificateExpiryImminent
+        exp_alerts: []
+
+  # R-DATA-7: egress anomaly (200 MiB/s over the Mac-site WAN for 30m).
+  - interval: 1m
+    input_series:
+      - series: 'cucina_hostd_wan_bytes_total{namespace="cucina",direction="received",serial="C02XK0AAJGH6"}'
+        values: '0+12582912000x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: CucinaEgressAnomaly
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina}
+            exp_annotations:
+              summary: Sustained data transfer above 104857600 B/s
+              description: Reads through the frontend or the Mac-site WAN stayed above the threshold for 30m. Internet egress costs $0.09/GB; check Build-without-the-Bytes settings and WAN caches (R-DATA).
+
+  # R-TEST-7 invariant violations; Buildbarn components down.
+  - interval: 1m
+    input_series:
+      - series: 'cucina_invariant_violations_total{namespace="cucina",invariant="max-instances"}'
+        values: '0 0 1 1'
+      - series: 'up{namespace="cucina",cucina_buildbarn="true",cucina_component="scheduler",pod="cucina-scheduler-0"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CucinaInvariantViolated
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: cucina, invariant: max-instances}
+            exp_annotations:
+              summary: Invariant max-instances was violated
+              description: The controller aborted an operation to protect the fleet; inspect controller logs.
+      - eval_time: 7m
+        alertname: CucinaBuildbarnDown
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: cucina, cucina_component: scheduler}
+            exp_annotations:
+              summary: Buildbarn scheduler targets are down
+              description: A scheduler pod has not been scrapeable for 5m.
+
+  # R-OBS-2: bb-deployments' stage arithmetic (queued = scheduled - queued_count,
+  # executing = queued_count - executing_count).
+  - interval: 1m
+    input_series:
+      - series: 'buildbarn_builder_in_memory_build_queue_tasks_scheduled_total{cucina_component="scheduler",instance_name_prefix="main",platform="p",size_class="1"}'
+        values: '10'
+      - series: 'buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_count{cucina_component="scheduler",instance_name_prefix="main",platform="p",size_class="1"}'
+        values: '7'
+      - series: 'buildbarn_builder_in_memory_build_queue_tasks_executing_duration_seconds_count{cucina_component="scheduler",instance_name_prefix="main",platform="p",size_class="1"}'
+        values: '5'
+    promql_expr_test:
+      - expr: instance_name_prefix_platform_size_class:buildbarn_builder_in_memory_build_queue_tasks_queued:sum
+        eval_time: 0m
+        exp_samples:
+          - labels: 'instance_name_prefix_platform_size_class:buildbarn_builder_in_memory_build_queue_tasks_queued:sum{instance_name_prefix="main",platform="p",size_class="1"}'
+            value: 3
+      - expr: instance_name_prefix_platform_size_class:buildbarn_builder_in_memory_build_queue_tasks_executing:sum
+        eval_time: 0m
+        exp_samples:
+          - labels: 'instance_name_prefix_platform_size_class:buildbarn_builder_in_memory_build_queue_tasks_executing:sum{instance_name_prefix="main",platform="p",size_class="1"}'
+            value: 2

@@ -1,0 +1,70 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+Optional NetworkPolicies (R-CP-6) for the in-cluster-only ports: storage shards accept
+gRPC only from the frontend and the scheduler; the scheduler's client port only from
+the frontend and its BuildQueueState port only from the controller. Externally exposed
+ports (worker API) and the diagnostics/metrics ports stay open (or limited to
+networkPolicy.metricsFrom).
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $metrics := dict "ports" (list (dict "port" (int $ports.diagnostics) "protocol" "TCP")) -}}
+{{- with .Values.networkPolicy.metricsFrom }}{{ $_ := set $metrics "from" . }}{{ end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cucina.storage.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "storage") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "storage") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "cucina.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "cucina.selectorLabels" (dict "ctx" . "component" "scheduler") | nindent 14 }}
+      ports:
+        - port: {{ $ports.storage }}
+          protocol: TCP
+    - {{- toYaml $metrics | nindent 6 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cucina.scheduler.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "scheduler") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "scheduler") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "cucina.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 14 }}
+      ports:
+        - port: {{ $ports.schedulerClient }}
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "cucina.selectorLabels" (dict "ctx" . "component" "controller") | nindent 14 }}
+      ports:
+        - port: {{ $ports.schedulerBuildQueueState }}
+          protocol: TCP
+    # Workers (outside the cluster, mTLS) reach the worker port through the worker endpoint.
+    - ports:
+        - port: {{ $ports.schedulerWorker }}
+          protocol: TCP
+    - {{- toYaml $metrics | nindent 6 }}
+{{- end }}

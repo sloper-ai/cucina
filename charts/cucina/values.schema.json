@@ -1,0 +1,3087 @@
+{
+  "$comment": "SPDX-License-Identifier: FSL-1.1-ALv2. Validates every value (unknown keys are errors). definitions.WorkerPoolSpec and definitions.TrustPolicySpec are generated from api/crds by `go test ./charts/cucina/tests/chart -update` (a test fails when they are stale). README.md's values table is generated from the descriptions here.",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "TrustPolicySpec": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "oidc"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "issuer",
+              "claimMappings"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "serviceAccount"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "serviceAccount"
+            ]
+          }
+        }
+      ],
+      "description": "TrustPolicySpec is one trust rule.",
+      "properties": {
+        "claimMappings": {
+          "additionalProperties": false,
+          "description": "ClaimMappings derive the principal from the claims.",
+          "properties": {
+            "displayName": {
+              "additionalProperties": false,
+              "description": "DisplayName is for audit/UI only.",
+              "properties": {
+                "expression": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expression"
+              ],
+              "type": "object"
+            },
+            "groups": {
+              "additionalProperties": false,
+              "description": "Groups yields a list of group strings.",
+              "properties": {
+                "expression": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expression"
+              ],
+              "type": "object"
+            },
+            "subject": {
+              "additionalProperties": false,
+              "description": "Subject is the stable principal, e.g. `'google:' + claims.sub` or\n`'github:' + claims.repository_id + ':' + claims.workflow`. Never key on email.",
+              "properties": {
+                "expression": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "expression"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "subject"
+          ],
+          "type": "object"
+        },
+        "claimValidationRules": {
+          "description": "ClaimValidationRules are CEL expressions over `claims`; all must be true.",
+          "items": {
+            "additionalProperties": false,
+            "description": "ClaimValidationRule is a CEL expression over `claims` that must evaluate to true.",
+            "properties": {
+              "expression": {
+                "description": "Expression is CEL, e.g. `claims.hd in ['example.com'] && string(claims.email_verified) == 'true'`.",
+                "type": "string"
+              },
+              "message": {
+                "description": "Message is returned (and audited) when the rule is false.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "expression"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "disabled": {
+          "description": "Disabled keeps the object but ignores it.",
+          "type": "boolean"
+        },
+        "grants": {
+          "description": "Grants are evaluated independently; the result is their union. A grant with a CEL\ncondition applies only when the condition is true (fail closed).",
+          "items": {
+            "additionalProperties": false,
+            "description": "Grant gives verbs on instance names.",
+            "properties": {
+              "condition": {
+                "description": "Condition is an optional CEL expression over `claims`, `subject` and `groups`.",
+                "type": "string"
+              },
+              "instanceNames": {
+                "description": "InstanceNames the verbs apply to; \"*\" = every configured instance name.",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "maxTTL": {
+                "description": "MaxTTL caps the JWT lifetime for this grant (default and maximum 15m for humans and CI).",
+                "type": "string"
+              },
+              "name": {
+                "description": "Name labels the grant in audit logs.",
+                "type": "string"
+              },
+              "verbs": {
+                "description": "Verbs: cas-read, cas-write, ac-read, ac-write, execute, admin.",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "instanceNames",
+              "verbs"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "groupLookup": {
+          "additionalProperties": false,
+          "description": "GroupLookup optionally resolves group membership at every exchange (cached 5–10 min),\ne.g. Google Cloud Identity searchDirectGroups (R-AUTH-2/-5).",
+          "properties": {
+            "cacheTTL": {
+              "description": "CacheTTL of results (default 10m).",
+              "type": "string"
+            },
+            "provider": {
+              "description": "Provider: \"cloud-identity\".",
+              "enum": [
+                "cloud-identity"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider"
+          ],
+          "type": "object"
+        },
+        "issuer": {
+          "additionalProperties": false,
+          "description": "Issuer of the external token (type oidc).",
+          "properties": {
+            "additionalIssuers": {
+              "description": "AdditionalIssuers lists extra accepted `iss` values (Google also emits \"accounts.google.com\").",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "audiences": {
+              "description": "Audiences accepted in `aud`; for GitHub the audience used only by Cucina (\"cucina\").",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "certificateAuthority": {
+              "description": "CertificateAuthority is a PEM bundle trusted for discovery/JWKS fetches (optional).",
+              "type": "string"
+            },
+            "discoveryURL": {
+              "description": "DiscoveryURL overrides {url}/.well-known/openid-configuration.",
+              "type": "string"
+            },
+            "url": {
+              "description": "URL is the exact `iss` value (e.g. https://accounts.google.com, https://token.actions.githubusercontent.com).",
+              "pattern": "^https://",
+              "type": "string"
+            }
+          },
+          "required": [
+            "audiences",
+            "url"
+          ],
+          "type": "object"
+        },
+        "login": {
+          "additionalProperties": false,
+          "description": "Login publishes interactive-login parameters in /.well-known/cucina-configuration so\n`cucinactl login <url>` needs no other config (R-AUTH-1, R-AUTH-5).",
+          "properties": {
+            "clientID": {
+              "description": "ClientID of the OAuth2 \"Desktop app\" client; ClientSecret is non-confidential by design\n(Google desktop clients) and is shipped in the discovery document.",
+              "type": "string"
+            },
+            "clientSecret": {
+              "type": "string"
+            },
+            "hostedDomainHint": {
+              "description": "HostedDomainHint is passed as `hd` (a hint only; trust comes from claimValidationRules).",
+              "type": "string"
+            },
+            "name": {
+              "description": "Name of the identity provider shown by the CLI (\"google\", \"github\", …).",
+              "type": "string"
+            },
+            "redirectPorts": {
+              "description": "RedirectPorts restricts loopback ports for providers that need registered ports (empty = any).",
+              "items": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "scopes": {
+              "description": "Scopes requested; default [openid, email, profile] (+ offline_access for non-Google).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "clientID",
+            "name"
+          ],
+          "type": "object"
+        },
+        "requireUniqueJTI": {
+          "description": "RequireUniqueJTI enables the jti replay cache for this issuer (GitHub, R-AUTH-7).",
+          "type": "boolean"
+        },
+        "serviceAccount": {
+          "additionalProperties": false,
+          "description": "ServiceAccount configures type serviceAccount.",
+          "properties": {
+            "breakGlass": {
+              "description": "Break-glass marks the bootstrap admin account generated by `helm install` (R-AUTH-12).",
+              "type": "boolean"
+            },
+            "name": {
+              "description": "Name is the principal name (subject becomes `sa:<name>`).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "subjectTokenType": {
+          "description": "SubjectTokenType is the RFC 8693 subject_token_type this policy accepts:\n\"urn:ietf:params:oauth:token-type:id_token\" (default) or \"urn:ietf:params:oauth:token-type:jwt\"\n(GitHub Actions).",
+          "type": "string"
+        },
+        "type": {
+          "default": "oidc",
+          "description": "Type is \"oidc\" (default) for external identity providers or \"serviceAccount\" for opt-in\nlong-lived keys (R-AUTH-10), which are exchanged at the STS like any other subject token.",
+          "enum": [
+            "oidc",
+            "serviceAccount"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "grants",
+        "type"
+      ],
+      "type": "object"
+    },
+    "WorkerPoolSpec": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "ec2"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "tart"
+              ]
+            },
+            "required": [
+              "ec2"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "tart"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "ec2"
+              ]
+            },
+            "required": [
+              "tart"
+            ]
+          }
+        }
+      ],
+      "description": "WorkerPoolSpec declares one pool.",
+      "properties": {
+        "capacity": {
+          "additionalProperties": false,
+          "description": "Capacity bounds the pool. minRunning > 0 means standing cost and is opt-in.",
+          "properties": {
+            "max": {
+              "description": "Max is the maximum number of VMs. 0 disables the pool: queued work is failed fast (R-RE-2).",
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minRunning": {
+              "default": 0,
+              "description": "MinRunning workers kept alive even when idle. Default 0 (zero idle cost).",
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max",
+            "minRunning"
+          ],
+          "type": "object"
+        },
+        "dailyInstanceHourCap": {
+          "description": "DailyInstanceHourCap stops launching new instances once the pool consumed this\nmany instance-hours since 00:00 UTC (R-SCALE-7). Unset = no cap.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "ec2": {
+          "additionalProperties": false,
+          "description": "EC2 settings (provider ec2 only).",
+          "properties": {
+            "associatePublicIP": {
+              "description": "AssociatePublicIP gives workers a public IPv4 — only when no other egress path exists.",
+              "type": "boolean"
+            },
+            "capacityType": {
+              "default": "on-demand",
+              "description": "CapacityType: on-demand (default) or spot (SHOULD; falls back to on-demand when spotFallback).",
+              "enum": [
+                "on-demand",
+                "spot"
+              ],
+              "type": "string"
+            },
+            "dataVolume": {
+              "additionalProperties": false,
+              "description": "DataVolume is an extra ephemeral gp3 volume for L1/filePool when the type has no\ninstance store (DeleteOnTermination always true).",
+              "properties": {
+                "initializationRateMiBps": {
+                  "description": "InitializationRateMiBps is the per-launch volume initialization rate (0 = off, R-POOL-2 SHOULD).",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "iops": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "sizeGiB": {
+                  "format": "int32",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "throughputMiBps": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "type": {
+                  "default": "gp3",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "extraTags": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "ExtraTags are added to every resource (e.g. the campaign tags).",
+              "type": "object"
+            },
+            "fastLaunch": {
+              "additionalProperties": false,
+              "description": "FastLaunch applies to Windows pools: pre-provisioned snapshots (user-approved standing cost).",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "launchTemplateID": {
+                  "description": "LaunchTemplateID of the small, cheap prep instance type; created by the controller when empty.",
+                  "type": "string"
+                },
+                "maxParallelLaunches": {
+                  "description": "MaxParallelLaunches during snapshot preparation (within AWS limits).",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "targetCount": {
+                  "description": "TargetCount of pre-provisioned snapshots; default = capacity.max.",
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "type": "object"
+            },
+            "instanceProfile": {
+              "description": "InstanceProfile (name) with SSM core and own-pool parameter read, no EC2 permissions.",
+              "type": "string"
+            },
+            "instanceTypes": {
+              "description": "InstanceTypes is the ordered preference list, e.g. [c8i.8xlarge, c7i.8xlarge, c7a.8xlarge].",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "rootVolume": {
+              "additionalProperties": false,
+              "description": "RootVolume: smallest that fits; gp3 baseline.",
+              "properties": {
+                "initializationRateMiBps": {
+                  "description": "InitializationRateMiBps is the per-launch volume initialization rate (0 = off, R-POOL-2 SHOULD).",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "iops": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "sizeGiB": {
+                  "format": "int32",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "throughputMiBps": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "type": {
+                  "default": "gp3",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "securityGroupIDs": {
+              "description": "SecurityGroupIDs for the instances.",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "spotFallback": {
+              "description": "SpotFallback allows on-demand launches when spot capacity is unavailable.",
+              "type": "boolean"
+            },
+            "subnetIDs": {
+              "description": "SubnetIDs in preference order; a single AZ by default (R-DATA-4).",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "instanceProfile",
+            "instanceTypes",
+            "securityGroupIDs",
+            "subnetIDs"
+          ],
+          "type": "object"
+        },
+        "floorSchedule": {
+          "description": "FloorSchedule raises minRunning during windows (opt-in standing cost, R-SCALE-7).",
+          "items": {
+            "additionalProperties": false,
+            "description": "FloorWindow raises the pool floor during a recurring window (UTC cron-like).",
+            "properties": {
+              "days": {
+                "description": "Days are weekday names (\"Mon\"…\"Sun\").",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "end": {
+                "type": "string"
+              },
+              "minRunning": {
+                "description": "MinRunning during the window.",
+                "format": "int32",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "name": {
+                "description": "Name of the window (for status/audit).",
+                "type": "string"
+              },
+              "start": {
+                "description": "Start and End are \"HH:MM\" in UTC.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "days",
+              "end",
+              "minRunning",
+              "name",
+              "start"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "image": {
+          "additionalProperties": false,
+          "description": "Image selects the AMI or Tart image. Changing it starts a new pool generation (R-OPS-2).",
+          "properties": {
+            "ami": {
+              "description": "AMI is an explicit AMI ID (EC2).",
+              "type": "string"
+            },
+            "amiSelector": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "AMISelector picks the newest AMI owned by the account whose tags match (EC2).",
+              "type": "object"
+            },
+            "reference": {
+              "description": "Reference is the OCI image reference of the Tart image (Tart), e.g.\nghcr.io/sloper-ai/cucina-worker-macos:27.0-0.1.0.",
+              "type": "string"
+            },
+            "version": {
+              "description": "Version is the image version label; a change starts a new generation (R-POOL-8).\nDefaults to the resolved image's cucina:image-version tag.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "instanceNames": {
+          "description": "InstanceNames lists the Buildbarn instance names (tenants) this pool serves.\nEmpty means every configured instance name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paused": {
+          "description": "Paused cordons the pool: no new launches; running workers finish and idle out.",
+          "type": "boolean"
+        },
+        "platform": {
+          "description": "Platform names an entry of platforms/pools.json (shipped in the controller and the\nchart), e.g. \"linux-x86-64\", \"linux-aarch64\", \"windows-x86-64\", \"macos-arm64-xcode27.0\".\nThe entry supplies the runners and their exact REAPI platform properties.",
+          "maxLength": 63,
+          "minLength": 1,
+          "type": "string"
+        },
+        "provider": {
+          "description": "Provider is \"ec2\" or \"tart\" and must match the platform's provider.",
+          "enum": [
+            "ec2",
+            "tart"
+          ],
+          "type": "string"
+        },
+        "rollout": {
+          "default": "lazy",
+          "description": "Rollout controls replacement of old-generation workers: \"lazy\" (default) replaces\nthem when idle, \"eager\" drains and replaces them immediately.",
+          "enum": [
+            "lazy",
+            "eager"
+          ],
+          "type": "string"
+        },
+        "sizeClass": {
+          "default": "default",
+          "description": "SizeClass names a size class of the platform (pools differing only in machine\nsize are size classes of one platform). Each platform in pools.json declares\nits size classes; \"default\" always exists.",
+          "type": "string"
+        },
+        "tart": {
+          "additionalProperties": false,
+          "description": "Tart settings (provider tart only).",
+          "properties": {
+            "cpu": {
+              "description": "CPU and memory override the host-derived defaults ((cores-2)/slots, (RAM-8GB)/slots).",
+              "format": "int32",
+              "type": "integer"
+            },
+            "diskGiB": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "hostSelector": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "HostSelector matches MacHost labels.",
+              "type": "object"
+            },
+            "maxAge": {
+              "description": "MaxAge: VMs older than this are re-cloned from the golden image (default 168h).",
+              "type": "string"
+            },
+            "memoryGiB": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "suspendable": {
+              "description": "Suspendable evaluates `tart suspend` as the \"off\" state (R-MAC-3 SHOULD).",
+              "type": "boolean"
+            },
+            "vmsPerHost": {
+              "default": 2,
+              "description": "VMsPerHost is 1 or 2 (Apple licence limit).",
+              "format": "int32",
+              "maximum": 2,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "timers": {
+          "additionalProperties": false,
+          "description": "Timers default per platform: idle 5 m (EC2 Linux) / 10 m (EC2 Windows, macOS);\nstartup 5 m (Linux, macOS) / 15 m (Windows); drain 30 m.",
+          "properties": {
+            "drainTimeout": {
+              "description": "DrainTimeout: after this long a draining VM is stopped even if actions still run.",
+              "type": "string"
+            },
+            "idleTimeout": {
+              "description": "IdleTimeout: a VM idle this long (with an empty queue) is drained and stopped (R-SCALE-3).",
+              "type": "string"
+            },
+            "startupTimeout": {
+              "description": "StartupTimeout: a VM that has not registered by then is failed and replaced.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "worker": {
+          "additionalProperties": false,
+          "description": "Worker tunes the bb_worker/bb_runner configuration.",
+          "properties": {
+            "buildDirectory": {
+              "default": "auto",
+              "description": "BuildDirectory selects the build directory mode (R-CACHE-3); auto picks FUSE (Linux),\nWinFSP (Windows) and the measured choice on macOS.",
+              "enum": [
+                "auto",
+                "fuse",
+                "winfsp",
+                "nfsv4",
+                "native"
+              ],
+              "type": "string"
+            },
+            "concurrency": {
+              "description": "Concurrency is the number of execution slots of the pool's primary runner; default = vCPUs.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "l1": {
+              "additionalProperties": false,
+              "description": "L1 places the worker-local cache (R-CACHE-2).",
+              "properties": {
+                "placement": {
+                  "default": "auto",
+                  "description": "Placement: auto prefers instance-store NVMe, then an ephemeral gp3 volume, then memory\n(EC2); the VM disk on macOS. \"vm-disk\" is Tart only.",
+                  "enum": [
+                    "auto",
+                    "instance-store",
+                    "ebs",
+                    "memory",
+                    "vm-disk"
+                  ],
+                  "type": "string"
+                },
+                "sizeGiB": {
+                  "description": "SizeGiB of the L1 CAS; default 40 on macOS, derived from the instance elsewhere.",
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "runnerConcurrency": {
+              "additionalProperties": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "description": "RunnerConcurrency overrides slots per runner name (e.g. \"qemu-s390x\": 2). Emulated\nrunners default to a low concurrency documented in docs/sizing.md.",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "capacity",
+        "image",
+        "platform",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "cidrList": {
+      "items": {
+        "pattern": "^[0-9a-fA-F.:]+/[0-9]{1,3}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "dnsLabel": {
+      "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+      "type": "string"
+    },
+    "goDuration": {
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$",
+      "type": "string"
+    },
+    "host": {
+      "pattern": "^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*|[0-9a-fA-F:]+)$",
+      "type": "string"
+    },
+    "hostOrEmpty": {
+      "oneOf": [
+        {
+          "maxLength": 0,
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/host"
+        }
+      ]
+    },
+    "image": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "tag": {
+              "minLength": 1
+            }
+          },
+          "required": [
+            "tag"
+          ]
+        },
+        {
+          "properties": {
+            "digest": {
+              "minLength": 1
+            }
+          },
+          "required": [
+            "digest"
+          ]
+        }
+      ],
+      "properties": {
+        "digest": {
+          "pattern": "^(sha256:[a-f0-9]{64})?$",
+          "type": "string"
+        },
+        "repository": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository"
+      ],
+      "type": "object"
+    },
+    "l4Exposure": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "externalTrafficPolicy": {
+          "enum": [
+            "Cluster",
+            "Local"
+          ],
+          "type": "string"
+        },
+        "loadBalancerClass": {
+          "type": "string"
+        },
+        "loadBalancerSourceRanges": {
+          "$ref": "#/definitions/cidrList"
+        },
+        "nodePorts": {
+          "additionalProperties": {
+            "$ref": "#/definitions/nodePort"
+          },
+          "type": "object"
+        },
+        "type": {
+          "enum": [
+            "LoadBalancer",
+            "NodePort",
+            "ClusterIP"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "nodePort": {
+      "maximum": 65535,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "optionalImage": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^(sha256:[a-f0-9]{64})?$",
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "optionalReplicas": {
+      "maximum": 64,
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "pinnedImage": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "repository": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tag": {
+          "description": "Informational; the digest is what is pulled.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "platform": {
+      "additionalProperties": false,
+      "description": "A platform catalog entry (internal/pools.Platform, parsed strictly by the controller).",
+      "properties": {
+        "$comment": {
+          "type": "string"
+        },
+        "arch": {
+          "enum": [
+            "x86_64",
+            "arm64"
+          ],
+          "type": "string"
+        },
+        "defaults": {
+          "additionalProperties": false,
+          "properties": {
+            "buildDirectory": {
+              "enum": [
+                "auto",
+                "fuse",
+                "winfsp",
+                "nfsv4",
+                "native"
+              ],
+              "type": "string"
+            },
+            "drainTimeout": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "idleTimeout": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "l1Placement": {
+              "enum": [
+                "auto",
+                "instance-store",
+                "ebs",
+                "memory",
+                "vm-disk"
+              ],
+              "type": "string"
+            },
+            "startupTimeout": {
+              "$ref": "#/definitions/goDuration"
+            }
+          },
+          "required": [
+            "idleTimeout",
+            "drainTimeout",
+            "startupTimeout",
+            "buildDirectory",
+            "l1Placement"
+          ],
+          "type": "object"
+        },
+        "description": {
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 63,
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+          "type": "string"
+        },
+        "os": {
+          "enum": [
+            "linux",
+            "windows",
+            "macos"
+          ],
+          "type": "string"
+        },
+        "provider": {
+          "enum": [
+            "ec2",
+            "tart"
+          ],
+          "type": "string"
+        },
+        "runners": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "concurrency": {
+                "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "required": [
+                      "vcpusFactor"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "fixed"
+                    ]
+                  }
+                ],
+                "properties": {
+                  "fixed": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "vcpusFactor": {
+                    "exclusiveMinimum": 0,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "emulator": {
+                "type": "string"
+              },
+              "generic": {
+                "type": "boolean"
+              },
+              "name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "properties": {
+                "additionalProperties": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "minProperties": 2,
+                "properties": {
+                  "ISA": {
+                    "enum": [
+                      "x86-64",
+                      "arm-a64",
+                      "arm-a32",
+                      "rv64g",
+                      "s390x"
+                    ]
+                  },
+                  "OSFamily": {
+                    "enum": [
+                      "linux",
+                      "windows",
+                      "macos"
+                    ]
+                  }
+                },
+                "required": [
+                  "OSFamily",
+                  "ISA"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "properties",
+              "concurrency"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "sizeClasses": {
+          "contains": {
+            "properties": {
+              "name": {
+                "const": "default"
+              }
+            }
+          },
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sizeClass": {
+                "maximum": 4294967295,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "sizeClass"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "xcodeVersion": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "provider",
+        "os",
+        "arch",
+        "defaults",
+        "sizeClasses",
+        "runners"
+      ],
+      "type": "object"
+    },
+    "pool": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "ec2"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "tart"
+              ]
+            },
+            "required": [
+              "ec2"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "tart"
+              }
+            },
+            "required": [
+              "provider"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "ec2"
+              ]
+            },
+            "required": [
+              "tart"
+            ]
+          }
+        }
+      ],
+      "description": "A WorkerPool: name, enabled, and the WorkerPool spec fields (api/v1alpha1).",
+      "properties": {
+        "capacity": {
+          "additionalProperties": false,
+          "description": "Capacity bounds the pool. minRunning > 0 means standing cost and is opt-in.",
+          "properties": {
+            "max": {
+              "description": "Max is the maximum number of VMs. 0 disables the pool: queued work is failed fast (R-RE-2).",
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minRunning": {
+              "default": 0,
+              "description": "MinRunning workers kept alive even when idle. Default 0 (zero idle cost).",
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max",
+            "minRunning"
+          ],
+          "type": "object"
+        },
+        "dailyInstanceHourCap": {
+          "description": "DailyInstanceHourCap stops launching new instances once the pool consumed this\nmany instance-hours since 00:00 UTC (R-SCALE-7). Unset = no cap.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "ec2": {
+          "additionalProperties": false,
+          "description": "EC2 settings (provider ec2 only).",
+          "properties": {
+            "associatePublicIP": {
+              "description": "AssociatePublicIP gives workers a public IPv4 — only when no other egress path exists.",
+              "type": "boolean"
+            },
+            "capacityType": {
+              "default": "on-demand",
+              "description": "CapacityType: on-demand (default) or spot (SHOULD; falls back to on-demand when spotFallback).",
+              "enum": [
+                "on-demand",
+                "spot"
+              ],
+              "type": "string"
+            },
+            "dataVolume": {
+              "additionalProperties": false,
+              "description": "DataVolume is an extra ephemeral gp3 volume for L1/filePool when the type has no\ninstance store (DeleteOnTermination always true).",
+              "properties": {
+                "initializationRateMiBps": {
+                  "description": "InitializationRateMiBps is the per-launch volume initialization rate (0 = off, R-POOL-2 SHOULD).",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "iops": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "sizeGiB": {
+                  "format": "int32",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "throughputMiBps": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "type": {
+                  "default": "gp3",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "extraTags": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "ExtraTags are added to every resource (e.g. the campaign tags).",
+              "type": "object"
+            },
+            "fastLaunch": {
+              "additionalProperties": false,
+              "description": "FastLaunch applies to Windows pools: pre-provisioned snapshots (user-approved standing cost).",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "launchTemplateID": {
+                  "description": "LaunchTemplateID of the small, cheap prep instance type; created by the controller when empty.",
+                  "type": "string"
+                },
+                "maxParallelLaunches": {
+                  "description": "MaxParallelLaunches during snapshot preparation (within AWS limits).",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "targetCount": {
+                  "description": "TargetCount of pre-provisioned snapshots; default = capacity.max.",
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "enabled"
+              ],
+              "type": "object"
+            },
+            "instanceProfile": {
+              "description": "InstanceProfile (name) with SSM core and own-pool parameter read, no EC2 permissions.",
+              "type": "string"
+            },
+            "instanceTypes": {
+              "description": "InstanceTypes is the ordered preference list, e.g. [c8i.8xlarge, c7i.8xlarge, c7a.8xlarge].",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "rootVolume": {
+              "additionalProperties": false,
+              "description": "RootVolume: smallest that fits; gp3 baseline.",
+              "properties": {
+                "initializationRateMiBps": {
+                  "description": "InitializationRateMiBps is the per-launch volume initialization rate (0 = off, R-POOL-2 SHOULD).",
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "iops": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "sizeGiB": {
+                  "format": "int32",
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "throughputMiBps": {
+                  "format": "int32",
+                  "type": "integer"
+                },
+                "type": {
+                  "default": "gp3",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "securityGroupIDs": {
+              "description": "SecurityGroupIDs for the instances.",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "spotFallback": {
+              "description": "SpotFallback allows on-demand launches when spot capacity is unavailable.",
+              "type": "boolean"
+            },
+            "subnetIDs": {
+              "description": "SubnetIDs in preference order; a single AZ by default (R-DATA-4).",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "instanceProfile",
+            "instanceTypes",
+            "securityGroupIDs",
+            "subnetIDs"
+          ],
+          "type": "object"
+        },
+        "enabled": {
+          "description": "Render this pool (default true).",
+          "type": "boolean"
+        },
+        "floorSchedule": {
+          "description": "FloorSchedule raises minRunning during windows (opt-in standing cost, R-SCALE-7).",
+          "items": {
+            "additionalProperties": false,
+            "description": "FloorWindow raises the pool floor during a recurring window (UTC cron-like).",
+            "properties": {
+              "days": {
+                "description": "Days are weekday names (\"Mon\"…\"Sun\").",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "end": {
+                "type": "string"
+              },
+              "minRunning": {
+                "description": "MinRunning during the window.",
+                "format": "int32",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "name": {
+                "description": "Name of the window (for status/audit).",
+                "type": "string"
+              },
+              "start": {
+                "description": "Start and End are \"HH:MM\" in UTC.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "days",
+              "end",
+              "minRunning",
+              "name",
+              "start"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "image": {
+          "additionalProperties": false,
+          "description": "Image selects the AMI or Tart image. Changing it starts a new pool generation (R-OPS-2).",
+          "properties": {
+            "ami": {
+              "description": "AMI is an explicit AMI ID (EC2).",
+              "type": "string"
+            },
+            "amiSelector": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "AMISelector picks the newest AMI owned by the account whose tags match (EC2).",
+              "type": "object"
+            },
+            "reference": {
+              "description": "Reference is the OCI image reference of the Tart image (Tart), e.g.\nghcr.io/sloper-ai/cucina-worker-macos:27.0-0.1.0.",
+              "type": "string"
+            },
+            "version": {
+              "description": "Version is the image version label; a change starts a new generation (R-POOL-8).\nDefaults to the resolved image's cucina:image-version tag.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "instanceNames": {
+          "description": "InstanceNames lists the Buildbarn instance names (tenants) this pool serves.\nEmpty means every configured instance name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "$ref": "#/definitions/dnsLabel",
+          "description": "WorkerPool name (also the pool label, cucina:pool tag and SPIFFE path segment)."
+        },
+        "paused": {
+          "description": "Paused cordons the pool: no new launches; running workers finish and idle out.",
+          "type": "boolean"
+        },
+        "platform": {
+          "description": "Platform names an entry of platforms/pools.json (shipped in the controller and the\nchart), e.g. \"linux-x86-64\", \"linux-aarch64\", \"windows-x86-64\", \"macos-arm64-xcode27.0\".\nThe entry supplies the runners and their exact REAPI platform properties.",
+          "maxLength": 63,
+          "minLength": 1,
+          "type": "string"
+        },
+        "provider": {
+          "description": "Provider is \"ec2\" or \"tart\" and must match the platform's provider.",
+          "enum": [
+            "ec2",
+            "tart"
+          ],
+          "type": "string"
+        },
+        "rollout": {
+          "default": "lazy",
+          "description": "Rollout controls replacement of old-generation workers: \"lazy\" (default) replaces\nthem when idle, \"eager\" drains and replaces them immediately.",
+          "enum": [
+            "lazy",
+            "eager"
+          ],
+          "type": "string"
+        },
+        "sizeClass": {
+          "default": "default",
+          "description": "SizeClass names a size class of the platform (pools differing only in machine\nsize are size classes of one platform). Each platform in pools.json declares\nits size classes; \"default\" always exists.",
+          "type": "string"
+        },
+        "tart": {
+          "additionalProperties": false,
+          "description": "Tart settings (provider tart only).",
+          "properties": {
+            "cpu": {
+              "description": "CPU and memory override the host-derived defaults ((cores-2)/slots, (RAM-8GB)/slots).",
+              "format": "int32",
+              "type": "integer"
+            },
+            "diskGiB": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "hostSelector": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "HostSelector matches MacHost labels.",
+              "type": "object"
+            },
+            "maxAge": {
+              "description": "MaxAge: VMs older than this are re-cloned from the golden image (default 168h).",
+              "type": "string"
+            },
+            "memoryGiB": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "suspendable": {
+              "description": "Suspendable evaluates `tart suspend` as the \"off\" state (R-MAC-3 SHOULD).",
+              "type": "boolean"
+            },
+            "vmsPerHost": {
+              "default": 2,
+              "description": "VMsPerHost is 1 or 2 (Apple licence limit).",
+              "format": "int32",
+              "maximum": 2,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "timers": {
+          "additionalProperties": false,
+          "description": "Timers default per platform: idle 5 m (EC2 Linux) / 10 m (EC2 Windows, macOS);\nstartup 5 m (Linux, macOS) / 15 m (Windows); drain 30 m.",
+          "properties": {
+            "drainTimeout": {
+              "description": "DrainTimeout: after this long a draining VM is stopped even if actions still run.",
+              "type": "string"
+            },
+            "idleTimeout": {
+              "description": "IdleTimeout: a VM idle this long (with an empty queue) is drained and stopped (R-SCALE-3).",
+              "type": "string"
+            },
+            "startupTimeout": {
+              "description": "StartupTimeout: a VM that has not registered by then is failed and replaced.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "worker": {
+          "additionalProperties": false,
+          "description": "Worker tunes the bb_worker/bb_runner configuration.",
+          "properties": {
+            "buildDirectory": {
+              "default": "auto",
+              "description": "BuildDirectory selects the build directory mode (R-CACHE-3); auto picks FUSE (Linux),\nWinFSP (Windows) and the measured choice on macOS.",
+              "enum": [
+                "auto",
+                "fuse",
+                "winfsp",
+                "nfsv4",
+                "native"
+              ],
+              "type": "string"
+            },
+            "concurrency": {
+              "description": "Concurrency is the number of execution slots of the pool's primary runner; default = vCPUs.",
+              "format": "int32",
+              "type": "integer"
+            },
+            "l1": {
+              "additionalProperties": false,
+              "description": "L1 places the worker-local cache (R-CACHE-2).",
+              "properties": {
+                "placement": {
+                  "default": "auto",
+                  "description": "Placement: auto prefers instance-store NVMe, then an ephemeral gp3 volume, then memory\n(EC2); the VM disk on macOS. \"vm-disk\" is Tart only.",
+                  "enum": [
+                    "auto",
+                    "instance-store",
+                    "ebs",
+                    "memory",
+                    "vm-disk"
+                  ],
+                  "type": "string"
+                },
+                "sizeGiB": {
+                  "description": "SizeGiB of the L1 CAS; default 40 on macOS, derived from the instance elsewhere.",
+                  "format": "int32",
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "runnerConcurrency": {
+              "additionalProperties": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "description": "RunnerConcurrency overrides slots per runner name (e.g. \"qemu-s390x\": 2). Emulated\nrunners default to a low concurrency documented in docs/sizing.md.",
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "capacity",
+        "image",
+        "platform",
+        "provider"
+      ],
+      "type": "object"
+    },
+    "port": {
+      "maximum": 65535,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "promDuration": {
+      "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$",
+      "type": "string"
+    },
+    "protoDuration": {
+      "pattern": "^[0-9]+(\\.[0-9]{1,9})?s$",
+      "type": "string"
+    },
+    "quantity": {
+      "minimum": 1,
+      "pattern": "^[0-9]+(Ki|Mi|Gi|Ti)?$",
+      "type": [
+        "string",
+        "integer"
+      ]
+    },
+    "resourceList": {
+      "additionalProperties": {
+        "$ref": "#/definitions/resourceQuantity"
+      },
+      "type": "object"
+    },
+    "resourceQuantity": {
+      "pattern": "^[0-9]+(\\.[0-9]+)?(m|k|M|G|T|Ki|Mi|Gi|Ti)?$",
+      "type": [
+        "string",
+        "number"
+      ]
+    },
+    "resources": {
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "$ref": "#/definitions/resourceList"
+        },
+        "requests": {
+          "$ref": "#/definitions/resourceList"
+        }
+      },
+      "type": "object"
+    },
+    "simpleDuration": {
+      "pattern": "^[0-9]+(s|m|h|d)$",
+      "type": "string"
+    },
+    "store": {
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "$ref": "#/definitions/quantity",
+          "description": "Bytes of blocks of this store per shard."
+        }
+      },
+      "type": "object"
+    },
+    "stringMap": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "tlsSource": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "existingSecret"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "existingSecret": {
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "certManager"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "certManager": {
+                "properties": {
+                  "issuerRef": {
+                    "properties": {
+                      "name": {
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ]
+                  }
+                },
+                "required": [
+                  "issuerRef"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "certManager": {
+          "additionalProperties": false,
+          "properties": {
+            "duration": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "includeServiceNames": {
+              "description": "Also request the in-cluster Service names (not with ACME).",
+              "type": "boolean"
+            },
+            "issuerRef": {
+              "additionalProperties": false,
+              "properties": {
+                "group": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "Issuer",
+                    "ClusterIssuer"
+                  ],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "renewBefore": {
+              "$ref": "#/definitions/goDuration"
+            }
+          },
+          "type": "object"
+        },
+        "existingSecret": {
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "generated",
+            "certManager",
+            "existingSecret"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "auth": {
+      "additionalProperties": false,
+      "properties": {
+        "audience": {
+          "description": "JWT aud claim Buildbarn requires.",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "type": "string"
+        },
+        "breakGlass": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Generate the break-glass admin key (bootstrap hook) and its TrustPolicy (R-AUTH-12).",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "groupLookup": {
+          "description": "Optional Cloud Identity group lookup.",
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "cacheTtl": {
+                  "$ref": "#/definitions/goDuration"
+                },
+                "serviceAccountSecret": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "serviceAccountSecret",
+                "cacheTtl"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "keyRotationPublishLead": {
+          "$ref": "#/definitions/goDuration",
+          "description": "How long a new signing key is published before it signs (>= 10m)."
+        },
+        "rateLimitPerMinute": {
+          "description": "STS exchanges per minute per client.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "tokenTTL": {
+          "$ref": "#/definitions/goDuration",
+          "description": "Cucina JWT lifetime (R-AUTH-3: 15m)."
+        }
+      },
+      "type": "object"
+    },
+    "buildbarn": {
+      "additionalProperties": false,
+      "properties": {
+        "authorizerTestVectors": {
+          "description": "Embed JMESPath test vectors in every authorizer; Buildbarn refuses to start if one fails.",
+          "type": "boolean"
+        },
+        "frontend": {
+          "additionalProperties": false,
+          "properties": {
+            "actionCachePurgeBefore": {
+              "description": "Hide worker-produced action results completed before this RFC 3339 time (AC purge, R-CACHE-5).",
+              "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2}))?$",
+              "type": "string"
+            },
+            "existenceCacheDuration": {
+              "$ref": "#/definitions/protoDuration",
+              "description": "FindMissingBlobs existence-cache TTL (<= 3600s; must stay below storage retention)."
+            },
+            "maximumTotalTreeSizeBytes": {
+              "description": "completenessChecking limit, above the largest toolchain Tree (R-DATA-2).",
+              "minimum": 1048576,
+              "type": "integer"
+            },
+            "zstd": {
+              "additionalProperties": false,
+              "properties": {
+                "decoderWindowSizeBytes": {
+                  "description": "Largest client zstd window accepted (Bazel uses <= 8 MiB).",
+                  "maximum": 134217728,
+                  "minimum": 1048576,
+                  "type": "integer"
+                },
+                "encoderLevel": {
+                  "description": "klauspost encoder level enum (2 ~ zstd 3).",
+                  "maximum": 4,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "encoderWindowSizeBytes": {
+                  "maximum": 134217728,
+                  "minimum": 1024,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "maximumMessageSizeBytes": {
+          "description": "maximumMessageSizeBytes/maximumReceivedMessageSizeBytes in every component and worker (R-CP-6).",
+          "maximum": 134217728,
+          "minimum": 4194304,
+          "type": "integer"
+        },
+        "scheduler": {
+          "additionalProperties": false,
+          "properties": {
+            "controllerIdentity": {
+              "description": "SPIFFE ID of the controller's BuildQueueState client certificate.",
+              "pattern": "^spiffe://cucina/[a-z0-9/-]+$",
+              "type": "string"
+            },
+            "defaultExecutionTimeout": {
+              "$ref": "#/definitions/protoDuration"
+            },
+            "feedbackDrivenSizeClasses": {
+              "description": "Persist execution statistics in the ISCC (useful with several size classes).",
+              "type": "boolean"
+            },
+            "maximumExecutionTimeout": {
+              "$ref": "#/definitions/protoDuration",
+              "description": "Must be >= 3600s (R-RE-2)."
+            },
+            "platformQueueWithNoWorkersTimeout": {
+              "$ref": "#/definitions/protoDuration",
+              "description": "Upstream recommends 900s (R-RE-2)."
+            }
+          },
+          "type": "object"
+        },
+        "storage": {
+          "additionalProperties": false,
+          "properties": {
+            "averageObjectSize": {
+              "additionalProperties": false,
+              "description": "Average object size per store, used to size the key-location maps.",
+              "properties": {
+                "ac": {
+                  "$ref": "#/definitions/quantity"
+                },
+                "cas": {
+                  "$ref": "#/definitions/quantity"
+                },
+                "fsac": {
+                  "$ref": "#/definitions/quantity"
+                },
+                "iscc": {
+                  "$ref": "#/definitions/quantity"
+                }
+              },
+              "type": "object"
+            },
+            "keyLocationMapFactor": {
+              "description": "Key-location map entries per expected object (upstream: 2-10).",
+              "maximum": 10,
+              "minimum": 2,
+              "type": "integer"
+            },
+            "minimumEpochInterval": {
+              "$ref": "#/definitions/protoDuration",
+              "description": "fsync interval of the persistent state (upstream: 300s)."
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "maximumMessageSizeBytes",
+        "frontend",
+        "scheduler",
+        "storage"
+      ],
+      "type": "object"
+    },
+    "clusterDomain": {
+      "description": "Kubernetes cluster DNS domain.",
+      "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+      "type": "string"
+    },
+    "clusterId": {
+      "description": "Installation ID (cucina:cluster tag on cloud resources); unique per installation. Default <namespace>-<release>.",
+      "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)?$",
+      "type": "string"
+    },
+    "commonLabels": {
+      "$ref": "#/definitions/stringMap",
+      "description": "Labels added to every object."
+    },
+    "controller": {
+      "additionalProperties": false,
+      "description": "cucina-controller settings.",
+      "properties": {
+        "affinity": {
+          "type": "object"
+        },
+        "autoscaler": {
+          "additionalProperties": false,
+          "properties": {
+            "deadmanIdleLimit": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "deadmanMaxUptime": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "deadmanUnreachableLimit": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "iceBackoffMax": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "iceBackoffMin": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "runInstancesBurst": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "runInstancesRefillPerSecond": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            "shadow": {
+              "description": "Decide without acting (R-TEST-7 shadow mode).",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "aws": {
+          "additionalProperties": false,
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "properties": {
+            "accountId": {
+              "description": "AWS account of the instance identity documents; set at install time, never commit it.",
+              "pattern": "^([0-9]{12})?$",
+              "type": "string"
+            },
+            "enabled": {
+              "description": "Enable the EC2 provider.",
+              "type": "boolean"
+            },
+            "extraTags": {
+              "$ref": "#/definitions/stringMap",
+              "description": "Tags added to every resource the controller creates."
+            },
+            "pricingRegionCode": {
+              "type": "string"
+            },
+            "region": {
+              "pattern": "^([a-z]{2}(-gov)?-[a-z]+-[0-9])?$",
+              "type": "string"
+            },
+            "sweepInterval": {
+              "$ref": "#/definitions/goDuration"
+            }
+          },
+          "then": {
+            "properties": {
+              "accountId": {
+                "minLength": 12
+              },
+              "region": {
+                "minLength": 1
+              }
+            }
+          },
+          "type": "object"
+        },
+        "costEnabled": {
+          "type": "boolean"
+        },
+        "hosts": {
+          "additionalProperties": false,
+          "properties": {
+            "defaultTokenTtl": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "staleAfter": {
+              "$ref": "#/definitions/goDuration"
+            }
+          },
+          "type": "object"
+        },
+        "leaderElection": {
+          "additionalProperties": false,
+          "properties": {
+            "leaseDuration": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "renewDeadline": {
+              "$ref": "#/definitions/goDuration"
+            },
+            "retryPeriod": {
+              "$ref": "#/definitions/goDuration"
+            }
+          },
+          "type": "object"
+        },
+        "logLevel": {
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "type": "string"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "otlpEndpoint": {
+          "type": "string"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "registry": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "host": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "static-readonly",
+                "github-app"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "replicas": {
+          "$ref": "#/definitions/optionalReplicas"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources",
+          "description": "requests/limits; empty = size profile."
+        },
+        "scheduler": {
+          "additionalProperties": false,
+          "properties": {
+            "pollInterval": {
+              "$ref": "#/definitions/goDuration",
+              "description": "BuildQueueState poll interval (R-SCALE-1: 1-2 s)."
+            },
+            "queueFailAfter": {
+              "$ref": "#/definitions/goDuration",
+              "description": "Fail queued work of a pool without capacity after this long."
+            }
+          },
+          "type": "object"
+        },
+        "serviceAccount": {
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "$ref": "#/definitions/stringMap",
+              "description": "e.g. eks.amazonaws.com/role-arn (IRSA, R-CP-8)."
+            }
+          },
+          "type": "object"
+        },
+        "tolerations": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "topologySpreadConstraints": {
+          "description": "Default: spread over nodes (kubernetes.io/hostname, ScheduleAnyway).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "worker": {
+          "additionalProperties": false,
+          "properties": {
+            "metricsPort": {
+              "$ref": "#/definitions/port"
+            },
+            "pushgatewayUrl": {
+              "type": "string"
+            },
+            "wanCompressionForHosts": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "crds": {
+      "additionalProperties": false,
+      "properties": {
+        "install": {
+          "description": "Install/upgrade the WorkerPool, MacHost and TrustPolicy CRDs from templates.",
+          "type": "boolean"
+        },
+        "keep": {
+          "description": "Annotate the CRDs with helm.sh/resource-policy=keep so uninstall keeps them and their objects.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "endpoints": {
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "additionalProperties": false,
+          "properties": {
+            "extraNames": {
+              "description": "Extra DNS names/IPs for the public certificate.",
+              "items": {
+                "$ref": "#/definitions/host"
+              },
+              "type": "array"
+            },
+            "host": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Public DNS name or IP of the remote-execution endpoint."
+            },
+            "port": {
+              "$ref": "#/definitions/port",
+              "description": "External port of the remote-execution endpoint."
+            }
+          },
+          "type": "object"
+        },
+        "hosts": {
+          "additionalProperties": false,
+          "properties": {
+            "host": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Address Mac hosts use for the HostService. Default the enrollment host."
+            },
+            "port": {
+              "$ref": "#/definitions/port",
+              "description": "External port of the HostService."
+            }
+          },
+          "type": "object"
+        },
+        "management": {
+          "additionalProperties": false,
+          "properties": {
+            "host": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Host of the management API. Default endpoints.client.host."
+            },
+            "port": {
+              "$ref": "#/definitions/port",
+              "description": "External port of the management API."
+            }
+          },
+          "type": "object"
+        },
+        "sts": {
+          "additionalProperties": false,
+          "properties": {
+            "port": {
+              "$ref": "#/definitions/port",
+              "description": "External port of the STS."
+            },
+            "url": {
+              "description": "Issuer URL of Cucina JWTs (no trailing slash needed). Default https://<client.host>:<sts.port>.",
+              "pattern": "^(https://[A-Za-z0-9.:\\[\\]-]+(/[A-Za-z0-9._~/-]*)?)?$",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "worker": {
+          "additionalProperties": false,
+          "properties": {
+            "enrollmentHost": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Host of the enrollment API when it has its own load balancer."
+            },
+            "enrollmentPort": {
+              "$ref": "#/definitions/port",
+              "description": "External port of the enrollment API."
+            },
+            "extraNames": {
+              "description": "Extra DNS names/IPs for the internal certificate.",
+              "items": {
+                "$ref": "#/definitions/host"
+              },
+              "type": "array"
+            },
+            "host": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Private IP or DNS name of the worker endpoint (VPC/Mac sites only)."
+            },
+            "schedulerHost": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Host of the scheduler worker API when it has its own load balancer."
+            },
+            "schedulerPort": {
+              "$ref": "#/definitions/port",
+              "description": "External port of the scheduler worker API."
+            },
+            "serverName": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "TLS server name workers verify. Default endpoints.worker.host."
+            },
+            "storageHost": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Host of the frontend worker listener when it has its own load balancer."
+            },
+            "storagePort": {
+              "$ref": "#/definitions/port",
+              "description": "External port of the frontend worker listener (CAS/AC/FSAC for workers and hosts)."
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "client",
+        "sts",
+        "management",
+        "worker",
+        "hosts"
+      ],
+      "type": "object"
+    },
+    "exposure": {
+      "additionalProperties": false,
+      "properties": {
+        "api": {
+          "$ref": "#/definitions/l4Exposure",
+          "description": "Exposure of the STS and the management API (TLS by the pods)."
+        },
+        "client": {
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "$ref": "#/definitions/stringMap",
+              "description": "Annotations of the client Service (e.g. AWS NLB settings)."
+            },
+            "backendServiceAnnotations": {
+              "$ref": "#/definitions/stringMap",
+              "description": "Annotations of the frontend ClusterIP Service an Ingress/Gateway uses (e.g. traefik.ingress.kubernetes.io/service.serversscheme: h2c)."
+            },
+            "externalTrafficPolicy": {
+              "enum": [
+                "Cluster",
+                "Local"
+              ],
+              "type": "string"
+            },
+            "gateway": {
+              "additionalProperties": false,
+              "properties": {
+                "parentRefs": {
+                  "description": "Gateway API parentRefs of the GRPCRoute.",
+                  "items": {
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "ingress": {
+              "additionalProperties": false,
+              "properties": {
+                "annotations": {
+                  "$ref": "#/definitions/stringMap"
+                },
+                "className": {
+                  "type": "string"
+                },
+                "tlsSecretName": {
+                  "description": "Secret with the certificate the Ingress presents.",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "loadBalancerClass": {
+              "type": "string"
+            },
+            "loadBalancerSourceRanges": {
+              "$ref": "#/definitions/cidrList"
+            },
+            "nodePort": {
+              "$ref": "#/definitions/nodePort"
+            },
+            "type": {
+              "description": "How the remote-execution endpoint is exposed; Ingress/Gateway terminate TLS and reach the frontend over h2c.",
+              "enum": [
+                "LoadBalancer",
+                "NodePort",
+                "ClusterIP",
+                "Ingress",
+                "Gateway"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        "worker": {
+          "$ref": "#/definitions/l4Exposure",
+          "description": "Exposure of the worker endpoint (mTLS needs L4 pass-through)."
+        }
+      },
+      "required": [
+        "client",
+        "api",
+        "worker"
+      ],
+      "type": "object"
+    },
+    "frontend": {
+      "additionalProperties": false,
+      "description": "Frontend (stateless bb_storage) settings; null/empty = size profile.",
+      "properties": {
+        "affinity": {
+          "type": "object"
+        },
+        "existenceCacheSize": {
+          "minimum": 1000,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "jwtCacheSize": {
+          "minimum": 100,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "replicas": {
+          "$ref": "#/definitions/optionalReplicas"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources",
+          "description": "requests/limits; empty = size profile."
+        },
+        "tolerations": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "topologySpreadConstraints": {
+          "description": "Default: spread over nodes (kubernetes.io/hostname, ScheduleAnyway).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "zstd": {
+          "additionalProperties": false,
+          "description": "Bounded zstd pool (R-DATA-3); empty = profile.",
+          "properties": {
+            "maximumDecoders": {
+              "maximum": 4096,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maximumEncoders": {
+              "maximum": 4096,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "fullnameOverride": {
+      "description": "Replaces <release>-<chart> as the prefix of every object name (max 40 characters).",
+      "maxLength": 40,
+      "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$",
+      "type": "string"
+    },
+    "global": {
+      "description": "Reserved by Helm for parent charts; unused.",
+      "type": "object"
+    },
+    "hooks": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrap": {
+          "additionalProperties": false,
+          "properties": {
+            "activeDeadlineSeconds": {
+              "minimum": 30,
+              "type": "integer"
+            },
+            "enabled": {
+              "description": "pre-install/pre-upgrade bootstrap Job (CA, certificates, keys, JWKS, deny-list, break-glass key).",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources"
+        },
+        "test": {
+          "additionalProperties": false,
+          "properties": {
+            "credentialKey": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "credentialSecret": {
+              "description": "Secret with the service-account key the canary uses; empty = the break-glass key.",
+              "type": "string"
+            },
+            "enabled": {
+              "description": "helm test cache canary (R-CP-7).",
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "uninstallPrep": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "pre-delete Job that drains and terminates every worker (R-OPS-3).",
+              "type": "boolean"
+            },
+            "timeout": {
+              "$ref": "#/definitions/goDuration"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "images": {
+      "additionalProperties": false,
+      "properties": {
+        "bbScheduler": {
+          "$ref": "#/definitions/pinnedImage",
+          "description": "bb_scheduler image, pinned by digest."
+        },
+        "bbStorage": {
+          "$ref": "#/definitions/pinnedImage",
+          "description": "bb_storage image (frontend, storage shards), pinned by digest."
+        },
+        "controller": {
+          "$ref": "#/definitions/image",
+          "description": "cucina-controller image (controller, STS, hooks, helm test)."
+        },
+        "pullPolicy": {
+          "description": "Image pull policy of every container.",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ],
+          "type": "string"
+        },
+        "pullSecrets": {
+          "description": "Names of image pull Secrets.",
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sts": {
+          "$ref": "#/definitions/optionalImage",
+          "description": "STS image; empty repository = the controller image."
+        }
+      },
+      "required": [
+        "pullPolicy",
+        "bbStorage",
+        "bbScheduler",
+        "controller",
+        "sts"
+      ],
+      "type": "object"
+    },
+    "instanceNames": {
+      "description": "Buildbarn instance names (tenants, R-RE-3); the first is the default. Lower-case path segments.",
+      "items": {
+        "pattern": "^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?(/[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?)*$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "monitoring": {
+      "additionalProperties": false,
+      "properties": {
+        "grafanaDashboards": {
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "labels": {
+              "$ref": "#/definitions/stringMap"
+            }
+          },
+          "type": "object"
+        },
+        "labels": {
+          "$ref": "#/definitions/stringMap",
+          "description": "Labels on ServiceMonitor/ScrapeConfig/PrometheusRule objects."
+        },
+        "prometheusRules": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "thresholds": {
+              "additionalProperties": false,
+              "properties": {
+                "bazelRemoteCacheTTL": {
+                  "$ref": "#/definitions/simpleDuration"
+                },
+                "cacheHitRatio": {
+                  "exclusiveMaximum": 1,
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                },
+                "casRetention": {
+                  "$ref": "#/definitions/simpleDuration"
+                },
+                "certificateExpiry": {
+                  "$ref": "#/definitions/simpleDuration"
+                },
+                "egressBytesPerSecond": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "hostOffline": {
+                  "$ref": "#/definitions/simpleDuration"
+                },
+                "queueTime": {
+                  "$ref": "#/definitions/simpleDuration"
+                },
+                "storageFreeRatio": {
+                  "exclusiveMaximum": 1,
+                  "exclusiveMinimum": 0,
+                  "type": "number"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "pushgateway": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "image": {
+              "$ref": "#/definitions/image"
+            },
+            "resources": {
+              "$ref": "#/definitions/resources"
+            }
+          },
+          "type": "object"
+        },
+        "serviceMonitors": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "$ref": "#/definitions/promDuration"
+            }
+          },
+          "type": "object"
+        },
+        "workerScrapeConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "ScrapeConfig over the controller's HTTP-SD endpoint for EC2 workers.",
+              "type": "boolean"
+            },
+            "refreshInterval": {
+              "$ref": "#/definitions/promDuration"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "nameOverride": {
+      "description": "Replaces the chart name in object names.",
+      "maxLength": 30,
+      "type": "string"
+    },
+    "networkPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Restrict the in-cluster-only ports (storage gRPC, scheduler client and BuildQueueState).",
+          "type": "boolean"
+        },
+        "metricsFrom": {
+          "description": "NetworkPolicy peers allowed to scrape metrics (empty = anyone).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "pki": {
+      "additionalProperties": false,
+      "properties": {
+        "controllerClientCertTTL": {
+          "$ref": "#/definitions/goDuration",
+          "description": "Lifetime of the controller's BuildQueueState client certificate."
+        },
+        "existingCASecret": {
+          "description": "Existing Secret with ca.crt and ca.key; empty = <fullname>-ca created by the bootstrap hook.",
+          "type": "string"
+        },
+        "hostCertTTL": {
+          "$ref": "#/definitions/goDuration",
+          "description": "Mac host certificate lifetime (max 168h)."
+        },
+        "vmCertTTL": {
+          "$ref": "#/definitions/goDuration",
+          "description": "Mac VM certificate lifetime (max 12h)."
+        },
+        "workerCertTTL": {
+          "$ref": "#/definitions/goDuration",
+          "description": "Worker certificate lifetime (max 168h)."
+        }
+      },
+      "type": "object"
+    },
+    "platforms": {
+      "additionalProperties": false,
+      "properties": {
+        "extra": {
+          "description": "Additional platform catalog entries (schema of platforms/pools.json).",
+          "items": {
+            "$ref": "#/definitions/platform"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "podDisruptionBudgets": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "pools": {
+      "description": "WorkerPool objects (R-POOL-1): [{name, enabled, ...WorkerPool spec}]. See samples/pools.yaml.",
+      "items": {
+        "$ref": "#/definitions/pool"
+      },
+      "type": "array"
+    },
+    "scheduler": {
+      "additionalProperties": false,
+      "description": "Scheduler (bb_scheduler, one replica, Recreate).",
+      "properties": {
+        "affinity": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources",
+          "description": "requests/limits; empty = size profile."
+        },
+        "tolerations": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "sizeProfile": {
+      "description": "Size profile (files/profiles.yaml): small (single-node test), medium (default production), large. Per-component values override it.",
+      "enum": [
+        "small",
+        "medium",
+        "large"
+      ],
+      "type": "string"
+    },
+    "storage": {
+      "additionalProperties": false,
+      "description": "Storage shards (bb_storage local, persistent).",
+      "properties": {
+        "affinity": {
+          "type": "object"
+        },
+        "mode": {
+          "description": "file: file-backed blocks on a filesystem PVC (local-path); block: raw volumeMode Block for the CAS (EBS CSI) plus a filesystem PVC.",
+          "enum": [
+            "file",
+            "block"
+          ],
+          "type": "string"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "persistence": {
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
+            },
+            "size": {
+              "description": "Filesystem PVC size; empty = derived from the stores. Immutable after install.",
+              "oneOf": [
+                {
+                  "maxLength": 0,
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/quantity"
+                }
+              ]
+            },
+            "whenDeleted": {
+              "enum": [
+                "Retain",
+                "Delete"
+              ],
+              "type": "string"
+            },
+            "whenScaled": {
+              "enum": [
+                "Retain",
+                "Delete"
+              ],
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources",
+          "description": "requests/limits; empty = size profile."
+        },
+        "shards": {
+          "description": "Number of storage shards (StatefulSet replicas).",
+          "maximum": 64,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "storageClassName": {
+          "type": "string"
+        },
+        "stores": {
+          "additionalProperties": false,
+          "description": "One size per store; blocks and key-location maps derive from it (R-CP-3).",
+          "properties": {
+            "ac": {
+              "$ref": "#/definitions/store"
+            },
+            "cas": {
+              "$ref": "#/definitions/store"
+            },
+            "fsac": {
+              "$ref": "#/definitions/store"
+            },
+            "iscc": {
+              "$ref": "#/definitions/store"
+            }
+          },
+          "type": "object"
+        },
+        "supplementalGroups": {
+          "description": "Extra groups of the storage container (raw block devices).",
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "tolerations": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "topologySpreadConstraints": {
+          "description": "Default: spread over nodes (kubernetes.io/hostname, ScheduleAnyway).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "sts": {
+      "additionalProperties": false,
+      "description": "STS Deployment settings.",
+      "properties": {
+        "affinity": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podAnnotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "podLabels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "priorityClassName": {
+          "type": "string"
+        },
+        "replicas": {
+          "$ref": "#/definitions/optionalReplicas"
+        },
+        "resources": {
+          "$ref": "#/definitions/resources",
+          "description": "requests/limits; empty = size profile."
+        },
+        "tolerations": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "topologySpreadConstraints": {
+          "description": "Default: spread over nodes (kubernetes.io/hostname, ScheduleAnyway).",
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "tls": {
+      "additionalProperties": false,
+      "properties": {
+        "internal": {
+          "$ref": "#/definitions/tlsSource",
+          "description": "Certificate of the worker endpoint, the controller and the in-cluster mTLS listeners (must chain to Cucina's CA)."
+        },
+        "public": {
+          "$ref": "#/definitions/tlsSource",
+          "description": "Certificate of the client endpoint and the STS."
+        },
+        "refreshInterval": {
+          "$ref": "#/definitions/protoDuration",
+          "description": "How often Buildbarn re-reads mounted certificates (rotation without restart)."
+        },
+        "serverCertificateDuration": {
+          "$ref": "#/definitions/goDuration",
+          "description": "Lifetime of chart-generated server certificates (renewed by the controller at 2/3)."
+        }
+      },
+      "required": [
+        "refreshInterval",
+        "serverCertificateDuration",
+        "public",
+        "internal"
+      ],
+      "type": "object"
+    },
+    "trustPolicies": {
+      "description": "TrustPolicy objects (R-AUTH-2): [{name, spec}]. See samples/trust-policies.yaml.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "$ref": "#/definitions/dnsLabel"
+          },
+          "spec": {
+            "$ref": "#/definitions/TrustPolicySpec"
+          }
+        },
+        "required": [
+          "name",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "sizeProfile",
+    "instanceNames",
+    "images",
+    "endpoints",
+    "exposure",
+    "tls",
+    "pki",
+    "auth",
+    "buildbarn",
+    "storage",
+    "controller",
+    "hooks",
+    "monitoring"
+  ],
+  "title": "Cucina Helm chart values",
+  "type": "object"
+}

@@ -1,0 +1,150 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $paths := include "cucina.paths" . | fromYaml -}}
+{{- $eff := include "cucina.effective" (list . "controller") | fromYaml -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "cucina.controller.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "controller") | nindent 4 }}
+  {{- with .Values.controller.serviceAccount.annotations }}
+  # IRSA (eks.amazonaws.com/role-arn) or other workload identity (R-CP-8).
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cucina.controller.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "controller") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cucina.selectorLabels" (dict "ctx" . "component" "controller") | nindent 4 }}
+  ports:
+    - name: https
+      port: {{ $ports.controllerSTS }}
+      targetPort: https
+    # Stateless listeners only; the management API is reached through the leader-only
+    # Service <fullname>-api-management.
+    - name: grpc-enrollment
+      port: {{ $ports.controllerEnrollment }}
+      targetPort: grpc-enrollment
+    - name: grpc-host
+      port: {{ $ports.controllerHost }}
+      targetPort: grpc-host
+    - name: metrics
+      port: {{ $ports.controllerMetrics }}
+      targetPort: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cucina.controller.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "controller") | nindent 4 }}
+spec:
+  replicas: {{ $eff.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ ternary 0 1 (gt (int $eff.replicas) 1) }}
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "controller") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "controller") | nindent 8 }}
+        {{- with $eff.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ printf "%s%s" (include "cucina.controller.config" .) (include "cucina.catalog" .) | sha256sum }}
+        {{- with $eff.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "cucina.controller.name" . }}
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: controller
+          image: {{ include "cucina.controllerImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["controller", "--config={{ $paths.controllerConfig }}", "--certs={{ $paths.certs }}"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- with include "cucina.goEnv" $eff.resources }}
+            {{- . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: probes
+              containerPort: {{ $ports.controllerProbes }}
+            - name: metrics
+              containerPort: {{ $ports.controllerMetrics }}
+            - name: https
+              containerPort: {{ $ports.controllerSTS }}
+            - name: grpc-management
+              containerPort: {{ $ports.controllerManagement }}
+            - name: grpc-enrollment
+              containerPort: {{ $ports.controllerEnrollment }}
+            - name: grpc-host
+              containerPort: {{ $ports.controllerHost }}
+          {{- include "cucina.controller.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml $eff.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ $paths.configDir }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: tls-server
+              mountPath: {{ $paths.tlsServer }}
+              readOnly: true
+            - name: ca
+              mountPath: {{ dir $paths.caBundle }}
+              readOnly: true
+            - name: controller-client
+              mountPath: {{ $paths.controllerClient }}
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cucina.controller.name" . }}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+        - name: tls-server
+          secret:
+            secretName: {{ include "cucina.tlsSecret" (list . "controller") }}
+        - name: ca
+          secret:
+            secretName: {{ include "cucina.caSecret" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+        - name: controller-client
+          secret:
+            secretName: {{ include "cucina.controllerClientSecret" . }}
+      {{- with include "cucina.scheduling" $eff }}{{ . | nindent 6 }}{{- end }}
+      {{- include "cucina.topologySpread" (list . "controller" $eff.topologySpreadConstraints) | nindent 6 }}

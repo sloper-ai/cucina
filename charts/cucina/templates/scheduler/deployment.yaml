@@ -1,0 +1,112 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- $paths := include "cucina.paths" . | fromYaml -}}
+{{- $eff := include "cucina.effective" (list . "scheduler") | fromYaml -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cucina.scheduler.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "scheduler") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cucina.selectorLabels" (dict "ctx" . "component" "scheduler") | nindent 4 }}
+  ports:
+    - name: grpc-client
+      port: {{ $ports.schedulerClient }}
+      targetPort: grpc-client
+    - name: grpc-worker
+      port: {{ $ports.schedulerWorker }}
+      targetPort: grpc-worker
+    - name: grpc-bqs
+      port: {{ $ports.schedulerBuildQueueState }}
+      targetPort: grpc-bqs
+    - name: diagnostics
+      port: {{ $ports.diagnostics }}
+      targetPort: diagnostics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cucina.scheduler.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "scheduler") | nindent 4 }}
+spec:
+  # bb_scheduler keeps its queues in memory: exactly one replica, never two at once (R-CP-1).
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "cucina.selectorLabels" (dict "ctx" . "component" "scheduler") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "scheduler") | nindent 8 }}
+        {{- with $eff.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # A change of the predeclared queues (new pool platform) restarts the scheduler (ADR 0002).
+        checksum/config: {{ include "cucina.scheduler.config" . | sha256sum }}
+        {{- with $eff.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: bb-scheduler
+          image: {{ include "cucina.image" .Values.images.bbScheduler }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["{{ $paths.config }}/scheduler.jsonnet"]
+          {{- with include "cucina.goEnv" $eff.resources }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: grpc-client
+              containerPort: {{ $ports.schedulerClient }}
+            - name: grpc-worker
+              containerPort: {{ $ports.schedulerWorker }}
+            - name: grpc-bqs
+              containerPort: {{ $ports.schedulerBuildQueueState }}
+            - name: diagnostics
+              containerPort: {{ $ports.diagnostics }}
+          {{- include "cucina.bb.probes" . | nindent 10 }}
+          resources:
+            {{- toYaml $eff.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: {{ $paths.config }}
+              readOnly: true
+            - name: tls-server
+              mountPath: {{ $paths.tlsServer }}
+              readOnly: true
+            - name: ca
+              mountPath: {{ dir $paths.caBundle }}
+              readOnly: true
+            - name: jwks
+              mountPath: {{ dir $paths.jwks }}
+              readOnly: true
+            - name: denylist
+              mountPath: {{ dir $paths.denyList }}
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "cucina.scheduler.name" . }}
+        - name: tls-server
+          secret:
+            secretName: {{ include "cucina.tlsSecret" (list . "scheduler") }}
+        {{- include "cucina.bb.authVolumes" . | nindent 8 }}
+      {{- with include "cucina.scheduling" $eff }}{{ . | nindent 6 }}{{- end }}

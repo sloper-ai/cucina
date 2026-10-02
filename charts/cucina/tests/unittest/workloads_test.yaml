@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# R-CP-6: every long-running container has requests/limits, /-/healthy probes, a
+# non-root user and a read-only root filesystem; Buildbarn images are pinned by digest.
+suite: workload hardening
+templates:
+  - templates/frontend/deployment.yaml
+  - templates/scheduler/deployment.yaml
+  - templates/storage/statefulset.yaml
+  - templates/controller/deployment.yaml
+  - templates/sts/deployment.yaml
+tests:
+  - it: hardens every container
+    documentSelector: {path: kind, value: Deployment, matchMany: true, skipEmptyTemplates: true}
+    asserts:
+      - isNotNullOrEmpty: {path: 'spec.template.spec.containers[0].resources.requests'}
+      - isNotNullOrEmpty: {path: 'spec.template.spec.containers[0].resources.limits'}
+      - isNotNullOrEmpty: {path: 'spec.template.spec.containers[0].livenessProbe.httpGet.path'}
+      - isNotNullOrEmpty: {path: 'spec.template.spec.containers[0].readinessProbe.httpGet.path'}
+      - equal: {path: spec.template.spec.securityContext.runAsNonRoot, value: true}
+      - equal: {path: 'spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem', value: true}
+      - equal: {path: 'spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation', value: false}
+  - it: probes Buildbarn on /-/healthy and pins it by digest
+    template: templates/storage/statefulset.yaml
+    documentSelector: {path: kind, value: StatefulSet}
+    asserts:
+      - equal: {path: 'spec.template.spec.containers[0].livenessProbe.httpGet.path', value: /-/healthy}
+      - matchRegex: {path: 'spec.template.spec.containers[0].image', pattern: '^ghcr\.io/buildbarn/bb-storage@sha256:[0-9a-f]{64}$'}
+      - equal: {path: spec.template.spec.securityContext.runAsNonRoot, value: true}
+      - equal: {path: 'spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem', value: true}
