@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/log.v1.schema.json",
+  "title": "cucinactl workers logs (one JSON line per chunk)",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "log.v1"
+    },
+    "text": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "text"
+  ],
+  "additionalProperties": false
+}

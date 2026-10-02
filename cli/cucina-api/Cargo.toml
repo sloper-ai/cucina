@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Generated (checked-in) protobuf messages (buffa) and RPC stubs (connect-rust) for
+# the Cucina management API (api/proto/cucina/v1) plus the REAPI and googleapis
+# subset cucinactl uses (vendored under proto/). ADR 0003: connect-rust + buffa
+# replace tonic/prost. Regenerate with `cargo xtask codegen` (buf generate); the
+# `codegen_drift` test fails when a .proto changed without regenerating.
+[package]
+name = "cucina-api"
+description = "Generated Cucina management API, REAPI and googleapis RPC code (buffa + connect-rust)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Pinned exactly: both are pre-1.0 and the generated code targets these versions.
+buffa = { version = "=0.9.2", features = ["json"] }
+buffa-types = { version = "=0.9.2", features = ["json"] }
+connectrpc = "=0.9.1"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/path.v1.schema.json",
+  "title": "cucinactl config path",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "path.v1"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "path"
+  ],
+  "additionalProperties": false
+}

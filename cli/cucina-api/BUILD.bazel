@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Generated buffa messages + connect-rust stubs (checked in under src/gen; ADR 0003).
+# Cargo regenerates them with `cargo xtask codegen` (buf generate); Bazel can reproduce
+# them with //bazel:proto.bzl%cucina_proto_rust using the same plugin versions and
+# options (ADR 0106, docs/cli.md "Generated code").
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("//bazel:tiers.bzl", "cucina_rust_test")
+
+# Named after the package so the `//cli/cucina-api` workspace dependency resolves.
+rust_library(
+    name = "cucina-api",
+    srcs = ["src/lib.rs"] + glob(["src/gen/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "cucina_api",
+    visibility = ["//cli:__subpackages__"],
+    deps = all_crate_deps(normal = True),
+)
+
+# The checked-in code was generated from exactly these .proto files (R-LIB-3 drift check).
+cucina_rust_test(
+    name = "codegen_drift_test",
+    srcs = ["tests/codegen_drift.rs"],
+    data = [
+        "src/gen/inputs.sha256",
+        "//api/proto/cucina/v1:common.proto",
+        "//api/proto/cucina/v1:enrollment.proto",
+        "//api/proto/cucina/v1:host.proto",
+        "//api/proto/cucina/v1:management.proto",
+    ] + glob(["proto/**/*.proto"]),
+    tier = "unit",
+    deps = all_crate_deps(normal_dev = True),
+)

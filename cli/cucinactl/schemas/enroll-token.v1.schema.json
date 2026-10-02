@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/enroll-token.v1.schema.json",
+  "title": "cucinactl hosts enroll-token create (token shown once)",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "enroll-token.v1"
+    },
+    "id": {
+      "type": "string"
+    },
+    "token": {
+      "type": "string"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "token",
+    "expires_at"
+  ],
+  "additionalProperties": false
+}

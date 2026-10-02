@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/operation-list.v1.schema.json",
+  "title": "cucinactl ops list",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "operation-list.v1"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/operation"
+      }
+    },
+    "next_page_token": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "operations",
+    "next_page_token"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "operation": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "queue": {
+          "$ref": "#/$defs/queue_ref"
+        },
+        "action_digest": {
+          "type": "string"
+        },
+        "digest_function": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "queued_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "invocation_id": {
+          "type": "string"
+        },
+        "tool_invocation_id": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "worker_node": {
+          "type": "string"
+        },
+        "worker_thread": {
+          "type": "integer"
+        },
+        "expected_duration_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "timeout": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "queue",
+        "action_digest",
+        "digest_function",
+        "stage",
+        "queued_at",
+        "target_id",
+        "invocation_id",
+        "tool_invocation_id",
+        "priority",
+        "worker_node",
+        "worker_thread",
+        "expected_duration_seconds",
+        "timeout"
+      ],
+      "additionalProperties": false
+    },
+    "queue_ref": {
+      "type": "object",
+      "properties": {
+        "instance_name": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "size_class": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instance_name",
+        "platform",
+        "size_class"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

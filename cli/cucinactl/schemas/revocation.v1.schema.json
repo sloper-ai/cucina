@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/revocation.v1.schema.json",
+  "title": "cucinactl keys revoke --sub/--sid",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "revocation.v1"
+    },
+    "sub": {
+      "type": "string"
+    },
+    "sid": {
+      "type": "string"
+    },
+    "effective_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "sub",
+    "sid",
+    "effective_by"
+  ],
+  "additionalProperties": false
+}

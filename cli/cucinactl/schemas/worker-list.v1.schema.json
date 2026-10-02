@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/worker-list.v1.schema.json",
+  "title": "cucinactl workers list",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "worker-list.v1"
+    },
+    "workers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/worker"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "workers"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "worker": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "string"
+        },
+        "pool": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "instance_type": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "threads": {
+          "type": "integer"
+        },
+        "busy_threads": {
+          "type": "integer"
+        },
+        "drained": {
+          "type": "boolean"
+        },
+        "launched": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idle_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "private_ip": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node",
+        "pool",
+        "state",
+        "generation",
+        "instance_type",
+        "host",
+        "threads",
+        "busy_threads",
+        "drained",
+        "launched",
+        "idle_seconds",
+        "private_ip"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/pool-gc.v1.schema.json",
+  "title": "cucinactl pools gc",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "pool-gc.v1"
+    },
+    "pool": {
+      "type": "string"
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "deleted": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "pool",
+    "dry_run",
+    "deleted",
+    "errors"
+  ],
+  "additionalProperties": false
+}

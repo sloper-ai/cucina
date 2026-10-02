@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/login.v1.schema.json",
+  "title": "cucinactl login",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "login.v1"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "method": {
+      "enum": [
+        "oidc",
+        "service-key"
+      ]
+    },
+    "provider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subject": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "reused_session": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema",
+    "profile",
+    "url",
+    "method",
+    "provider",
+    "subject",
+    "expires_at",
+    "reused_session"
+  ],
+  "additionalProperties": false
+}

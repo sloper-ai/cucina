@@ -1,0 +1,423 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/action.v1.schema.json",
+  "title": "cucinactl action inspect",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "action.v1"
+    },
+    "instance_name": {
+      "type": "string"
+    },
+    "action_digest": {
+      "type": "string"
+    },
+    "operation": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "stage": {
+              "type": "string"
+            },
+            "queued_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "instance_name": {
+              "type": "string"
+            },
+            "platform": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "size_class": {
+              "type": "integer"
+            },
+            "invocation_id": {
+              "type": "string"
+            },
+            "target_id": {
+              "type": "string"
+            },
+            "worker_node": {
+              "type": "string"
+            },
+            "worker_thread": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "stage",
+            "queued_at",
+            "instance_name",
+            "platform",
+            "size_class",
+            "invocation_id",
+            "target_id",
+            "worker_node",
+            "worker_thread"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "command": {
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "working_directory": {
+          "type": "string"
+        },
+        "output_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "arguments",
+        "environment",
+        "working_directory",
+        "output_paths"
+      ],
+      "additionalProperties": false
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "timeout_seconds": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "do_not_cache": {
+      "type": "boolean"
+    },
+    "input_root": {
+      "type": "object",
+      "properties": {
+        "root_digest": {
+          "type": "string"
+        },
+        "files": {
+          "type": "integer"
+        },
+        "directories": {
+          "type": "integer"
+        },
+        "symlinks": {
+          "type": "integer"
+        },
+        "total_file_bytes": {
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "file",
+                  "directory",
+                  "symlink"
+                ]
+              },
+              "digest": {
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer"
+              },
+              "executable": {
+                "type": "boolean"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "kind",
+              "size_bytes",
+              "executable"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "root_digest",
+        "files",
+        "directories",
+        "symlinks",
+        "total_file_bytes",
+        "truncated",
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "result": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "enum": [
+                "action-cache",
+                "historical-execute-response"
+              ]
+            },
+            "exit_code": {
+              "type": "integer"
+            },
+            "worker": {
+              "type": "string"
+            },
+            "output_files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/output_file"
+              }
+            },
+            "output_directories": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/output_file"
+              }
+            },
+            "output_symlinks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "target"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "stdout": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/stream"
+                }
+              ]
+            },
+            "stderr": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/stream"
+                }
+              ]
+            },
+            "timing": {
+              "type": "object",
+              "properties": {
+                "queued_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "worker_start": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "worker_completed": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "queue_seconds": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "input_fetch_seconds": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "execution_seconds": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "output_upload_seconds": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "total_seconds": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "queued_at",
+                "worker_start",
+                "worker_completed",
+                "queue_seconds",
+                "input_fetch_seconds",
+                "execution_seconds",
+                "output_upload_seconds",
+                "total_seconds"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "source",
+            "exit_code",
+            "worker",
+            "output_files",
+            "output_directories",
+            "output_symlinks",
+            "stdout",
+            "stderr",
+            "timing"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "instance_name",
+    "action_digest",
+    "operation",
+    "command",
+    "platform",
+    "timeout_seconds",
+    "do_not_cache",
+    "input_root",
+    "result",
+    "message"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "output_file": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "executable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "digest",
+        "size_bytes",
+        "executable"
+      ],
+      "additionalProperties": false
+    },
+    "stream": {
+      "type": "object",
+      "properties": {
+        "digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "digest",
+        "size_bytes",
+        "text",
+        "truncated"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

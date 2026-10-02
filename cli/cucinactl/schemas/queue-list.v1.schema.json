@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/queue-list.v1.schema.json",
+  "title": "cucinactl queues",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "queue-list.v1"
+    },
+    "queues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "queue": {
+            "$ref": "#/$defs/queue_ref"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "queued": {
+            "type": "integer"
+          },
+          "executing": {
+            "type": "integer"
+          },
+          "idle_workers": {
+            "type": "integer"
+          },
+          "total_workers": {
+            "type": "integer"
+          },
+          "drains": {
+            "type": "integer"
+          },
+          "oldest_queued_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "queue_time_p95_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "queue",
+          "pool",
+          "queued",
+          "executing",
+          "idle_workers",
+          "total_workers",
+          "drains",
+          "oldest_queued_seconds",
+          "queue_time_p95_seconds"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "queues"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "queue_ref": {
+      "type": "object",
+      "properties": {
+        "instance_name": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "size_class": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instance_name",
+        "platform",
+        "size_class"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

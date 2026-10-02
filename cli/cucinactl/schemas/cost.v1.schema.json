@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/cost.v1.schema.json",
+  "title": "cucinactl cost (money in integer micro-dollars)",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "cost.v1"
+    },
+    "today_usd_micros": {
+      "type": "integer"
+    },
+    "month_to_date_usd_micros": {
+      "type": "integer"
+    },
+    "standing_per_month_usd_micros": {
+      "type": "integer"
+    },
+    "pools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pool": {
+            "type": "string"
+          },
+          "instance_seconds": {
+            "type": "integer"
+          },
+          "compute_usd_micros": {
+            "type": "integer"
+          },
+          "ebs_usd_micros": {
+            "type": "integer"
+          },
+          "data_transfer_usd_micros": {
+            "type": "integer"
+          },
+          "standing_usd_micros": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pool",
+          "instance_seconds",
+          "compute_usd_micros",
+          "ebs_usd_micros",
+          "data_transfer_usd_micros",
+          "standing_usd_micros"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pool": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "amount_usd_micros": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pool",
+          "category",
+          "detail",
+          "quantity",
+          "unit",
+          "amount_usd_micros"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "assumptions": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "today_usd_micros",
+    "month_to_date_usd_micros",
+    "standing_per_month_usd_micros",
+    "pools",
+    "lines",
+    "assumptions"
+  ],
+  "additionalProperties": false
+}

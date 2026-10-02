@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/pool-list.v1.schema.json",
+  "title": "cucinactl pools list",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "pool-list.v1"
+    },
+    "pools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/pool"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "pools"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "pool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "min_running": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        },
+        "desired": {
+          "type": "integer"
+        },
+        "launching": {
+          "type": "integer"
+        },
+        "registered": {
+          "type": "integer"
+        },
+        "busy": {
+          "type": "integer"
+        },
+        "idle": {
+          "type": "integer"
+        },
+        "draining": {
+          "type": "integer"
+        },
+        "stopped": {
+          "type": "integer"
+        },
+        "image_generation": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "platform",
+        "provider",
+        "min_running",
+        "max",
+        "desired",
+        "launching",
+        "registered",
+        "busy",
+        "idle",
+        "draining",
+        "stopped",
+        "image_generation",
+        "paused",
+        "condition",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# cucinactl: library (CLI, credential helper, bazelrc generator, management client
+# for the TUI) + binary. `cucina-credential-helper` is the same binary under another
+# name (argv[0] dispatch); release packaging adds the hardlink/copy.
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_rs//rs:rust_library.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rustfmt_test")
+load("//bazel:tiers.bzl", "cucina_rust_test")
+
+rust_library(
+    name = "cucinactl_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    aliases = aliases(),
+    # include_str!: the platform catalog and the targets catalog (ADR 0802).
+    compile_data = [
+        "data/targets.json",
+        "//platforms:pools.json",
+    ],
+    crate_name = "cucinactl",
+    crate_root = "src/lib.rs",
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "cucinactl",
+    srcs = ["src/main.rs"],
+    visibility = ["//visibility:public"],
+    deps = [":cucinactl_lib"],
+)
+
+rustfmt_test(
+    name = "rustfmt_test",
+    tags = ["tier-static"],
+    targets = [
+        ":cucinactl",
+        ":cucinactl_lib",
+    ],
+)
+
+# Unit tests inside the library (duration syntax, loopback listener).
+cucina_rust_test(
+    name = "lib_test",
+    crate = ":cucinactl_lib",
+    tier = "unit",
+    deps = all_crate_deps(normal_dev = True),
+)
+
+# Pure property test of .bazelrc generation (UC9, R-DATA-1, R-XPLAT-2(d)).
+cucina_rust_test(
+    name = "bazelrc_props_test",
+    srcs = [
+        "tests/bazelrc_props.rs",
+    ] + glob(["tests/support/*.rs"]),
+    crate_root = "tests/bazelrc_props.rs",
+    data = ["testdata/bazel-9.2-flags.txt"],
+    tier = "unit",
+    deps = all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ) + [":cucinactl_lib"],
+)
+
+# Process-level tests against in-process fakes on loopback (R-TEST-3/-5).
+[cucina_rust_test(
+    name = t + "_test",
+    srcs = ["tests/%s.rs" % t] + glob(["tests/support/*.rs"]),
+    crate_root = "tests/%s.rs" % t,
+    data = [":cucinactl"] + glob(["schemas/*.json"]),
+    env = {"CUCINACTL_BIN": "$(rootpath :cucinactl)"},
+    tier = "integration",
+    deps = all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ) + [":cucinactl_lib"],
+) for t in [
+    "credential_helper",
+    "exit_codes",
+    "json_contracts",
+    "login",
+    "watch_reconnect",
+]]

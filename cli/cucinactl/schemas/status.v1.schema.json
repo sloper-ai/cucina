@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/status.v1.schema.json",
+  "title": "cucinactl status",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "status.v1"
+    },
+    "cluster_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "protocol": {
+      "type": "string"
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "ready_replicas": {
+            "type": "integer"
+          },
+          "desired_replicas": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "state",
+          "message",
+          "ready_replicas",
+          "desired_replicas"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pools": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/pool"
+      }
+    },
+    "hosts_online": {
+      "type": "integer"
+    },
+    "hosts_total": {
+      "type": "integer"
+    },
+    "worker_instances": {
+      "type": "integer"
+    },
+    "alerts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/alert"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "cluster_id",
+    "version",
+    "protocol",
+    "components",
+    "pools",
+    "hosts_online",
+    "hosts_total",
+    "worker_instances",
+    "alerts"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "pool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "min_running": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        },
+        "desired": {
+          "type": "integer"
+        },
+        "launching": {
+          "type": "integer"
+        },
+        "registered": {
+          "type": "integer"
+        },
+        "busy": {
+          "type": "integer"
+        },
+        "idle": {
+          "type": "integer"
+        },
+        "draining": {
+          "type": "integer"
+        },
+        "stopped": {
+          "type": "integer"
+        },
+        "image_generation": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "platform",
+        "provider",
+        "min_running",
+        "max",
+        "desired",
+        "launching",
+        "registered",
+        "busy",
+        "idle",
+        "draining",
+        "stopped",
+        "image_generation",
+        "paused",
+        "condition",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "alert": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "since": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "severity",
+        "summary",
+        "since",
+        "labels"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/host-list.v1.schema.json",
+  "title": "cucinactl hosts list",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "host-list.v1"
+    },
+    "hosts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "serial": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "site": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "running_vms": {
+            "type": "integer"
+          },
+          "slots": {
+            "type": "integer"
+          },
+          "l2_hit_ratio": {
+            "type": "string"
+          },
+          "wan_bytes_received": {
+            "type": "integer"
+          },
+          "last_heartbeat": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agent_version": {
+            "type": "string"
+          },
+          "macos_version": {
+            "type": "string"
+          },
+          "tart_version": {
+            "type": "string"
+          },
+          "chip": {
+            "type": "string"
+          },
+          "cores": {
+            "type": "integer"
+          },
+          "memory_gib": {
+            "type": "integer"
+          },
+          "disk_free_gib": {
+            "type": "integer"
+          },
+          "vms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "pool": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "image": {
+                  "type": "string"
+                },
+                "generation": {
+                  "type": "string"
+                },
+                "registered": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "pool",
+                "state",
+                "image",
+                "generation",
+                "registered"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cordoned": {
+            "type": "boolean"
+          },
+          "approved": {
+            "type": "boolean"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "cert_expiry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filevault": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "serial",
+          "name",
+          "site",
+          "phase",
+          "running_vms",
+          "slots",
+          "l2_hit_ratio",
+          "wan_bytes_received",
+          "last_heartbeat",
+          "agent_version",
+          "macos_version",
+          "tart_version",
+          "chip",
+          "cores",
+          "memory_gib",
+          "disk_free_gib",
+          "vms",
+          "images",
+          "cordoned",
+          "approved",
+          "labels",
+          "cert_expiry",
+          "filevault"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "hosts"
+  ],
+  "additionalProperties": false
+}

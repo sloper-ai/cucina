@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/image-list.v1.schema.json",
+  "title": "cucinactl images",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "image-list.v1"
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "pool": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "string"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "previous": {
+            "type": "boolean"
+          },
+          "workers_running": {
+            "type": "integer"
+          },
+          "created": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fast_launch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pool",
+          "reference",
+          "version",
+          "generation",
+          "current",
+          "previous",
+          "workers_running",
+          "created",
+          "fast_launch"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "images"
+  ],
+  "additionalProperties": false
+}

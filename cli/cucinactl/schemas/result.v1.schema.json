@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/result.v1.schema.json",
+  "title": "Acknowledgement of a mutating command",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "result.v1"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "action": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "ok",
+    "action",
+    "target",
+    "message"
+  ],
+  "additionalProperties": false
+}

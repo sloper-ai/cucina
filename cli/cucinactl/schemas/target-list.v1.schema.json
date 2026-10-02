@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/target-list.v1.schema.json",
+  "title": "cucinactl bazelrc --list-targets",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "target-list.v1"
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "os": {
+            "type": "string"
+          },
+          "cpu": {
+            "type": "string"
+          },
+          "abi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default_exec_pool": {
+            "type": "string"
+          },
+          "exec_pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "test": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "pool": {
+                    "type": "string"
+                  },
+                  "runner": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pool",
+                  "runner",
+                  "mode"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "platform",
+          "os",
+          "cpu",
+          "abi",
+          "default_exec_pool",
+          "exec_pools",
+          "test"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "targets"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,371 @@
+{
+  "$comment": "FIXTURE owned by the cli agent until the cross-platform agent publishes platforms/targets.json with this schema (docs/cli.md, section Targets schema). cucinactl bazelrc --cross reads it. Labels and names here are placeholders to align.",
+  "schemaVersion": 1,
+  "execPlatforms": [
+    {
+      "name": "linux-x86-64",
+      "label": "@cucina_platforms//exec:linux-x86-64-native",
+      "pool": "linux-x86-64",
+      "runner": "native",
+      "os": "linux",
+      "cpu": "x86_64"
+    },
+    {
+      "name": "linux-aarch64",
+      "label": "@cucina_platforms//exec:linux-aarch64-native",
+      "pool": "linux-aarch64",
+      "runner": "native",
+      "os": "linux",
+      "cpu": "aarch64"
+    },
+    {
+      "name": "windows-x86-64",
+      "label": "@cucina_platforms//exec:windows-x86-64-native",
+      "pool": "windows-x86-64",
+      "runner": "native",
+      "os": "windows",
+      "cpu": "x86_64"
+    },
+    {
+      "name": "macos-arm64-xcode27.0",
+      "label": "@cucina_platforms//exec:macos-arm64-xcode27.0-xcode",
+      "pool": "macos-arm64-xcode27.0",
+      "runner": "xcode",
+      "os": "macos",
+      "cpu": "aarch64"
+    }
+  ],
+  "targets": [
+    {
+      "name": "aarch64-apple-darwin",
+      "aliases": [
+        "macos_aarch64"
+      ],
+      "platform": "@llvm//platforms:macos_aarch64",
+      "os": "macos",
+      "cpu": "aarch64",
+      "abi": null,
+      "execPlatforms": [
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_macos_aarch64",
+        "pool": "macos-arm64-xcode27.0",
+        "runner": "generic",
+        "mode": "native"
+      }
+    },
+    {
+      "name": "x86_64-linux-gnu",
+      "aliases": [
+        "linux_x86_64"
+      ],
+      "platform": "@llvm//platforms:linux_x86_64_gnu.2.28",
+      "os": "linux",
+      "cpu": "x86_64",
+      "abi": "gnu",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_x86_64_gnu.2.28",
+        "pool": "linux-x86-64",
+        "runner": "native",
+        "mode": "native"
+      }
+    },
+    {
+      "name": "x86_64-linux-musl",
+      "aliases": [],
+      "platform": "@llvm//platforms:linux_x86_64_musl",
+      "os": "linux",
+      "cpu": "x86_64",
+      "abi": "musl",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_x86_64_musl",
+        "pool": "linux-x86-64",
+        "runner": "native",
+        "mode": "native"
+      }
+    },
+    {
+      "name": "aarch64-linux-gnu",
+      "aliases": [
+        "linux_aarch64"
+      ],
+      "platform": "@llvm//platforms:linux_aarch64_gnu.2.28",
+      "os": "linux",
+      "cpu": "aarch64",
+      "abi": "gnu",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_aarch64_gnu.2.28",
+        "pool": "linux-aarch64",
+        "runner": "native",
+        "mode": "native"
+      }
+    },
+    {
+      "name": "aarch64-linux-musl",
+      "aliases": [],
+      "platform": "@llvm//platforms:linux_aarch64_musl",
+      "os": "linux",
+      "cpu": "aarch64",
+      "abi": "musl",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_aarch64_musl",
+        "pool": "linux-aarch64",
+        "runner": "native",
+        "mode": "native"
+      }
+    },
+    {
+      "name": "riscv64-linux-gnu",
+      "aliases": [
+        "linux_riscv64"
+      ],
+      "platform": "@llvm//platforms:linux_riscv64_gnu.2.33",
+      "os": "linux",
+      "cpu": "riscv64",
+      "abi": "gnu",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_riscv64_gnu.2.33",
+        "pool": "linux-x86-64",
+        "runner": "qemu-rv64g",
+        "mode": "qemu"
+      }
+    },
+    {
+      "name": "riscv64-linux-musl",
+      "aliases": [],
+      "platform": "@llvm//platforms:linux_riscv64_musl",
+      "os": "linux",
+      "cpu": "riscv64",
+      "abi": "musl",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_riscv64_musl",
+        "pool": "linux-x86-64",
+        "runner": "qemu-rv64g",
+        "mode": "qemu"
+      }
+    },
+    {
+      "name": "s390x-linux-gnu",
+      "aliases": [
+        "linux_s390x"
+      ],
+      "platform": "@llvm//platforms:linux_s390x_gnu.2.28",
+      "os": "linux",
+      "cpu": "s390x",
+      "abi": "gnu",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_s390x_gnu.2.28",
+        "pool": "linux-x86-64",
+        "runner": "qemu-s390x",
+        "mode": "qemu"
+      }
+    },
+    {
+      "name": "s390x-linux-musl",
+      "aliases": [],
+      "platform": "@llvm//platforms:linux_s390x_musl",
+      "os": "linux",
+      "cpu": "s390x",
+      "abi": "musl",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_s390x_musl",
+        "pool": "linux-x86-64",
+        "runner": "qemu-s390x",
+        "mode": "qemu"
+      }
+    },
+    {
+      "name": "armv7-linux-gnueabihf",
+      "aliases": [
+        "linux_armv7"
+      ],
+      "platform": "@llvm//platforms:linux_armv7_gnu.2.28",
+      "os": "linux",
+      "cpu": "armv7",
+      "abi": "gnu",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_armv7_gnu.2.28",
+        "pool": "linux-x86-64",
+        "runner": "qemu-arm-a32",
+        "mode": "qemu"
+      }
+    },
+    {
+      "name": "armv7-linux-musleabihf",
+      "aliases": [],
+      "platform": "@llvm//platforms:linux_armv7_musl",
+      "os": "linux",
+      "cpu": "armv7",
+      "abi": "musl",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_armv7_musl",
+        "pool": "linux-x86-64",
+        "runner": "qemu-arm-a32",
+        "mode": "qemu"
+      }
+    },
+    {
+      "name": "x86_64-windows-msvc",
+      "aliases": [],
+      "platform": "@llvm//platforms:windows_x86_64_msvc",
+      "os": "windows",
+      "cpu": "x86_64",
+      "abi": "msvc",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_windows_x86_64_msvc",
+        "pool": "windows-x86-64",
+        "runner": "native",
+        "mode": "native"
+      }
+    },
+    {
+      "name": "x86_64-windows-gnu",
+      "aliases": [
+        "windows_x86_64"
+      ],
+      "platform": "@llvm//platforms:windows_x86_64",
+      "os": "windows",
+      "cpu": "x86_64",
+      "abi": "gnu",
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_windows_x86_64",
+        "pool": "windows-x86-64",
+        "runner": "native",
+        "mode": "native"
+      }
+    },
+    {
+      "name": "wasm32-unknown-unknown",
+      "aliases": [],
+      "platform": "@llvm//platforms:none_wasm32",
+      "os": "none",
+      "cpu": "wasm32",
+      "abi": null,
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": null
+    },
+    {
+      "name": "wasm64-unknown-unknown",
+      "aliases": [],
+      "platform": "@llvm//platforms:none_wasm64",
+      "os": "none",
+      "cpu": "wasm64",
+      "abi": null,
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": null
+    },
+    {
+      "name": "bpfeb",
+      "aliases": [],
+      "platform": "@llvm//platforms:none_bpfeb",
+      "os": "none",
+      "cpu": "bpfeb",
+      "abi": null,
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": null
+    },
+    {
+      "name": "bpfel",
+      "aliases": [],
+      "platform": "@llvm//platforms:none_bpfel",
+      "os": "none",
+      "cpu": "bpfel",
+      "abi": null,
+      "execPlatforms": [
+        "linux-x86-64",
+        "linux-aarch64",
+        "windows-x86-64",
+        "macos-arm64-xcode27.0"
+      ],
+      "test": null
+    }
+  ]
+}

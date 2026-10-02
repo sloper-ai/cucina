@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/error.v1.schema.json",
+  "title": "Error document written to stderr with --output json",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "error.v1"
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "error",
+            "usage",
+            "auth_required",
+            "permission_denied",
+            "not_found",
+            "unavailable",
+            "conflict"
+          ]
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "exit_code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema",
+    "error"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+# Inputs of the generated code in this directory (written by `cargo xtask codegen`; do not edit).
+# generator: buf 1.73.0, protoc-gen-buffa 0.9.2, protoc-gen-buffa-packaging 0.9.2, protoc-gen-connect-rust 0.9.1
+c71ee891b21e3a2ba3083748212d5a78dc066b4a9dadd0535177f08a35c41680  api/proto/cucina/v1/common.proto
+3c62506b040a17f2996c029bddfdacffc60469ef091362f1461e810c872bc82c  api/proto/cucina/v1/enrollment.proto
+7fb64d269bb2c03ca7fa7d41fa9f4f35f646be5a71b1b288d31a7a88f02a2898  api/proto/cucina/v1/host.proto
+003f54ff55614406d90281c9272176e9afad22a1b83612c2641f92f84fe803a0  api/proto/cucina/v1/management.proto
+f0b237af779fd1de3a9a3a851915a09de3288538856bc5f5199701e0030cb70d  cli/cucina-api/proto/build/bazel/remote/execution/v2/remote_execution.proto
+22b2af125690142af1c8152ba3a4ca15ffaa1265111dedc6e39b5412989b5be1  cli/cucina-api/proto/build/bazel/semver/semver.proto
+c91450ed2b19bc924e486bdfc689a15042566da22e9750585907cea9e946a433  cli/cucina-api/proto/buildbarn/cas/cas.proto
+e79ea741cb605a65e78ca322174764a4af9fde1962c1631e12b84c4934ba9a6c  cli/cucina-api/proto/google/api/annotations.proto
+5e9fc117290fe7d3472791543c979bec7cf4497f3fe6ffaf9de9ae99cc4f1804  cli/cucina-api/proto/google/api/client.proto
+bb7ed77725c95f751ec2c47cd92359d0137c39383b8a62aef41bab7aa7478da5  cli/cucina-api/proto/google/api/field_behavior.proto
+ead99129aa15dd5f6233942030c72eec33bc0d7b1c7c260dc143293ef66c5b78  cli/cucina-api/proto/google/api/http.proto
+68e22c9821227b4e84c7029569fce1055c21e6ccab991e0986bc75f12ef4dd82  cli/cucina-api/proto/google/api/launch_stage.proto
+961b833f35f4bdc51df4bca017cffdba299893e89762bf8041465560106dd3d6  cli/cucina-api/proto/google/bytestream/bytestream.proto
+5d2e7f9eeb55b8417b50e0a536a092babd32d26e4fbeb7099c6cdcda6e16db9c  cli/cucina-api/proto/google/longrunning/operations.proto
+f5bfd262e6705c7ae73f32e0ad8ee20ce8c0a2578df8c4f76ebf76b572f295ed  cli/cucina-api/proto/google/rpc/status.proto

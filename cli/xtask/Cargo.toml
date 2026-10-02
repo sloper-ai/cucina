@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Developer tasks (`cargo xtask <task>`, alias in .cargo/config.toml):
+#   codegen [--check]  regenerate cli/cucina-api/src/gen/{buffa,connect} from the
+#                      .proto files with `buf generate` (buffa + connect-rust
+#                      plugins, ADR 0003); --check only diffs.
+#   docs [--check]     regenerate the command reference in docs/cli.md from clap.
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/config.v1.schema.json",
+  "title": "cucinactl config view",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "config.v1"
+    },
+    "config_dir": {
+      "type": "string"
+    },
+    "current_profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          },
+          "remote_executor": {
+            "type": "string"
+          },
+          "instance_name": {
+            "type": "string"
+          },
+          "management": {
+            "type": "string"
+          },
+          "auth": {
+            "enum": [
+              "oidc",
+              "service-key"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ca_file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential_store": {
+            "enum": [
+              "keyring",
+              "file"
+            ]
+          },
+          "logged_in": {
+            "type": "boolean"
+          },
+          "token_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "current",
+          "url",
+          "remote_executor",
+          "instance_name",
+          "management",
+          "auth",
+          "provider",
+          "ca_file",
+          "credential_store",
+          "logged_in",
+          "token_expires_at"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "config_dir",
+    "current_profile",
+    "profiles"
+  ],
+  "additionalProperties": false
+}

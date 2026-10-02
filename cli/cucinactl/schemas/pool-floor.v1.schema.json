@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/pool-floor.v1.schema.json",
+  "title": "cucinactl pools scale-floor",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "pool-floor.v1"
+    },
+    "pool": {
+      "type": "string"
+    },
+    "min_running": {
+      "type": "integer"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "pool",
+    "min_running",
+    "expires_at"
+  ],
+  "additionalProperties": false
+}

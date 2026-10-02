@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/enroll-token-list.v1.schema.json",
+  "title": "cucinactl hosts enroll-token list",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "enroll-token-list.v1"
+    },
+    "tokens": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "site": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "created": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_hosts": {
+            "type": "integer"
+          },
+          "used_hosts": {
+            "type": "integer"
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "site",
+          "description",
+          "created",
+          "expires_at",
+          "max_hosts",
+          "used_hosts",
+          "revoked"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "tokens"
+  ],
+  "additionalProperties": false
+}

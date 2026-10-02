@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/host-register.v1.schema.json",
+  "title": "cucinactl hosts register",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "host-register.v1"
+    },
+    "registered": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "already_present": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "registered",
+    "already_present"
+  ],
+  "additionalProperties": false
+}

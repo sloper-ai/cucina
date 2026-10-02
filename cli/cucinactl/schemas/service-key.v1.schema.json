@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/service-key.v1.schema.json",
+  "title": "cucinactl keys create (key shown once)",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "service-key.v1"
+    },
+    "key_id": {
+      "type": "string"
+    },
+    "account": {
+      "type": "string"
+    },
+    "key": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "key_id",
+    "account",
+    "key"
+  ],
+  "additionalProperties": false
+}

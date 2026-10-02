@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/pool-describe.v1.schema.json",
+  "title": "cucinactl pools describe",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "pool-describe.v1"
+    },
+    "pool": {
+      "$ref": "#/$defs/pool"
+    },
+    "spec": {},
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "workers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/worker"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "time",
+          "type",
+          "subject",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "starts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/start"
+      }
+    }
+  },
+  "required": [
+    "schema",
+    "pool",
+    "spec",
+    "conditions",
+    "workers",
+    "events",
+    "starts"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "pool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "min_running": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        },
+        "desired": {
+          "type": "integer"
+        },
+        "launching": {
+          "type": "integer"
+        },
+        "registered": {
+          "type": "integer"
+        },
+        "busy": {
+          "type": "integer"
+        },
+        "idle": {
+          "type": "integer"
+        },
+        "draining": {
+          "type": "integer"
+        },
+        "stopped": {
+          "type": "integer"
+        },
+        "image_generation": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "condition": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "platform",
+        "provider",
+        "min_running",
+        "max",
+        "desired",
+        "launching",
+        "registered",
+        "busy",
+        "idle",
+        "draining",
+        "stopped",
+        "image_generation",
+        "paused",
+        "condition",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "worker": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "string"
+        },
+        "pool": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "instance_type": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "threads": {
+          "type": "integer"
+        },
+        "busy_threads": {
+          "type": "integer"
+        },
+        "drained": {
+          "type": "boolean"
+        },
+        "launched": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idle_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "private_ip": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "node",
+        "pool",
+        "state",
+        "generation",
+        "instance_type",
+        "host",
+        "threads",
+        "busy_threads",
+        "drained",
+        "launched",
+        "idle_seconds",
+        "private_ip"
+      ],
+      "additionalProperties": false
+    },
+    "start": {
+      "type": "object",
+      "properties": {
+        "pool": {
+          "type": "string"
+        },
+        "vm": {
+          "type": "string"
+        },
+        "launched": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "to_running_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "to_registered_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "to_first_action_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pool",
+        "vm",
+        "launched",
+        "to_running_seconds",
+        "to_registered_seconds",
+        "to_first_action_seconds",
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

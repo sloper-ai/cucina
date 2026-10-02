@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/file.v1.schema.json",
+  "title": "A file written by cucinactl diag / hosts diag",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "file.v1"
+    },
+    "path": {
+      "type": "string"
+    },
+    "bytes": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema",
+    "path",
+    "bytes"
+  ],
+  "additionalProperties": false
+}

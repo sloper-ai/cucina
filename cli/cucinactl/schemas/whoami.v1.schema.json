@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sloper-ai/cucina/cli/cucinactl/schemas/whoami.v1.schema.json",
+  "title": "cucinactl whoami",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": "whoami.v1"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "method": {
+      "enum": [
+        "oidc",
+        "service-key"
+      ]
+    },
+    "subject": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "issuer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expires_at": {
+      "type": "string"
+    },
+    "expires_in_seconds": {
+      "type": "integer"
+    },
+    "grants": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "verification_error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "profile",
+    "url",
+    "method",
+    "subject",
+    "issuer",
+    "session_id",
+    "expires_at",
+    "expires_in_seconds",
+    "grants",
+    "verified",
+    "verification_error"
+  ],
+  "additionalProperties": false
+}
