@@ -15,10 +15,11 @@ import (
 type Status string
 
 const (
-	StatusPass  Status = "pass"
-	StatusFail  Status = "fail"
-	StatusSkip  Status = "skip"
-	StatusError Status = "error" // harness or environment error (not a product verdict)
+	StatusPass           Status = "pass"
+	StatusFunctionalPass Status = "functional-pass" // ADR0004 scope only; not full performance qualification
+	StatusFail           Status = "fail"
+	StatusSkip           Status = "skip"
+	StatusError          Status = "error" // harness or environment error (not a product verdict)
 )
 
 // Metric is one recorded number.
@@ -39,6 +40,7 @@ type NFRResult struct {
 	Detail   string  `json:"detail,omitempty"`
 	// Unqualified preserves diagnostic numbers without claiming acceptance.
 	Unqualified string `json:"unqualified,omitempty"`
+	WaivedBy    string `json:"waivedBy,omitempty"`
 }
 
 // CheckResult is the outcome of one post-condition.
@@ -79,7 +81,8 @@ type Artifact struct {
 
 // CostRecord is the spend attributed to the scenario.
 type CostRecord struct {
-	Unpriced    []string           `json:"unpriced,omitempty"` // incomplete compute prices; never a zero-cost claim
+	Incomplete  bool               `json:"incomplete,omitempty"` // sampler/pricing gaps; amount is only a lower bound
+	Unpriced    []string           `json:"unpriced,omitempty"`   // incomplete compute prices; never a zero-cost claim
 	EstimateUSD float64            `json:"estimateUSD"`
 	MeasuredUSD float64            `json:"measuredUSD"`
 	Items       map[string]float64 `json:"items,omitempty"` // e.g. "ec2:c8i.8xlarge", "ebs:gp3"

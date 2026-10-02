@@ -101,6 +101,31 @@ func TestGovernorProjection(t *testing.T) {
 	require.True(t, g.Decide(ess, Safety{AllowOverBudget: true}).Admit)
 	require.False(t, g.Decide(scenario(func(s *Scenario) { s.EstimateUSD = 50 }), Safety{AllowOverBudget: true}).Admit)
 	require.False(t, g.Decide(scenario(func(s *Scenario) { s.EstimateUSD = 5 }), Safety{MaxSpendUSD: 100}).Admit, "a lower descriptor limit wins")
+	for _, known := range []float64{5, 50} {
+		for _, samplerGap := range []bool{false, true} {
+			e := awsEnv()
+			g := &Governor{L: Ledger{BudgetUSD: 300}}
+			reg := NewRegistry()
+			reg.Register(scenario(func(s *Scenario) {
+				s.EstimateUSD = 20
+				s.Run = func(c *Context) error {
+					c.Result.Cost.MeasuredUSD = known
+					if samplerGap {
+						c.Result.Cost.Incomplete = true
+					} else {
+						c.Result.Cost.Unpriced = []string{"unknown.large"}
+					}
+					return nil
+				}
+			}))
+			_, err := (&Runner{Registry: reg, Env: e, Governor: g}).Run(context.Background(), "T1")
+			require.NoError(t, err)
+			require.InDelta(t, max(known, 20), g.SpentUSD(), 1e-9, "incomplete costs retain both known lower bound and reservation")
+		}
+	}
+	incomplete := &Governor{L: Ledger{BudgetUSD: 300}}
+	require.NoError(t, incomplete.Record("unpriced", time.Unix(0, 0), 17, 0))
+	require.InDelta(t, 17.0, incomplete.SpentUSD(), 1e-9, "unmeasured spend must retain the conservative estimate, not become zero")
 }
 
 // Guards R-TEST-8d's result contract: run → status from the error kind and
@@ -149,24 +174,64 @@ func TestRunnerStatus(t *testing.T) {
 	require.Contains(t, results[2].Error, "NFR-P1 (linux) missed")
 	require.Contains(t, results[6].SkipReason, "requires idp")
 	require.Len(t, results[0].Checks, 2)
-	// A successful small-runner timing ratio does not qualify the original
-	// max-four large-worker benchmark, even when its arithmetic target holds.
-	small := awsEnv()
-	small.MeasurementScope = ScopeSmallFunctional
-	reg2 := NewRegistry()
-	reg2.Register(scenario(func(s *Scenario) {
-		s.NFRs = []string{"NFR-P2"}
-		s.Run = func(c *Context) error {
-			c.NFR(NFRResult{ID: "NFR-P2", Pass: true, Measured: 40, Unit: "%", Target: "<=50%"})
-			return nil
-		}
-	}))
-	res, err := (&Runner{Registry: reg2, Env: small}).Run(context.Background(), "T1")
-	require.NoError(t, err)
-	require.Equal(t, StatusSkip, res.Status)
-	require.Equal(t, ScopeSmallFunctional, res.MeasurementScope)
-	require.NotEmpty(t, res.NFRs[0].Unqualified)
-	require.False(t, res.NFRs[0].Pass)
+	// ADR0004 waives only P2 in explicit small-functional scope. All other
+	// functional evidence, and P2 in the original scope, remain mandatory.
+	for _, tc := range []struct {
+		name, scope                                                      string
+		p2Present, p2Pass, otherMissing, otherFail, checkSkip, checkFail bool
+		want                                                             Status
+	}{
+		{name: "small P2 passes arithmetic", scope: ScopeSmallFunctional, p2Present: true, p2Pass: true, want: Status("functional-pass")},
+		{name: "small P2 fails arithmetic", scope: ScopeSmallFunctional, p2Present: true, want: Status("functional-pass")},
+		{name: "small no worker benchmark", scope: ScopeSmallFunctional, want: Status("functional-pass")},
+		{name: "full missing P2", want: StatusFail},
+		{name: "full failed P2", p2Present: true, want: StatusFail},
+		{name: "full passed P2", p2Present: true, p2Pass: true, want: StatusPass},
+		{name: "unknown scope has no waiver", scope: "other", want: StatusFail},
+		{name: "small missing other NFR", scope: ScopeSmallFunctional, otherMissing: true, want: StatusFail},
+		{name: "small failed other NFR", scope: ScopeSmallFunctional, otherFail: true, want: StatusFail},
+		{name: "small skipped mandatory check", scope: ScopeSmallFunctional, checkSkip: true, want: StatusSkip},
+		{name: "small failed mandatory check", scope: ScopeSmallFunctional, checkFail: true, want: StatusFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := awsEnv()
+			e.MeasurementScope = tc.scope
+			reg2 := NewRegistry()
+			reg2.Register(scenario(func(s *Scenario) {
+				s.NFRs = []string{"NFR-P2"}
+				if tc.otherMissing || tc.otherFail {
+					s.NFRs = append(s.NFRs, "NFR-P1")
+				}
+				if tc.checkSkip {
+					s.Post = []Check{unavailable}
+				}
+				if tc.checkFail {
+					s.Post = []Check{bad}
+				}
+				s.Run = func(c *Context) error {
+					if tc.p2Present {
+						c.NFR(NFRResult{ID: "NFR-P2", Pass: tc.p2Pass, Measured: 40, Unit: "%", Target: "<=50%"})
+					}
+					if tc.otherFail {
+						c.NFR(NFRResult{ID: "NFR-P1", Pass: false})
+					}
+					return nil
+				}
+			}))
+			res, err := (&Runner{Registry: reg2, Env: e}).Run(context.Background(), "T1")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, res.Status)
+			if tc.want == Status("functional-pass") {
+				require.Equal(t, ScopeSmallFunctional, res.MeasurementScope)
+				require.Len(t, res.NFRs, 1)
+				require.Contains(t, res.NFRs[0].Unqualified, "ADR0004")
+				require.False(t, res.NFRs[0].Pass)
+				dep := scenario(func(s *Scenario) { s.ID = "T7"; s.DependsOn = []string{"T1"} })
+				require.Empty(t, (&Runner{Env: e}).Preflight(dep, map[string]*Result{"T1": res}))
+				require.NotEmpty(t, (&Runner{Env: awsEnv()}).Preflight(dep, map[string]*Result{"T1": res}), "functional pass cannot satisfy original-scope qualification")
+			}
+		})
+	}
 }
 
 // Guards the descriptor contract: unknown fields fail fast, AWS environments

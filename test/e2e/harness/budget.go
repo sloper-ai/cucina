@@ -22,6 +22,7 @@ type LedgerEntry struct {
 	At          time.Time `json:"at"`
 	EstimateUSD float64   `json:"estimateUSD"`
 	MeasuredUSD float64   `json:"measuredUSD"`
+	Incomplete  bool      `json:"incomplete,omitempty"`
 }
 
 // Ledger is the persisted spend state of a campaign run. It lives in the
@@ -83,7 +84,8 @@ func OpenGovernor(path string, budgetUSD, reserveUSD float64) (*Governor, error)
 }
 
 // SpentUSD is the best current estimate of spend so far: the AWS-measured
-// actual if available and larger, else the sum of scenario measurements.
+// actual if available and larger, else the sum of scenario measurements (or
+// conservative estimates where cost remains unmeasured/incomplete).
 func (g *Governor) SpentUSD() float64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -93,7 +95,13 @@ func (g *Governor) SpentUSD() float64 {
 func (g *Governor) spent() float64 {
 	var sum float64
 	for _, e := range g.L.Entries {
-		sum += e.MeasuredUSD
+		if e.Incomplete {
+			sum += max(e.MeasuredUSD, e.EstimateUSD)
+		} else if e.MeasuredUSD > 0 {
+			sum += e.MeasuredUSD
+		} else {
+			sum += e.EstimateUSD
+		}
 	}
 	if g.L.ActualUSD > sum {
 		return g.L.ActualUSD
@@ -131,9 +139,18 @@ func (g *Governor) Decide(s *Scenario, safety Safety) Decision {
 
 // Record stores a scenario's estimate and measured spend and persists.
 func (g *Governor) Record(id string, at time.Time, estimate, measured float64) error {
+	return g.record(id, at, estimate, measured, false)
+}
+
+// RecordIncomplete preserves the known lower bound while holding at least the
+// original reservation. Missing one price cannot erase already observed spend.
+func (g *Governor) RecordIncomplete(id string, at time.Time, estimate, measured float64) error {
+	return g.record(id, at, estimate, measured, true)
+}
+func (g *Governor) record(id string, at time.Time, estimate, measured float64, incomplete bool) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.L.Entries = append(g.L.Entries, LedgerEntry{ID: id, At: at, EstimateUSD: estimate, MeasuredUSD: measured})
+	g.L.Entries = append(g.L.Entries, LedgerEntry{ID: id, At: at, EstimateUSD: estimate, MeasuredUSD: measured, Incomplete: incomplete})
 	g.L.UpdatedAt = at
 	return g.save()
 }

@@ -52,7 +52,7 @@ func (r *Runner) Preflight(s *Scenario, prior map[string]*Result) string {
 		switch {
 		case !ok:
 			return fmt.Sprintf("depends on %s, which has not run in run %s", dep, env.RunID)
-		case p.Status != StatusPass:
+		case p.Status != StatusPass && (p.Status != StatusFunctionalPass || env.MeasurementScope != ScopeSmallFunctional || p.MeasurementScope != ScopeSmallFunctional):
 			return fmt.Sprintf("depends on %s, which ended %s", dep, p.Status)
 		}
 	}
@@ -122,11 +122,25 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	runErr := safeRun(s.Run, c)
 	status := Classify(runErr)
+	waivedP2 := false
 	if r.Env.MeasurementScope == ScopeSmallFunctional {
-		for i := range res.NFRs {
-			if res.NFRs[i].ID == "NFR-P2" {
-				res.NFRs[i].Unqualified = "small-functional scope: original pool-max-four large-worker performance topology was not exercised"
-				res.NFRs[i].Pass = false
+		for _, id := range s.NFRs {
+			if id == "NFR-P2" {
+				waivedP2 = true
+			}
+		}
+		if waivedP2 {
+			found := false
+			for i := range res.NFRs {
+				if res.NFRs[i].ID == "NFR-P2" {
+					found = true
+					res.NFRs[i].Pass = false
+					res.NFRs[i].Unqualified = "ADR0004: small-functional scope does not exercise the original max-four large-worker topology"
+					res.NFRs[i].WaivedBy = "ADR0004"
+				}
+			}
+			if !found {
+				res.NFRs = append(res.NFRs, NFRResult{ID: "NFR-P2", Target: "original max-four worker performance comparison", Unqualified: "ADR0004: original worker-type comparison not required in small-functional scope", WaivedBy: "ADR0004"})
 			}
 		}
 	}
@@ -177,7 +191,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 			if status == StatusPass {
 				var missing []string
 				for _, n := range res.NFRs {
-					if n.Unqualified != "" {
+					if n.Unqualified != "" && (!waivedP2 || n.ID != "NFR-P2" || n.WaivedBy != "ADR0004") {
 						missing = append(missing, n.ID+": "+n.Unqualified)
 					}
 				}
@@ -194,13 +208,18 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 		}
 	}
 	if r.Governor != nil && r.Env.Has(RequiresAWS) {
-		cost := res.Cost.MeasuredUSD
-		if len(res.Cost.Unpriced) > 0 {
-			cost = 0
-		} // retain the reservation when measured cost is incomplete
-		if err := r.Governor.Record(s.ID, now(), s.EstimateUSD, cost); err != nil {
+		record := r.Governor.Record
+		if res.Cost.Incomplete || len(res.Cost.Unpriced) > 0 {
+			res.Cost.Incomplete = true
+			record = r.Governor.RecordIncomplete
+		}
+		if err := record(s.ID, now(), s.EstimateUSD, res.Cost.MeasuredUSD); err != nil {
 			res.Notes = append(res.Notes, "budget ledger: "+err.Error())
 		}
+	}
+	if status == StatusPass && waivedP2 {
+		status = StatusFunctionalPass
+		res.Notes = append(res.Notes, "FUNCTIONAL PASS under ADR0004/small-functional; original NFR-P2 remains unqualified, not passed")
 	}
 	return finish(status)
 }

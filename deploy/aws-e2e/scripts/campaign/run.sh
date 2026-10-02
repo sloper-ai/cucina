@@ -48,7 +48,7 @@ scenario() {
   result=$results/result-$id.json
   if [ ! -f "$result" ]; then echo "   $id ERROR: no result written"; status=1; continue; fi
   jq -r '"   "+.id+" "+(.status|ascii_upcase)+": "+(.skipReason // .error // "")' "$result"
-  if ! jq -e '.status=="pass"' "$result" >/dev/null; then status=1; fi
+  if ! jq -e '.status=="pass" or (.status=="functional-pass" and .measurementScope=="small-functional")' "$result" >/dev/null; then status=1; fi
  done
 }
 preflight() {

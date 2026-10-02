@@ -16,8 +16,10 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/sloper-ai/cucina/test/e2e/harness"
@@ -66,12 +68,16 @@ func TestScenario(t *testing.T) {
 		Log: slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	defer func() { _ = runner.Close() }()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	for _, id := range ids {
-		res, err := runner.Run(context.Background(), strings.TrimSpace(id))
+		res, err := runner.Run(ctx, strings.TrimSpace(id))
 		if err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
 		switch res.Status {
+		case harness.StatusFunctionalPass:
+			t.Logf("%s FUNCTIONAL PASS in %s (ADR0004; original NFR-P2 unqualified)", res.ID, res.Duration)
 		case harness.StatusPass:
 			t.Logf("%s PASS in %s", res.ID, res.Duration)
 		case harness.StatusSkip:

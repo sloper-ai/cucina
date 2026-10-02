@@ -56,8 +56,8 @@ func Render(in Input) string {
 		nc[r.Status]++
 	}
 	spent, items := spend(in)
-	w("Run `%s` · %d scenarios: **%d pass**, %d fail, %d skip, %d error · NFRs: **%d pass**, %d fail, %d partial, %d not measured · spend **$%.2f** of $%.0f.\n\n",
-		in.RunID, len(in.Results), counts[harness.StatusPass], counts[harness.StatusFail], counts[harness.StatusSkip], counts[harness.StatusError],
+	w("Run `%s` · %d scenarios: **%d pass**, %d functional pass, %d fail, %d skip, %d error · NFRs: **%d pass**, %d fail, %d partial, %d not measured · spend **$%.2f** of $%.0f.\n\n",
+		in.RunID, len(in.Results), counts[harness.StatusPass], counts[harness.StatusFunctionalPass], counts[harness.StatusFail], counts[harness.StatusSkip], counts[harness.StatusError],
 		nc[nfr.Pass], nc[nfr.Fail], nc[nfr.Partial], nc[nfr.NotMeasured], spent, in.BudgetUSD)
 
 	w("## NFR results\n\n| NFR | Target | Status | Measured | Scenarios |\n| --- | --- | --- | --- | --- |\n")
