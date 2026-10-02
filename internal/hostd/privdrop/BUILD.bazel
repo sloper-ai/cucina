@@ -6,6 +6,7 @@ load("//bazel:tiers.bzl", "cucina_go_test")
 go_library(
     name = "privdrop",
     srcs = [
+        "exec_other.go",
         "exec_unix.go",
         "privdrop.go",
     ],

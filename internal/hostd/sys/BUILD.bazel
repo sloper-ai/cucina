@@ -1,14 +1,37 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
 load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
 
 go_library(
     name = "sys",
-    srcs = ["sys.go"],
+    srcs = [
+        "disk_windows.go",
+        "exec_other.go",
+        "sys.go",
+        "sys_unix.go",
+    ],
     importpath = "github.com/sloper-ai/cucina/internal/hostd/sys",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/hostd/privdrop",
         "//internal/ports",
+    ] + select({
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_sys//windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+cucina_go_test(
+    name = "sys_test",
+    srcs = ["sys_test.go"],
+    tier = "integration",
+    deps = [
+        ":sys",
+        "//internal/hostd/privdrop",
+        "//internal/ports",
+        "@com_github_stretchr_testify//require",
     ],
 )
