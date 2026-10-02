@@ -326,20 +326,7 @@ mod tests {
     /// one): newer readers must keep accepting it.
     const FIXTURE: &str = include_str!("../data/targets.json");
 
-    #[test]
-    fn embedded_catalogs_are_consistent() {
-        let c = Catalog::embedded().expect("embedded catalogs");
-        assert!(c.targets.targets.iter().any(|t| t.excluded));
-        assert!(c.targets.targets.iter().any(|t| t.test_timeouts().is_some()));
-        let mac = c.target("aarch64-apple-darwin").expect("macOS target");
-        assert!(!mac.excluded);
-        assert_eq!(
-            c.exec_platform(&mac.exec_platforms[0]).unwrap().os,
-            "macos",
-            "macOS compiles on macOS"
-        );
-    }
-
+    // Guards: schemaVersion 1 stays additive (ADR 0900).
     #[test]
     fn minimal_schema_one_fixture_still_parses() {
         let c = Catalog::parse(POOLS_JSON, FIXTURE).expect("fixture");
@@ -355,31 +342,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn excluded_rows_are_found_and_explained() {
-        let c = Catalog::embedded().unwrap();
-        for alias in ["x86_64-apple-darwin", "macos_x86_64", "windows_aarch64_msvc"] {
-            let t = c.target(alias).expect(alias);
-            let why = t.exclusion().expect("excluded");
-            assert!(!why.is_empty());
-        }
-    }
-
-    #[test]
-    fn timeouts_scale_bazels_defaults() {
-        let c = Catalog::embedded().unwrap();
-        let rv = c.target("riscv64-linux-gnu").unwrap();
-        assert_eq!(rv.test_timeout_scale, Some(10.0));
-        assert_eq!(rv.test_timeouts(), Some([600, 3000, 9000, 36000]));
-        let mut half = rv.clone();
-        half.test_timeout_scale = Some(2.5);
-        assert_eq!(half.test_timeouts(), Some([150, 750, 2250, 9000]));
-        half.test_timeout_scale = Some(1.0);
-        assert_eq!(half.test_timeouts(), None);
-        let wasm = c.target("wasm32-unknown-unknown").unwrap();
-        assert_eq!(wasm.test_timeouts(), None, "build-only targets have no tests");
-    }
-
+    // Guards: invalid placement catalogs fail before producing usable Bazel flags.
     #[test]
     fn inconsistent_catalogs_are_rejected() {
         let base: serde_json::Value = serde_json::from_str(TARGETS_JSON).unwrap();
@@ -390,7 +353,10 @@ mod tests {
         };
         assert!(broken(&|v| v["execPlatforms"][0]["runner"] = "nope".into()).is_err());
         assert!(broken(&|v| v["execPlatforms"][0]["flags"] = serde_json::json!(["x"])).is_err());
-        assert!(broken(&|v| v["targets"][0]["execPlatforms"] = serde_json::json!(["linux-x86-64"])).is_err());
+        assert!(
+            broken(&|v| v["targets"][0]["execPlatforms"] = serde_json::json!(["linux-x86-64"]))
+                .is_err()
+        );
         assert!(broken(&|v| v["targets"][1]["testTimeoutScale"] = serde_json::json!(-1)).is_err());
         assert!(broken(&|v| v["schemaVersion"] = 2.into()).is_err());
     }

@@ -87,6 +87,8 @@ axum = { workspace = true, features = ["json", "form"] }
 insta.workspace = true
 predicates.workspace = true
 proptest.workspace = true
+# Throwaway private CA/server certificates for TLS transport tests (ADR 0808).
+rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 # Fake REAPI/management servers in tests (connect-rust server, gRPC protocol).
 connectrpc = { version = "=0.9.1", features = ["client", "client-tls", "server"] }
 

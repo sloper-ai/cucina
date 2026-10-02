@@ -7,6 +7,7 @@ load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("@rules_rs//rs:rust_library.bzl", "rust_library")
 load("@rules_rust//rust:defs.bzl", "rustfmt_test")
 load("//bazel:tiers.bzl", "cucina_rust_test")
+load("//bazel/release:stamp.bzl", "RUST_VERSION_ENV_FILES")
 
 rust_library(
     name = "cucinactl_lib",
@@ -15,15 +16,15 @@ rust_library(
         exclude = ["src/main.rs"],
     ),
     aliases = aliases(),
-    # include_str!: the platform catalogs (ADR 0807); data/targets.json is the
-    # minimal schema-1 fixture of the unit tests (#[cfg(test)] only).
+    # include_str!: the real platform catalogs (ADR 0807).
     compile_data = [
-        "data/targets.json",
         "//platforms:pools.json",
         "//platforms:targets.json",
     ],
     crate_name = "cucinactl",
     crate_root = "src/lib.rs",
+    rustc_env_files = RUST_VERSION_ENV_FILES,
+    stamp = -1,
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True),
 )
@@ -44,10 +45,11 @@ rustfmt_test(
     ],
 )
 
-# Unit tests inside the library (catalogs, bazelrc, proxy matching, duration syntax,
-# loopback listener).
+# Library checks: catalog validation/compatibility, duration syntax and loopback binding.
 cucina_rust_test(
     name = "lib_test",
+    # The minimal schema-1 fixture is consumed only by #[cfg(test)].
+    compile_data = ["data/targets.json"],
     crate = ":cucinactl_lib",
     tier = "unit",
     deps = all_crate_deps(normal_dev = True),

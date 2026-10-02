@@ -47,7 +47,7 @@ impl Http {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .connect_timeout(Duration::from_secs(10).min(timeout))
-            .user_agent(concat!("cucinactl/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("cucinactl/{}", crate::VERSION))
             .tls_backend_preconfigured(tls)
             .build()
             .context("building the HTTP client")?;

@@ -152,7 +152,9 @@ build --credential_helper=cucina.example.com=%workspace%/tools/cucina-credential
 ```
 
 `cucinactl bazelrc` emits this line (with the installed helper's absolute path, or
-`--helper-path`). Never also set `Authorization` with `--remote_header`. Principals
+`--helper-path`). For stored profiles the helper also checks the request host before
+returning or renewing a token; `CUCINA_PROFILE` selects a profile but does not bypass that
+check. Never also set `Authorization` with `--remote_header`. Principals
 without `ac-write` must set `--remote_upload_local_results=false` (`bazelrc --read-only`):
 Bazel refreshes credentials once on `UNAUTHENTICATED`/`PERMISSION_DENIED`, and a denied
 upload would otherwise loop.
@@ -282,7 +284,9 @@ watch`, `workers logs`) print JSON lines. There is no YAML. Every document has a
 `schema` field naming its JSON Schema in `cli/cucinactl/schemas/` (contract-tested
 against real command output). Conventions: snake_case fields, timestamps as RFC 3339
 UTC strings or `null`, durations as seconds (numbers), money as integer micro-dollars
-(`*_usd_micros`). Errors go to stderr; with `--output json` as an `error.v1` document.
+(`*_usd_micros`). Errors go to stderr; with `--output json` as one `error.v1` document.
+JSON mode suppresses tracing logs by default (including TLS-library diagnostics); explicitly
+setting `--verbose` or `CUCINA_LOG` enables diagnostic logs on stderr alongside that error.
 
 | Schema | Commands |
 | --- | --- |

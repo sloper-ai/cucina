@@ -38,3 +38,11 @@ Behind a proxy, cucinactl and the credential helper reach Cucina without extra f
 own connections are configured in Bazel. The test certificates satisfy webpki and Apple's
 TLS server certificate rules (SAN, `serverAuth`, 30-day validity, P-256/SHA-256). Revisit if
 connect-rust gains proxy support.
+
+## Implementation follow-up (2026-10-02)
+The test-fixture bullet above is superseded: `tests/support/test_ca.rs` now uses dev-only
+`rcgen = 0.14.10` (MIT/Apache-2.0; `default-features = false`, `aws_lc_rs`, `pem`) rather
+than maintaining DER/X.509 code. It still generates keys/certificates per run, retains keys
+only in memory and tests the same trust boundary. `Cargo.lock` includes rcgen's dependency
+closure; the production binary does not depend on rcgen and `ring` remains absent. The
+integration table covers both HTTP and HTTPS proxy URLs and `NO_PROXY` bypass.

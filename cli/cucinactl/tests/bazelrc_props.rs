@@ -669,4 +669,29 @@ fn unsupported_placements_are_refused() {
             "{name}: {code:?}"
         );
     }
+    // Excluded rows are found by every supported spelling and explain the exact
+    // catalog reason, rather than looking unknown or claiming a missing platform.
+    for target in cat.targets.targets.iter().filter(|t| t.excluded) {
+        for name in std::iter::once(&target.name)
+            .chain(&target.aliases)
+            .chain(std::iter::once(&target.platform))
+        {
+            let req = Request {
+                mode: Mode::Cross {
+                    target: name.clone(),
+                    exec_pool: None,
+                },
+                ..base.clone()
+            };
+            let err = bazelrc::generate(cat, &req).expect_err(name);
+            assert_eq!(
+                cucinactl::exit::exit_code_for(&err),
+                cucinactl::exit::ExitCode::Usage
+            );
+            assert!(
+                err.to_string().contains(target.reason.as_deref().unwrap()),
+                "{name}: {err}"
+            );
+        }
+    }
 }

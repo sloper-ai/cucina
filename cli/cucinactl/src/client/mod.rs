@@ -126,8 +126,9 @@ pub fn channel(opts: &ConnectOptions) -> Result<Channel> {
     };
     let connection = match (connector::proxy_for(&uri), tls_config) {
         (Some(route), config) => {
-            let tunnel = connector::TunnelConnector::new(route, &uri, config)
-                .map_err(|e| CliError::usage(e.to_string()))?;
+            let tunnel =
+                connector::TunnelConnector::new(route, &uri, config, opts.ca_file.as_deref())
+                    .map_err(|e| CliError::usage(e.to_string()))?;
             builder.lazy_with_connector(tunnel, uri.clone())
         }
         (None, Some(config)) => builder.lazy_tls(uri.clone(), Arc::new(config)),

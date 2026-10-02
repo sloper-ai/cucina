@@ -101,6 +101,22 @@ fn protocol_output_is_exact_for_every_invocation_form() {
     }
     // Whole seconds, UTC, no fraction (Bazel's yyyy-MM-dd'T'HH:mm:ssXXX).
     assert!(expires.len() == 20 && expires.ends_with('Z') && !expires.contains('.'));
+
+    // Guards: R-AUTH-8 host scoping — explicitly choosing a profile must not release
+    // its token for an unrelated host (e.g. another repository's download or BES).
+    for selected in [None, Some("prod")] {
+        let mut c = command_at(&bin(), cfg.path());
+        c.args(["credential-helper", "get"]);
+        if let Some(profile) = selected {
+            c.env("CUCINA_PROFILE", profile);
+        }
+        let out = run(c, r#"{"uri":"https://unrelated.example/download"}"#);
+        assert_eq!(out.status.code(), Some(3), "profile={selected:?}");
+        assert!(
+            out.stdout.is_empty(),
+            "never disclose a token to an unrelated host"
+        );
+    }
 }
 
 // R-AUTH-8: without a valid session the helper never prompts; it tells the user to

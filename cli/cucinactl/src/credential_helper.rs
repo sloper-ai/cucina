@@ -122,11 +122,13 @@ pub fn get(input: &str) -> Result<String> {
         Some(name) => Some(config.select(Some(&name))?),
         None => config.profile_for_host(&host),
     };
-    let (name, profile) = selected.ok_or_else(|| {
-        CliError::auth_required(format!(
-            "no cucinactl profile for {host}; run `cucinactl login https://{host}`"
-        ))
-    })?;
+    let (name, profile) = selected
+        .filter(|(_, p)| p.remote_host().as_deref() == Some(host.as_str()))
+        .ok_or_else(|| {
+            CliError::auth_required(format!(
+                "no matching cucinactl profile for {host}; run `cucinactl login https://{host}`"
+            ))
+        })?;
     let ctx = ProfileCtx::new(&paths, &name, &profile);
 
     // Fast path: no runtime, no network, no keychain.

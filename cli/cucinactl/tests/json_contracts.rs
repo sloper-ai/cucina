@@ -325,47 +325,87 @@ async fn every_json_output_matches_its_schema() {
         "blobs are read as compressed-blobs/zstd when the server advertises ZSTD"
     );
 
-    // `action inspect <operation>`: a just-failed operation's ExecuteResponse (which the
-    // action cache never stores) is used; without one the action cache answers.
-    {
-        let mut failed = support::fake_mgmt::operation();
-        failed.name = "op-failed".into();
-        failed.action_digest = digest.clone();
-        failed.stage = "completed".into();
-        let mut cached = failed.clone();
-        cached.name = "op-cached".into();
-        let mut ops = mgmt.state.operations.lock().unwrap();
-        ops.push(failed);
-        ops.push(cached);
-    }
-    let stderr = reapi.put(b"error: the build broke\n");
-    mgmt.state.execute_responses.lock().unwrap().insert(
-        "op-failed".into(),
-        buffa::Message::encode_to_vec(&re::ExecuteResponse {
-            result: re::ActionResult {
-                exit_code: 2,
-                stderr_digest: stderr.into(),
-                ..Default::default()
-            }
-            .into(),
-            message: "exit status 2".into(),
+    // Guards: UC13/T20 — the scheduler's completed response makes uncached failures
+    // inspectable. A missing response falls back to AC; a terminal execution error
+    // without a result must not pick up an older cache entry for the same action.
+    let action_digest = cucinactl::client::reapi::parse_digest(&digest).unwrap();
+    let mut cached = reapi.store.action_results.lock().unwrap()[&action_digest.hash].clone();
+    cached.exit_code = 0;
+    let mut failed = cached.clone();
+    failed.exit_code = 2;
+    failed.stderr_digest = reapi.put(b"error: the build broke\n").into();
+    let failure = re::ExecuteResponse {
+        result: failed.into(),
+        ..Default::default()
+    };
+    let rejected = re::ExecuteResponse {
+        status: cucina_api::proto::google::rpc::Status {
+            code: 9,
+            message: "worker image unavailable".into(),
             ..Default::default()
-        }),
-    );
-    for (op, source, exit_code) in [
-        ("op-failed", "execute-response", 2),
-        ("op-cached", "action-cache", 1),
+        }
+        .into(),
+        ..Default::default()
+    };
+    let hit = re::ExecuteResponse {
+        result: cached.clone().into(),
+        cached_result: true,
+        ..Default::default()
+    };
+    for (op, response, has_cache, expected) in [
+        (
+            "op-failed",
+            Some(failure),
+            false,
+            Some(("execute-response", 2)),
+        ),
+        ("op-rejected", Some(rejected), true, None),
+        ("op-cached", None, true, Some(("action-cache", 0))),
+        ("op-cache-hit", Some(hit), false, Some(("action-cache", 0))),
+        ("op-forgotten", None, false, None),
     ] {
+        {
+            let mut summary = support::fake_mgmt::operation();
+            summary.name = op.into();
+            summary.action_digest = digest.clone();
+            summary.stage = "completed".into();
+            mgmt.state.operations.lock().unwrap().push(summary);
+            if let Some(response) = response {
+                mgmt.state
+                    .execute_responses
+                    .lock()
+                    .unwrap()
+                    .insert(op.into(), buffa::Message::encode_to_vec(&response));
+            }
+            let mut cache = reapi.store.action_results.lock().unwrap();
+            cache.clear();
+            if has_cache {
+                cache.insert(action_digest.hash.clone(), cached.clone());
+            }
+        }
         let dir_path = dir.path().to_path_buf();
-        let docs = tokio::task::spawn_blocking(move || {
-            run_json(&dir_path, &["action", "inspect", op])
-        })
-        .await
-        .unwrap();
-        schema::assert_valid("action.v1", &docs[0]);
-        assert_eq!(docs[0]["operation"]["name"], op);
-        assert_eq!(docs[0]["result"]["source"], source, "{op}");
-        assert_eq!(docs[0]["result"]["exit_code"], exit_code, "{op}");
+        let docs =
+            tokio::task::spawn_blocking(move || run_json(&dir_path, &["action", "inspect", op]))
+                .await
+                .unwrap();
+        let doc = &docs[0];
+        schema::assert_valid("action.v1", doc);
+        assert_eq!(doc["operation"]["name"], op);
+        match expected {
+            Some((source, exit_code)) => {
+                assert_eq!(doc["result"]["source"], source, "{op}");
+                assert_eq!(doc["result"]["exit_code"], exit_code, "{op}");
+                assert_eq!(doc["result"]["timing"]["execution_seconds"], 6.0, "{op}");
+                assert_eq!(doc["result"]["stdout"]["text"], "compiling\n", "{op}");
+                if op == "op-failed" {
+                    assert_eq!(doc["result"]["stderr"]["text"], "error: the build broke\n");
+                }
+            }
+            None => assert!(doc["result"].is_null(), "{op}"),
+        }
+        if op == "op-rejected" {
+            assert_eq!(doc["message"], "status 9: worker image unavailable");
+        }
     }
 
     // bazelrc needs a TLS client endpoint (grpcs://).

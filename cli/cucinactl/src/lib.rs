@@ -27,8 +27,12 @@ pub mod views;
 use std::ffi::OsString;
 use std::path::Path;
 
-/// Version of this build.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Release version stamped by Bazel (`CUCINA_VERSION`, ADR 0150), or the Cargo
+/// package version for a native Cargo build.
+pub const VERSION: &str = match option_env!("CUCINA_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// File stem that selects the credential-helper personality.
 pub const CREDENTIAL_HELPER_NAME: &str = "cucina-credential-helper";

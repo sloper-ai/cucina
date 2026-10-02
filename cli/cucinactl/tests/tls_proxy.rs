@@ -79,7 +79,8 @@ async fn deployment(host: &str, ca: &TestCa) -> Deployment {
 /// Runs `cucinactl -p tls <args>` with `env` off the async runtime.
 async fn run(dir: &Path, args: &[&str], env: &[(&str, String)]) -> Output {
     let mut c = cmd(dir);
-    c.args(["-p", "tls", "--output", "json"]).args(args);
+    c.args(["-p", "tls", "--output", "json", "--timeout", "5s"])
+        .args(args);
     for (k, v) in env {
         c.env(k, v);
     }
@@ -124,8 +125,17 @@ async fn private_ca_is_trusted_for_discovery_sts_and_management() {
     // Unknown issuer: the login fails before any token is minted.
     let dir = TempDir::new();
     let out = login(dir.path(), &d, &[], &[]).await;
-    assert!(!out.status.success(), "a private CA must not be trusted by default");
+    assert!(
+        !out.status.success(),
+        "a private CA must not be trusted by default"
+    );
     assert!(read_token(dir.path(), "tls").is_none());
+    // Guards: R-CLI-3 error.v1 — a TLS failure is one JSON error, not interleaved
+    // with a dependency's diagnostic log lines.
+    let error: serde_json::Value =
+        serde_json::from_slice(&out.stderr).expect("a single error.v1 JSON document on stderr");
+    support::schema::assert_valid("error.v1", &error);
+    assert_eq!(error["error"]["exit_code"], 6);
 
     // --ca-file: trusted and stored in the profile.
     let ca_arg = ca_path.display().to_string();
@@ -183,20 +193,74 @@ async fn https_proxy_tunnels_discovery_sts_and_management() {
     let d = deployment("cucina.test", &ca).await;
     let sts = format!("cucina.test:{}", d.sts_front.port());
     let mgmt = format!("cucina.test:{}", d.mgmt_front.port());
+    let plaintext = d.mgmt.serve().await;
+    let plaintext_addr: SocketAddr = plaintext.trim_start_matches("http://").parse().unwrap();
     let proxy = FakeProxy::start(HashMap::from([
         (sts.clone(), d.sts_front),
         (mgmt.clone(), d.mgmt_front),
+        (plaintext_addr.to_string(), plaintext_addr),
     ]))
     .await;
-    let env = [
+    // The same CONNECT proxy behind TLS: HTTPS_PROXY may name either scheme.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_tls_addr = listener.local_addr().unwrap();
+    let mut proxy_tls = server_config(ca.server(&[], &[Ipv4Addr::LOCALHOST.into()]));
+    std::sync::Arc::make_mut(&mut proxy_tls).alpn_protocols = vec![b"http/1.1".to_vec()];
+    serve_tls(listener, proxy.addr, proxy_tls);
+    for (var, url) in [
         ("HTTPS_PROXY", proxy.url_with_credentials("alice", "s3cret")),
-        ("CUCINA_CA_FILE", ca_path.display().to_string()),
-    ];
+        (
+            "https_proxy",
+            format!("https://alice:s3cret@{proxy_tls_addr}"),
+        ),
+    ] {
+        let env = [
+            (var, url),
+            ("CUCINA_CA_FILE", ca_path.display().to_string()),
+        ];
+        proxy.connects.lock().unwrap().clear();
+        let dir = TempDir::new();
+        let out = login(dir.path(), &d, &[], &env).await;
+        assert_ok(&out, "login through the proxy");
+        assert!(read_token(dir.path(), "tls").is_some());
+        write_token(
+            dir.path(),
+            "tls",
+            &d.mgmt_token,
+            now() + 900,
+            AuthMethod::ServiceKey,
+        );
+        let out = run(dir.path(), &["status"], &env).await;
+        assert_ok(&out, "status through the proxy");
 
+        let connects = proxy.connects();
+        // base64("alice:s3cret"): the proxy's credentials, not Cucina's token.
+        let basic = Some("Basic YWxpY2U6czNjcmV0".to_string());
+        for authority in [&sts, &mgmt] {
+            let seen: Vec<_> = connects
+                .iter()
+                .filter(|c| &c.authority == authority)
+                .collect();
+            assert!(!seen.is_empty(), "no CONNECT {authority}: {connects:?}");
+            assert!(
+                seen.iter().all(|c| c.proxy_authorization == basic),
+                "{connects:?}"
+            );
+        }
+        assert!(
+            connects
+                .iter()
+                .all(|c| c.authority == sts || c.authority == mgmt),
+            "{connects:?}"
+        );
+    }
+
+    // A plaintext loopback endpoint still needs the profile CA to authenticate an
+    // HTTPS proxy. No CA environment fallback is set in this row.
     let dir = TempDir::new();
-    let out = login(dir.path(), &d, &[], &env).await;
-    assert_ok(&out, "login through the proxy");
-    assert!(read_token(dir.path(), "tls").is_some());
+    let mut profile = support::profile(&d.url, &plaintext, &plaintext, AuthMethod::ServiceKey);
+    profile.ca_file = Some(ca_path.clone());
+    support::write_profile(dir.path(), "tls", &profile);
     write_token(
         dir.path(),
         "tls",
@@ -204,25 +268,36 @@ async fn https_proxy_tunnels_discovery_sts_and_management() {
         now() + 900,
         AuthMethod::ServiceKey,
     );
-    let out = run(dir.path(), &["status"], &env).await;
-    assert_ok(&out, "status through the proxy");
+    let env = [("HTTP_PROXY", format!("https://{proxy_tls_addr}"))];
+    assert_ok(
+        &run(dir.path(), &["status"], &env).await,
+        "profile CA for HTTPS proxy to plaintext target",
+    );
 
-    let connects = proxy.connects();
-    // base64("alice:s3cret")
-    let basic = Some("Basic YWxpY2U6czNjcmV0".to_string());
-    for authority in [&sts, &mgmt] {
-        let seen: Vec<_> = connects
-            .iter()
-            .filter(|c| &c.authority == authority)
-            .collect();
-        assert!(!seen.is_empty(), "no CONNECT {authority}: {connects:?}");
-        assert!(
-            seen.iter().all(|c| c.proxy_authorization == basic),
-            "{connects:?}"
-        );
-    }
+    // NO_PROXY is respected by both transports (a proxy that cannot route anything
+    // must receive no CONNECT). No global environment changes in the test process.
+    let direct = deployment("127.0.0.1", &ca).await;
+    let reject_all = FakeProxy::start(HashMap::new()).await;
+    let env = [
+        ("HTTPS_PROXY", format!("http://{}", reject_all.addr)),
+        ("NO_PROXY", "127.0.0.1".into()),
+        ("CUCINA_CA_FILE", ca_path.display().to_string()),
+    ];
+    let dir = TempDir::new();
+    assert_ok(
+        &login(dir.path(), &direct, &[], &env).await,
+        "NO_PROXY login",
+    );
+    write_token(
+        dir.path(),
+        "tls",
+        &direct.mgmt_token,
+        now() + 900,
+        AuthMethod::ServiceKey,
+    );
+    assert_ok(&run(dir.path(), &["status"], &env).await, "NO_PROXY status");
     assert!(
-        connects.iter().all(|c| c.authority == sts || c.authority == mgmt),
-        "{connects:?}"
+        reject_all.connects().is_empty(),
+        "NO_PROXY must bypass the proxy"
     );
 }

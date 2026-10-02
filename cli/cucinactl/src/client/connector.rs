@@ -13,6 +13,7 @@
 
 use std::future::Future;
 use std::io;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -80,10 +81,12 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 impl TunnelConnector {
     /// `tls` is the client configuration for TLS targets (`None`: plaintext target);
     /// its ALPN is narrowed to `h2` (and `http/1.1` towards an `https://` proxy).
+    /// For a plaintext target, `ca_file` still applies to TLS with an HTTPS proxy.
     pub fn new(
         route: ProxyRoute,
         target: &Uri,
         tls: Option<rustls::ClientConfig>,
+        ca_file: Option<&Path>,
     ) -> io::Result<TunnelConnector> {
         match route.proxy.scheme_str() {
             Some("http") | Some("https") => {}
@@ -105,7 +108,7 @@ impl TunnelConnector {
         let proxy_tls = match (route.proxy.scheme_str(), &tls) {
             (Some("https"), Some(cfg)) => Some(alpn(cfg.clone(), b"http/1.1")),
             (Some("https"), None) => Some(alpn(
-                crate::tls::client_config(None).map_err(io::Error::other)?,
+                crate::tls::client_config(ca_file).map_err(io::Error::other)?,
                 b"http/1.1",
             )),
             _ => None,
@@ -136,9 +139,10 @@ impl TunnelConnector {
                 .ok_or_else(|| invalid("proxy URL without a host"))?,
         )
         .to_string();
-        let proxy_port = proxy
-            .port_u16()
-            .unwrap_or(if self.proxy_tls.is_some() { 443 } else { 80 });
+        let proxy_port =
+            proxy
+                .port_u16()
+                .unwrap_or(if self.proxy_tls.is_some() { 443 } else { 80 });
         let tcp = TcpStream::connect((proxy_host.as_str(), proxy_port))
             .await
             .map_err(|e| io::Error::new(e.kind(), format!("connecting to proxy {proxy}: {e}")))?;
@@ -243,68 +247,5 @@ impl tower_service::Service<Uri> for TunnelConnector {
     fn call(&mut self, _authority: Uri) -> Self::Future {
         let this = self.clone();
         Box::pin(async move { this.connect().await.map(TokioIo::new) })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn matcher(https: &str, no: &str) -> Matcher {
-        Matcher::builder().https(https).http(https).no(no).build()
-    }
-
-    #[test]
-    fn no_proxy_follows_curl_rules() {
-        let m = matcher("http://proxy.internal:3128", "internal.example, 10.0.0.0/8, ::1");
-        let target = |s: &str| s.parse::<Uri>().unwrap();
-        assert!(route(&m, &target("https://cucina.example.com:443")).is_some());
-        for bypass in [
-            "https://internal.example",
-            "https://api.internal.example:8443",
-            "https://10.1.2.3",
-            "https://[::1]:443",
-        ] {
-            assert_eq!(route(&m, &target(bypass)), None, "{bypass}");
-        }
-        assert!(route(&m, &target("https://notinternal.example")).is_some());
-        assert_eq!(route(&matcher("http://p:1", "*"), &target("https://x.y")), None);
-    }
-
-    #[test]
-    fn credentials_become_basic_proxy_authorization() {
-        let m = matcher("http://us%40er:p%3Ass@proxy.internal:3128", "");
-        let r = route(&m, &"https://cucina.example.com".parse().unwrap()).unwrap();
-        assert_eq!(r.proxy.to_string(), "http://proxy.internal:3128/");
-        // base64("us@er:p:ss")
-        assert_eq!(
-            r.authorization.unwrap().to_str().unwrap(),
-            "Basic dXNAZXI6cDpzcw=="
-        );
-    }
-
-    #[test]
-    fn connect_authority_brackets_ipv6() {
-        let route = ProxyRoute {
-            proxy: "http://127.0.0.1:3128".parse().unwrap(),
-            authorization: None,
-        };
-        let c = TunnelConnector::new(route.clone(), &"http://[::1]:8980".parse().unwrap(), None)
-            .unwrap();
-        assert_eq!(c.authority(), "[::1]:8980");
-        let c = TunnelConnector::new(route, &"http://cucina.test".parse().unwrap(), None).unwrap();
-        assert_eq!(c.authority(), "cucina.test:80");
-    }
-
-    #[test]
-    fn socks_proxies_are_refused_clearly() {
-        let route = ProxyRoute {
-            proxy: "socks5://127.0.0.1:1080".parse().unwrap(),
-            authorization: None,
-        };
-        let err = TunnelConnector::new(route, &"http://cucina.test".parse().unwrap(), None)
-            .err()
-            .unwrap();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }

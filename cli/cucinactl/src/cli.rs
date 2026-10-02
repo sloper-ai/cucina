@@ -25,7 +25,7 @@ fn duration(s: &str) -> Result<Duration, String> {
 #[derive(Debug, Parser)]
 #[command(
     name = "cucinactl",
-    version,
+    version = crate::VERSION,
     propagate_version = true,
     max_term_width = 100
 )]
@@ -601,7 +601,7 @@ pub fn main(args: Vec<OsString>) -> std::process::ExitCode {
         ColorMode::Always => anstream::ColorChoice::Always.write_global(),
         ColorMode::Never => anstream::ColorChoice::Never.write_global(),
     }
-    init_tracing(cli.global.verbose);
+    init_tracing(cli.global.verbose, cli.global.output);
     let format = cli.global.output;
     match crate::commands::run(cli) {
         Ok(()) => ExitCode::Ok.into(),
@@ -628,8 +628,11 @@ pub fn main(args: Vec<OsString>) -> std::process::ExitCode {
     }
 }
 
-fn init_tracing(verbose: u8) {
+fn init_tracing(verbose: u8, format: OutputFormat) {
     let default = match verbose {
+        // JSON errors must remain machine-readable. Debug logs on stderr are opt-in
+        // with --verbose or CUCINA_LOG, including diagnostics from TLS dependencies.
+        0 if format == OutputFormat::Json => "off",
         0 => "warn",
         1 => "cucinactl=debug,info",
         _ => "trace",
