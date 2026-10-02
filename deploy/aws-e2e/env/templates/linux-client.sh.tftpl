@@ -1,0 +1,44 @@
+#!/bin/bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina e2e linux-client bootstrap, rendered by OpenTofu (deploy/aws-e2e/env). Contains no secrets.
+set -euo pipefail
+exec > >(tee -a /var/log/cucina-bootstrap.log) 2>&1
+echo "cucina bootstrap: start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+mkdir -p /var/lib/cucina /usr/local/sbin
+
+# --- 1. runaway guard: shutdown -h +${guard_minutes} (InstanceInitiatedShutdownBehavior=stop) --------
+cat >/usr/local/sbin/cucina-guard <<'EOS'
+#!/bin/sh
+# Usage: cucina-guard [minutes]. Re-arms the power-off timer; extend a session with e.g. `sudo cucina-guard 240`.
+m="$${1:-${guard_minutes}}"
+shutdown -c >/dev/null 2>&1 || true
+exec shutdown -h "+$m" "cucina e2e runaway guard: powering off in $m minutes"
+EOS
+chmod 0755 /usr/local/sbin/cucina-guard
+cat >/etc/systemd/system/cucina-guard.service <<'EOS'
+[Unit]
+Description=Cucina e2e runaway guard (shutdown -h +${guard_minutes})
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cucina-guard
+
+[Install]
+WantedBy=multi-user.target
+EOS
+systemctl daemon-reload
+systemctl enable --now cucina-guard.service
+
+# --- 2. tools: git, python3, unzip (apt) and Bazelisk ${bazelisk_version} (pinned, SHA-256 verified) --
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y --no-install-recommends ca-certificates curl git jq python3 unzip xz-utils zip
+
+curl -fsSL --retry 5 -o /usr/local/bin/bazelisk "https://github.com/bazelbuild/bazelisk/releases/download/v${bazelisk_version}/bazelisk-linux-amd64"
+echo "${bazelisk_sha256}  /usr/local/bin/bazelisk" | sha256sum -c -
+chmod 0755 /usr/local/bin/bazelisk
+ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel
+
+echo "${bazelisk_version}" >/var/lib/cucina/bootstrap.done
+echo "cucina bootstrap: done $(date -u +%Y-%m-%dT%H:%M:%SZ)"

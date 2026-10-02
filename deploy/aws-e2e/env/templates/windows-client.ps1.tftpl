@@ -1,0 +1,61 @@
+<powershell>
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina e2e windows-client bootstrap (EC2Launch v2 user data, runs once), rendered by OpenTofu
+# (deploy/aws-e2e/env). Contains no secrets. The AMI (windows-base) already carries the Visual
+# Studio Build Tools and the Windows SDK; this script adds what is specific to a Bazel client.
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+New-Item -ItemType Directory -Force -Path C:\ProgramData\Cucina | Out-Null
+Start-Transcript -Path C:\ProgramData\Cucina\bootstrap.log -Append | Out-Null
+
+# --- 1. runaway guard: scheduled power-off after ${guard_minutes} minutes (InstanceInitiatedShutdownBehavior=stop) ---
+# Re-armed at every boot by a startup task; extend a session with: C:\ProgramData\Cucina\guard.ps1 240
+@'
+param([int]$Minutes = ${guard_minutes})
+shutdown.exe /a 2>$null
+shutdown.exe /s /t ($Minutes * 60) /c "cucina e2e runaway guard: powering off in $Minutes minutes"
+'@ | Set-Content -Path C:\ProgramData\Cucina\guard.ps1 -Encoding ASCII
+& schtasks.exe /Create /F /RU SYSTEM /SC ONSTART /TN CucinaGuard /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\Cucina\guard.ps1" | Out-Null
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\Cucina\guard.ps1
+
+# --- 2. short paths that exist on the workers too: TMP/TEMP = C:\bb\tmp (machine scope) ---
+New-Item -ItemType Directory -Force -Path C:\bb\tmp | Out-Null
+[Environment]::SetEnvironmentVariable('TMP', 'C:\bb\tmp', 'Machine')
+[Environment]::SetEnvironmentVariable('TEMP', 'C:\bb\tmp', 'Machine')
+
+function Get-Pinned([string]$Uri, [string]$OutFile, [string]$Sha256) {
+  for ($i = 1; $i -le 5; $i++) {
+    try { Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile; break } catch { if ($i -eq 5) { throw }; Start-Sleep -Seconds (5 * $i) }
+  }
+  $actual = (Get-FileHash -Algorithm SHA256 -Path $OutFile).Hash.ToLowerInvariant()
+  if ($actual -ne $Sha256) { throw "SHA-256 mismatch for $Uri (expected $Sha256, got $actual)" }
+}
+
+# --- 3. Bazelisk ${bazelisk_version} (pinned, SHA-256 verified) as C:\tools\bin\bazel.exe -----------------
+# The windows-base image ships exactly this build there (and has the directory on PATH); it is only
+# (re)installed when missing or different.
+$bazel = 'C:\tools\bin\bazel.exe'
+if (-not ((Test-Path $bazel) -and ((Get-FileHash -Algorithm SHA256 -Path $bazel).Hash.ToLowerInvariant() -eq "${bazelisk_sha256}"))) {
+  New-Item -ItemType Directory -Force -Path C:\tools\bin | Out-Null
+  Get-Pinned "https://github.com/bazelbuild/bazelisk/releases/download/v${bazelisk_version}/bazelisk-windows-amd64.exe" $bazel "${bazelisk_sha256}"
+}
+
+# --- 4. Git for Windows ${git_version} (pinned, SHA-256 verified); its bash is Bazel's BAZEL_SH ---
+$gitInstaller = Join-Path $env:ProgramData 'Cucina\${git_installer}'
+Get-Pinned "https://github.com/git-for-windows/git/releases/download/v${git_version}/${git_installer}" $gitInstaller "${git_sha256}"
+Start-Process -Wait -FilePath $gitInstaller -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', '/CLOSEAPPLICATIONS', '/RESTARTAPPLICATIONS'
+Remove-Item -Force $gitInstaller
+[Environment]::SetEnvironmentVariable('BAZEL_SH', 'C:\Program Files\Git\usr\bin\bash.exe', 'Machine')
+
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+foreach ($p in 'C:\tools\bin', 'C:\Program Files\Git\cmd') {
+  if (($machinePath -split ';') -notcontains $p) { $machinePath = "$machinePath;$p" }
+}
+[Environment]::SetEnvironmentVariable('Path', $machinePath, 'Machine')
+
+# --- 5. services only see machine variables at start: restart the SSM agent so sessions get them ---
+Set-Content -Path C:\ProgramData\Cucina\bootstrap.done -Value 'done' -Encoding ASCII
+Stop-Transcript | Out-Null
+Restart-Service AmazonSSMAgent
+</powershell>

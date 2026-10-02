@@ -1,0 +1,127 @@
+#!/bin/bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina e2e k3s node bootstrap, rendered by OpenTofu (deploy/aws-e2e/env). Contains no secrets.
+# Order matters: guard first (a failing bootstrap must still power off), then the data
+# volume (before k3s creates /var/lib/rancher/k3s/storage), then the pinned k3s.
+set -euo pipefail
+exec > >(tee -a /var/log/cucina-bootstrap.log) 2>&1
+echo "cucina bootstrap: start $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+mkdir -p /var/lib/cucina /usr/local/sbin
+
+# --- 1. runaway guard: shutdown -h +${guard_minutes} (InstanceInitiatedShutdownBehavior=stop) --------
+cat >/usr/local/sbin/cucina-guard <<'EOS'
+#!/bin/sh
+# Usage: cucina-guard [minutes]. Re-arms the power-off timer; extend a session with e.g. `sudo cucina-guard 240`.
+m="$${1:-${guard_minutes}}"
+shutdown -c >/dev/null 2>&1 || true
+exec shutdown -h "+$m" "cucina e2e runaway guard: powering off in $m minutes"
+EOS
+chmod 0755 /usr/local/sbin/cucina-guard
+cat >/etc/systemd/system/cucina-guard.service <<'EOS'
+[Unit]
+Description=Cucina e2e runaway guard (shutdown -h +${guard_minutes})
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cucina-guard
+
+[Install]
+WantedBy=multi-user.target
+EOS
+systemctl daemon-reload
+systemctl enable --now cucina-guard.service
+
+# --- 2. data volume -> /var/lib/rancher/k3s/storage (Buildbarn storage PVCs, local-path) ----
+mnt=/var/lib/rancher/k3s/storage
+want_bytes=$(( ${data_volume_gib} * 1024 * 1024 * 1024 ))
+dev=""
+for _ in $(seq 1 90); do
+  for d in /dev/sdf /dev/nvme*n1; do
+    [ -b "$d" ] || continue
+    d=$(readlink -f "$d")
+    [ "$(blockdev --getsize64 "$d")" -eq "$want_bytes" ] || continue
+    # never touch a disk that is mounted or partitioned (the root disk)
+    [ -z "$(lsblk -nr -o MOUNTPOINT "$d" | tr -d '[:space:]')" ] || continue
+    [ "$(lsblk -nr -o TYPE "$d" | grep -c part || true)" -eq 0 ] || continue
+    dev="$d"
+    break 2
+  done
+  sleep 2
+done
+[ -n "$dev" ] || { echo "cucina bootstrap: data volume not found" >&2; exit 1; }
+blkid "$dev" >/dev/null 2>&1 || mkfs.ext4 -q -L cucina-data -m 0 "$dev"
+mkdir -p "$mnt"
+uuid=$(blkid -s UUID -o value "$dev")
+grep -q "$uuid" /etc/fstab || echo "UUID=$uuid $mnt ext4 defaults,noatime,nofail 0 2" >>/etc/fstab
+mountpoint -q "$mnt" || mount "$mnt"
+echo "cucina bootstrap: data volume $dev mounted at $mnt"
+
+# --- 3. k3s ${k3s_version}: pinned binary and pinned installer, both SHA-256 verified ---------
+tok=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
+priv=$(curl -fsS -H "X-aws-ec2-metadata-token: $tok" http://169.254.169.254/latest/meta-data/local-ipv4)
+
+cd /tmp
+curl -fsSL --retry 5 -o k3s "https://github.com/k3s-io/k3s/releases/download/${k3s_version_url}/k3s"
+echo "${k3s_sha256}  k3s" | sha256sum -c -
+install -m 0755 k3s /usr/local/bin/k3s
+curl -fsSL --retry 5 -o k3s-install.sh "https://raw.githubusercontent.com/k3s-io/k3s/${k3s_version_url}/install.sh"
+echo "${k3s_install_sha256}  k3s-install.sh" | sha256sum -c -
+
+%{ if ecr_credential_provider ~}
+# kubelet image credential provider: pulls from the cucina/* ECR repositories with the node's
+# instance-profile credentials (see env/files/ecr-credential-provider.sh); needs jq.
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y --no-install-recommends ca-certificates curl jq
+mkdir -p /var/lib/rancher/credentialprovider/bin
+echo '${ecr_provider_b64}' | base64 -d >/var/lib/rancher/credentialprovider/bin/ecr-credential-provider
+chmod 0755 /var/lib/rancher/credentialprovider/bin/ecr-credential-provider
+cat >/var/lib/rancher/credentialprovider/config.yaml <<'EOY'
+apiVersion: kubelet.config.k8s.io/v1
+kind: CredentialProviderConfig
+providers:
+  - name: ecr-credential-provider
+    apiVersion: credentialprovider.kubelet.k8s.io/v1
+    matchImages:
+      - "*.dkr.ecr.*.amazonaws.com"
+    defaultCacheDuration: "6h"
+EOY
+%{ endif ~}
+
+mkdir -p /etc/rancher/k3s
+cat >/etc/rancher/k3s/config.yaml <<EOF
+node-name: cucina-e2e-k3s
+node-ip: $priv
+node-external-ip: ${public_ip}
+# k3s advertises node-external-ip as the API server address by default: the default/kubernetes
+# Service then DNATs to the Elastic IP, which pods cannot reach (CoreDNS, metrics-server and
+# local-path-provisioner crash-loop). Advertise the private address.
+advertise-address: $priv
+write-kubeconfig-mode: "0600"
+tls-san:
+  - ${public_ip}
+  - $priv
+disable:
+  - traefik
+# Pods and Services must not overlap the VPC (k3s' default pod CIDR 10.42.0.0/16 is this VPC's range).
+cluster-cidr: ${cluster_cidr}
+service-cidr: ${service_cidr}
+cluster-dns: ${cluster_dns}
+%{ if ecr_credential_provider ~}
+kubelet-arg:
+  - image-credential-provider-config=/var/lib/rancher/credentialprovider/config.yaml
+  - image-credential-provider-bin-dir=/var/lib/rancher/credentialprovider/bin
+%{ endif ~}
+EOF
+
+INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC=server sh /tmp/k3s-install.sh
+
+for _ in $(seq 1 180); do
+  if /usr/local/bin/k3s kubectl get nodes 2>/dev/null | grep -q ' Ready'; then break; fi
+  sleep 2
+done
+/usr/local/bin/k3s kubectl get nodes -o wide
+
+echo "${k3s_version}" >/var/lib/cucina/bootstrap.done
+echo "cucina bootstrap: done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
