@@ -77,6 +77,15 @@ cucina_rust_test(
     ) + [":cucinactl_lib"],
 )
 
+# Public pure token-expiry/renewal policy (R-AUTH-6/8), explicit clock inputs.
+cucina_rust_test(
+    name = "token_policy_test",
+    srcs = ["tests/token_policy.rs"],
+    crate_root = "tests/token_policy.rs",
+    tier = "unit",
+    deps = all_crate_deps(normal = True) + [":cucinactl_lib"],
+)
+
 # Process-level tests against in-process fakes on loopback (R-TEST-3/-5).
 [cucina_rust_test(
     name = t + "_test",
