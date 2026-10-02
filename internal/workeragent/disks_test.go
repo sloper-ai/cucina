@@ -3,12 +3,17 @@
 package workeragent_test
 
 import (
+	"context"
+	"encoding/base64"
 	"path"
+	"slices"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/sloper-ai/cucina/internal/fakes"
+	"github.com/sloper-ai/cucina/internal/ports"
 	"github.com/sloper-ai/cucina/internal/workeragent"
 	"github.com/sloper-ai/cucina/internal/workeragent/agenttest"
 )
@@ -51,28 +56,91 @@ func TestLinuxDisks(t *testing.T) {
 }
 
 // Guards: R-POOL-5 / R-CACHE-2 on Windows — the Get-Disk probe output is
-// classified the same way (boot disk excluded, a disk already holding only
-// the cache root reused, multi-volume disks left alone).
+// classified the same way (boot disk excluded, a mounted volume reused, an
+// initialised but unmounted disk left alone), in every shape Windows
+// PowerShell 5.1 emits (joined access paths, arrays, a single object, the
+// {"value":…,"Count":…} wrapper, a byte order mark).
 func TestParseWindowsDisks(t *testing.T) {
-	out := `[{"Number":0,"FriendlyName":"NVMe Amazon Elastic B","Model":"Amazon Elastic Block Store","Size":32212254720,"PartitionStyle":"GPT","IsBoot":true,"IsSystem":true,"AccessPaths":["C:\\"]},
-	{"Number":1,"FriendlyName":"NVMe Amazon EC2 NVMe","Model":"Amazon EC2 NVMe Instance Storage","Size":118111600640,"PartitionStyle":"RAW","IsBoot":false,"IsSystem":false,"AccessPaths":[]},
-	{"Number":2,"FriendlyName":"NVMe Amazon Elastic B","Model":"","Size":107374182400,"PartitionStyle":"GPT","IsBoot":false,"IsSystem":false,"AccessPaths":["C:\\bb\\data\\"]},
-	{"Number":3,"FriendlyName":"NVMe Amazon Elastic B","Model":"","Size":107374182400,"PartitionStyle":"GPT","IsBoot":false,"IsSystem":false,"AccessPaths":["D:\\","E:\\"]}]`
-	disks, err := workeragent.ParseWindowsDisks([]byte(out))
+	out := `[{"Number":0,"FriendlyName":"NVMe Amazon Elastic B","Model":"Amazon Elastic Block Store","Size":32212254720,"PartitionStyle":"GPT","IsBoot":true,"IsSystem":true,"AccessPaths":"C:\\"},
+	{"Number":1,"FriendlyName":"NVMe Amazon EC2 NVMe","Model":"Amazon EC2 NVMe Instance Storage","Size":118111600640,"PartitionStyle":"RAW","IsBoot":false,"IsSystem":false,"AccessPaths":""},
+	{"Number":2,"FriendlyName":"NVMe Amazon Elastic B","Model":"","Size":107374182400,"PartitionStyle":"GPT","IsBoot":false,"IsSystem":false,"AccessPaths":"D:\\|C:\\bb\\data\\"},
+	{"Number":3,"FriendlyName":"NVMe Amazon Elastic B","Model":"","Size":107374182400,"PartitionStyle":"GPT","IsBoot":false,"IsSystem":false,"AccessPaths":{"value":[],"Count":0}}]`
+	disks, err := workeragent.ParseWindowsDisks(append([]byte("\xef\xbb\xbf"), out...))
 	require.NoError(t, err)
 	require.Len(t, disks, 4)
 	require.True(t, disks[0].Root)
 	require.Equal(t, workeragent.DiskInstanceStore, disks[1].Kind)
 	require.False(t, disks[1].Partitioned)
 	require.Equal(t, workeragent.DiskEBS, disks[2].Kind)
-	require.Equal(t, []string{`C:\bb\data`}, disks[2].MountPoints)
-	require.False(t, disks[2].Partitioned, "a single mounted volume (ours, or the image's) stays eligible")
-	require.True(t, disks[3].Partitioned, "a disk with several volumes is not ours")
+	require.Equal(t, []string{"D:", `C:\bb\data`}, disks[2].MountPoints)
+	require.False(t, disks[2].Partitioned, "a mounted volume (the image's or ours) is reused")
+	require.True(t, disks[3].Partitioned, "an initialised but unmounted disk is left alone")
 
 	plan := workeragent.PlanPlacement("ebs", disks)
 	require.Equal(t, "2", plan.Disk.ID)
 
-	single, err := workeragent.ParseWindowsDisks([]byte(`{"Number":0,"FriendlyName":"x","Model":"","Size":1,"PartitionStyle":"GPT","IsBoot":true,"IsSystem":true,"AccessPaths":null}`))
-	require.NoError(t, err, "PowerShell may unroll a one-element array")
-	require.Len(t, single, 1)
+	for name, doc := range map[string]string{
+		"single object": `{"Number":0,"FriendlyName":"x","Model":"","Size":1,"PartitionStyle":"GPT","IsBoot":true,"IsSystem":true,"AccessPaths":["C:\\"]}`,
+		"value wrapper": `{"value":[{"Number":0,"FriendlyName":"x","Model":"","Size":1,"PartitionStyle":"GPT","IsBoot":true,"IsSystem":true,"AccessPaths":null}],"Count":1}`,
+	} {
+		single, err := workeragent.ParseWindowsDisks([]byte(doc))
+		require.NoError(t, err, name)
+		require.Len(t, single, 1, name)
+		require.True(t, single[0].Root, name)
+	}
+	_, err = workeragent.ParseWindowsDisks(nil)
+	require.Error(t, err, "empty output (the PS 5.1 stdin bug) is an error, not zero disks")
+}
+
+// decodePowerShell independently decodes an -EncodedCommand argument.
+func decodePowerShell(t *testing.T, arg string) string {
+	t.Helper()
+	b, err := base64.StdEncoding.DecodeString(arg)
+	require.NoError(t, err)
+	require.Zero(t, len(b)%2)
+	u := make([]uint16, len(b)/2)
+	for i := range u {
+		u[i] = uint16(b[2*i]) | uint16(b[2*i+1])<<8
+	}
+	return string(utf16.Decode(u))
+}
+
+// Guards: the Windows worker blocker (images agent, Windows Server 2025 /
+// PowerShell 5.1): multi-line scripts fed through stdin never ran, so Disks()
+// saw empty output and every bootstrap powered off. Scripts must travel as
+// -EncodedCommand, non-interactively, with nothing on stdin.
+func TestWindowsStorageRunsPowerShellEncoded(t *testing.T) {
+	clock, rnd := fakes.NewClock(agenttest.Epoch), fakes.NewRand(5)
+	ex := fakes.NewExec(clock, rnd)
+	var prepared []string
+	ex.Handle("powershell.exe", func(_ context.Context, c ports.Command) (ports.ExecResult, error) {
+		require.Nil(t, c.Stdin, "nothing on stdin")
+		require.Subset(t, c.Args, []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"})
+		i := slices.Index(c.Args, "-EncodedCommand")
+		require.GreaterOrEqual(t, i, 0, "script passed with -EncodedCommand")
+		require.Len(t, c.Args, i+2, "-EncodedCommand is the last switch")
+		switch script := decodePowerShell(t, c.Args[i+1]); script {
+		case workeragent.WindowsDisksScript:
+			// One disk: PS 5.1 unrolls the array into a single object.
+			return ports.ExecResult{Stdout: []byte(`{"Number":1,"FriendlyName":"NVMe Amazon EC2 NVMe","Model":"Amazon EC2 NVMe Instance Storage",` +
+				`"Size":118111600640,"PartitionStyle":"RAW","IsBoot":false,"IsSystem":false,"AccessPaths":""}` + "\r\n")}, nil
+		case workeragent.WindowsPrepareScript("1", `C:\bb\ephemeral`):
+			prepared = append(prepared, "1")
+			return ports.ExecResult{}, nil
+		default:
+			return ports.ExecResult{ExitCode: 1, Stderr: []byte("unexpected script")}, nil
+		}
+	})
+	s := workeragent.WindowsStorage{Exec: ex, FS: fakes.NewFS(clock, rnd, 200<<30)}
+	disks, err := s.Disks(context.Background())
+	require.NoError(t, err)
+	require.Len(t, disks, 1)
+	plan := workeragent.PlanPlacement("auto", disks)
+	require.Equal(t, workeragent.PlacementInstanceStore, plan.Placement)
+	path, free, err := s.Prepare(context.Background(), plan, `C:\bb\ephemeral`)
+	require.NoError(t, err)
+	require.Equal(t, `C:\bb\ephemeral`, path)
+	require.Positive(t, free)
+	require.Equal(t, []string{"1"}, prepared, "the blank instance-store disk was initialised and mounted")
+	require.Contains(t, workeragent.WindowsPrepareScript("1", `C:\b'b`), `'C:\b''b\'`, "paths are PowerShell-quoted")
 }

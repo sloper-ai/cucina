@@ -74,7 +74,11 @@ not the OS disk, no partition table) → no device (bbconfig: memory with ≥ 16
 `instance-store`/`ebs` without such a device degrades in the same order (`event=l1.fallback`). A volume already mounted (the
 images' `cucina-format-instance-store.service`, RAID 0 arrays, Windows `D:`) is reused; a blank device is formatted
 (`mkfs.ext4 -O ^has_journal -E nodiscard,lazy_itable_init=1`; Windows NTFS quick, 64 KiB clusters) and mounted. RAID members
-without an array, partitioned disks and the OS disk are never touched. Sizes come from bbconfig.
+without an array, partitioned disks and the OS disk are never touched. Sizes come from bbconfig. On Windows the
+agent runs its Storage-module scripts (`WindowsDisksScript`, `WindowsPrepareScript`) with Windows PowerShell 5.1 as
+`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <base64 UTF-16LE>` (never via stdin:
+5.1 drops multi-line statements read from stdin) and parses every JSON shape 5.1 emits; `shutdown.exe`, `sc.exe` and
+`w32tm` are executed directly, without a shell.
 
 ## supervise
 

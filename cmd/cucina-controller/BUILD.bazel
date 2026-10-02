@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//bazel:oci.bzl", "cucina_go_image")
 
 go_library(
     name = "cucina-controller_lib",
@@ -20,5 +21,15 @@ go_library(
 go_binary(
     name = "cucina-controller",
     embed = [":cucina-controller_lib"],
+    pure = "on",
+    visibility = ["//visibility:public"],
+)
+
+# Multi-arch image (linux/amd64 + linux/arm64) on distroless static nonroot (R-BUILD-3). The STS
+# runs from the same image (`cucina-controller sts`).
+cucina_go_image(
+    name = "image",
+    binary = ":cucina-controller",
+    repository = "ghcr.io/sloper-ai/cucina-controller",
     visibility = ["//visibility:public"],
 )

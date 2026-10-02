@@ -5,12 +5,15 @@ package workeragent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/sloper-ai/cucina/internal/ports"
 )
@@ -136,38 +139,88 @@ type WindowsStorage struct {
 
 const powershell = "powershell.exe"
 
+// psCommand runs a script with Windows PowerShell 5.1 (always present on
+// Windows Server). The script travels as -EncodedCommand (base64 of UTF-16LE):
+// fed through stdin with `-Command -`, PS 5.1 reads it like an interactive
+// console and silently drops multi-line statements.
 func psCommand(script string) ports.Command {
 	return ports.Command{
-		Path:  powershell,
-		Args:  []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "-"},
-		Stdin: []byte(script),
+		Path: powershell,
+		Args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+			"-EncodedCommand", EncodePowerShell(script)},
 	}
 }
 
-const windowsDisksScript = `$ErrorActionPreference = 'Stop'
+// EncodePowerShell returns the -EncodedCommand form of a script: base64 of its
+// UTF-16LE encoding.
+func EncodePowerShell(script string) string {
+	u := utf16.Encode([]rune(script))
+	b := make([]byte, 2*len(u))
+	for i, v := range u {
+		binary.LittleEndian.PutUint16(b[2*i:], v)
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// WindowsDisksScript lists the disks as compact JSON. Windows PowerShell 5.1
+// safe: access paths are joined into one '|'-separated string ('|' cannot occur
+// in a path), because 5.1 may serialise nested arrays as {"value":…,"Count":…}.
+const WindowsDisksScript = `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $disks = @(Get-Disk | ForEach-Object {
   $n = $_.Number
-  [pscustomobject]@{
-    Number = $n; FriendlyName = $_.FriendlyName; Model = $_.Model; Size = [uint64]$_.Size
-    PartitionStyle = "$($_.PartitionStyle)"; IsBoot = [bool]$_.IsBoot; IsSystem = [bool]$_.IsSystem
-    AccessPaths = @(Get-Partition -DiskNumber $n -ErrorAction SilentlyContinue | ForEach-Object { $_.AccessPaths } | Where-Object { $_ -and -not $_.StartsWith('\\?\') })
+  $paths = @(Get-Partition -DiskNumber $n -ErrorAction SilentlyContinue | ForEach-Object { $_.AccessPaths } | Where-Object { $_ -and -not $_.StartsWith('\\?\') })
+  New-Object -TypeName PSObject -Property @{
+    Number = [int]$n; FriendlyName = [string]$_.FriendlyName; Model = [string]$_.Model; Size = [uint64]$_.Size
+    PartitionStyle = [string]$_.PartitionStyle; IsBoot = [bool]$_.IsBoot; IsSystem = [bool]$_.IsSystem
+    AccessPaths = [string]($paths -join '|')
   }
 })
-ConvertTo-Json -Compress -Depth 3 -InputObject $disks
+ConvertTo-Json -Compress -Depth 2 -InputObject $disks
 `
 
 // Disks implements Storage.
 func (s WindowsStorage) Disks(ctx context.Context) ([]Disk, error) {
-	res, err := run(ctx, s.Exec, psCommand(windowsDisksScript))
+	res, err := run(ctx, s.Exec, psCommand(WindowsDisksScript))
 	if err != nil {
 		return nil, err
 	}
 	return ParseWindowsDisks(res.Stdout)
 }
 
-// ParseWindowsDisks parses the JSON emitted by the Get-Disk probe script.
+// psStrings accepts the shapes PowerShell gives a list of strings: one
+// '|'-separated string, an array, null, or 5.1's {"value":[…],"Count":n}.
+type psStrings []string
+
+func (p *psStrings) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*p = nil
+		for _, s := range strings.Split(one, "|") {
+			if s != "" {
+				*p = append(*p, s)
+			}
+		}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(b, &many); err == nil {
+		*p = many
+		return nil
+	}
+	var wrapped struct{ Value []string }
+	if err := json.Unmarshal(b, &wrapped); err != nil {
+		return err
+	}
+	*p = wrapped.Value
+	return nil
+}
+
+// ParseWindowsDisks parses the JSON emitted by WindowsDisksScript: an array,
+// a single object (PowerShell unrolled a one-element array) or 5.1's
+// {"value":[…],"Count":n} wrapper; a UTF-8 byte order mark is ignored.
 func ParseWindowsDisks(b []byte) ([]Disk, error) {
-	var raw []struct {
+	type rawDisk struct {
 		Number         int
 		FriendlyName   string
 		Model          string
@@ -175,14 +228,30 @@ func ParseWindowsDisks(b []byte) ([]Disk, error) {
 		PartitionStyle string
 		IsBoot         bool
 		IsSystem       bool
-		AccessPaths    []string
+		AccessPaths    psStrings
 	}
-	b = bytes.TrimSpace(b)
-	if len(b) > 0 && b[0] == '{' { // a single object if PowerShell unrolled the array
-		b = append(append([]byte{'['}, b...), ']')
-	}
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return nil, fmt.Errorf("parse Get-Disk output: %w", err)
+	b = bytes.TrimSpace(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")))
+	var raw []rawDisk
+	switch {
+	case len(b) == 0:
+		return nil, errors.New("parse Get-Disk output: empty output")
+	case b[0] == '[':
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return nil, fmt.Errorf("parse Get-Disk output: %w", err)
+		}
+	default:
+		var probe struct {
+			Value *[]rawDisk `json:"value"`
+		}
+		if err := json.Unmarshal(b, &probe); err == nil && probe.Value != nil {
+			raw = *probe.Value
+			break
+		}
+		var one rawDisk
+		if err := json.Unmarshal(b, &one); err != nil {
+			return nil, fmt.Errorf("parse Get-Disk output: %w", err)
+		}
+		raw = []rawDisk{one}
 	}
 	disks := make([]Disk, 0, len(raw))
 	for _, r := range raw {
@@ -202,40 +271,37 @@ func ParseWindowsDisks(b []byte) ([]Disk, error) {
 				d.MountPoints = append(d.MountPoints, ap)
 			}
 		}
-		// An initialised disk stays eligible only with exactly one access path:
-		// the volume the image's boot task (or an earlier bootstrap) created.
-		// Multi-volume or unmounted partitioned disks are left alone.
-		d.Partitioned = r.PartitionStyle != "RAW" && (len(d.MountPoints) == 0 || !allEqualFold(d.MountPoints))
+		// An initialised disk is reused only when it is mounted (the image's
+		// boot task or an earlier bootstrap formatted it); an initialised but
+		// unmounted disk is left alone.
+		d.Partitioned = r.PartitionStyle != "RAW" && len(d.MountPoints) == 0
 		disks = append(disks, d)
 	}
 	return disks, nil
 }
 
-func allEqualFold(ps []string) bool {
-	for _, p := range ps[1:] {
-		if !strings.EqualFold(p, ps[0]) {
-			return false
-		}
-	}
-	return true
-}
-
-func windowsPrepareScript(disk, mountPoint string) string {
+// WindowsPrepareScript initialises (GPT), partitions, formats (NTFS quick, 64 KiB
+// clusters) and mounts disk at mountPoint; it is idempotent and Windows
+// PowerShell 5.1 safe.
+func WindowsPrepareScript(disk, mountPoint string) string {
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 	return `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $n = ` + disk + `
 $path = ` + q(strings.TrimSuffix(mountPoint, `\`)+`\`) + `
 $d = Get-Disk -Number $n
 if ($d.IsOffline) { Set-Disk -Number $n -IsOffline $false }
 if ($d.IsReadOnly) { Set-Disk -Number $n -IsReadOnly $false }
-if ("$($d.PartitionStyle)" -eq 'RAW') { Initialize-Disk -Number $n -PartitionStyle GPT | Out-Null }
-$p = Get-Partition -DiskNumber $n | Where-Object { "$($_.Type)" -eq 'Basic' } | Select-Object -First 1
+if ([string]$d.PartitionStyle -eq 'RAW') { Initialize-Disk -Number $n -PartitionStyle GPT | Out-Null }
+$p = Get-Partition -DiskNumber $n | Where-Object { [string]$_.Type -eq 'Basic' } | Select-Object -First 1
 if (-not $p) { $p = New-Partition -DiskNumber $n -UseMaximumSize }
 if (-not ($p | Get-Volume).FileSystem) {
   $p | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'cucina-cache' -AllocationUnitSize 65536 -Confirm:$false -Force | Out-Null
 }
 New-Item -ItemType Directory -Force -Path $path | Out-Null
-$p | Add-PartitionAccessPath -AccessPath $path
+if (@(Get-Partition -DiskNumber $n | ForEach-Object { $_.AccessPaths }) -notcontains $path) {
+  $p | Add-PartitionAccessPath -AccessPath $path
+}
 `
 }
 
@@ -255,7 +321,7 @@ func (s WindowsStorage) Prepare(ctx context.Context, plan PlacementPlan, mountPo
 		if _, err := strconv.Atoi(d.ID); err != nil {
 			return "", 0, fmt.Errorf("windows disk id %q is not a disk number", d.ID)
 		}
-		if _, err := run(ctx, s.Exec, psCommand(windowsPrepareScript(d.ID, mountPoint))); err != nil {
+		if _, err := run(ctx, s.Exec, psCommand(WindowsPrepareScript(d.ID, mountPoint))); err != nil {
 			return "", 0, err
 		}
 	}

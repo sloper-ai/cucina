@@ -10,3 +10,13 @@ filegroup(
     srcs = glob(["*.yaml"]),
     visibility = ["//visibility:public"],
 )
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "crds",
+    srcs = ["embed.go"],
+    embedsrcs = glob(["*.yaml"]),
+    importpath = "github.com/sloper-ai/cucina/api/crds",
+    visibility = ["//visibility:public"],
+)
