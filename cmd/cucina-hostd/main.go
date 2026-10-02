@@ -203,7 +203,7 @@ func run(f *flags) error {
 	if err != nil {
 		return err
 	}
-	defer closer.Close()
+	defer func() { _ = closer.Close() }()
 
 	cfg, err := loadConfig(f)
 	if err != nil {

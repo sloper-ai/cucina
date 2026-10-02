@@ -138,4 +138,4 @@ func (systemClock) Sleep(ctx context.Context, d time.Duration) error {
 type otterClock struct{ c ports.Clock }
 
 func (o otterClock) NowNano() int64                        { return o.c.Now().UnixNano() }
-func (o otterClock) Tick(d time.Duration) <-chan time.Time { return time.Tick(d) } //nolint:staticcheck // otter stops the goroutine on Close
+func (o otterClock) Tick(d time.Duration) <-chan time.Time { return time.Tick(d) }

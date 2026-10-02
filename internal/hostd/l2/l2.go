@@ -367,7 +367,7 @@ func (s *Supervisor) scrape(ctx context.Context) {
 		s.mu.Unlock()
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	stats := ParseMetrics(io.LimitReader(resp.Body, 8<<20))
 	stats.Up = true
 	stats.SizeBytes = st.CacheSizeBytes
@@ -414,7 +414,7 @@ func ParseMetrics(r io.Reader) Stats {
 // splitSample parses `name{a="b",c="d"} value`.
 func splitSample(line string) (name string, labels map[string]string, value float64, ok bool) {
 	labels = map[string]string{}
-	rest := line
+	var rest string
 	if i := strings.IndexByte(line, '{'); i >= 0 {
 		j := strings.LastIndexByte(line, '}')
 		if j < i {

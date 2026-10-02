@@ -159,7 +159,7 @@ func (c *CloudIdentity) DirectGroups(ctx context.Context, memberKey string) ([]s
 			NextPageToken string `json:"nextPageToken"`
 		}
 		err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("cloud identity: HTTP %d", resp.StatusCode)
 		}

@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
-	"strings"
 	"testing"
 	"time"
 
@@ -177,5 +176,5 @@ func TestControllerOverrides(t *testing.T) {
 			require.Equal(t, tc.want, c.Tunables(tc.slots, tc.hs))
 		})
 	}
-	require.False(t, strings.Contains(c.String(), c.SiteEnrollmentToken))
+	require.NotContains(t, c.String(), c.SiteEnrollmentToken)
 }

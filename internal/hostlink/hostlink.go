@@ -789,7 +789,7 @@ func (s *Server) Diagnostics(ctx context.Context, serial string, req Diagnostics
 				case overflow:
 					pw.CloseWithError(errors.New("diagnostics stream truncated: reader too slow"))
 				default:
-					pw.Close()
+					_ = pw.Close()
 				}
 				return
 			case <-limit:

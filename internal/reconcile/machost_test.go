@@ -67,7 +67,7 @@ func TestMacHostReconcile(t *testing.T) {
 	h.clock.Advance(h.cfg.Hosts.StaleAfter.Duration + time.Second)
 	reconcileHost()
 	assert.Equal(t, v1alpha1.MacHostOffline, phase())
-	assert.Equal(t, 1.0, testutil.ToFloat64(h.metrics.Hosts.WithLabelValues(v1alpha1.MacHostOffline)))
+	assert.InDelta(t, 1.0, testutil.ToFloat64(h.metrics.Hosts.WithLabelValues(v1alpha1.MacHostOffline)), 0)
 
 	// Back online and removed: its VMs are stopped before the finalizer goes.
 	h.hosts.SetOnline(serial, true)

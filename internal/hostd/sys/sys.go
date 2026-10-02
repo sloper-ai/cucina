@@ -98,10 +98,10 @@ func (e *Exec) Run(ctx context.Context, c ports.Command) (ports.ExecResult, erro
 	case <-ctx.Done():
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		select {
-		case werr = <-done:
+		case <-done:
 		case <-time.After(5 * time.Second):
 			_ = cmd.Process.Kill()
-			werr = <-done
+			<-done
 		}
 		return ports.ExecResult{ExitCode: -1, Stdout: stdout.buf.Bytes(), Stderr: stderr.buf.Bytes()}, ctx.Err()
 	}
@@ -252,9 +252,9 @@ func (FS) DiskUsage(path string) (used, free uint64, err error) {
 	if err := syscall.Statfs(path, &st); err != nil {
 		return 0, 0, err
 	}
-	total := uint64(st.Blocks) * uint64(st.Bsize)
-	free = uint64(st.Bavail) * uint64(st.Bsize)
-	return total - uint64(st.Bfree)*uint64(st.Bsize), free, nil
+	total := st.Blocks * uint64(st.Bsize)
+	free = st.Bavail * uint64(st.Bsize)
+	return total - st.Bfree*uint64(st.Bsize), free, nil
 }
 
 // ListDir implements ports.FS.

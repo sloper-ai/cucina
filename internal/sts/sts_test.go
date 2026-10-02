@@ -128,7 +128,7 @@ func (e *env) post(body string, contentType string) result {
 	e.t.Helper()
 	resp, err := http.Post(e.http.URL+"/token", contentType, strings.NewReader(body))
 	require.NoError(e.t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	var m map[string]any
 	_ = json.Unmarshal(raw, &m)
@@ -178,7 +178,7 @@ func TestTokenExchangeEndToEnd(t *testing.T) {
 		minted = append(minted, raw)
 		c, err := e.mgr.Verifier.Verify(raw)
 		require.NoError(t, err)
-		assert.Equal(t, float64(c.Expiry-c.IssuedAt), body["expires_in"])
+		assert.InDelta(t, float64(c.Expiry-c.IssuedAt), body["expires_in"], 0)
 		return c
 	}
 	reject := func(t *testing.T, wantStatus int, wantCode string, r result) {
@@ -315,18 +315,18 @@ func TestTokenExchangeEndToEnd(t *testing.T) {
 	t.Run("parameters in the URL are refused", func(t *testing.T) {
 		resp, err := http.Post(e.http.URL+"/token?subject_token=abc", "application/x-www-form-urlencoded", strings.NewReader("grant_type=x"))
 		require.NoError(t, err)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 		resp, err = http.Get(e.http.URL + "/token")
 		require.NoError(t, err)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 	})
 
 	t.Run("discovery, JWKS and probes", func(t *testing.T) {
 		var doc map[string]any
 		getJSON(t, e.http.URL+"/.well-known/cucina-configuration", &doc)
-		assert.Equal(t, float64(1), doc["version"])
+		assert.InDelta(t, float64(1), doc["version"], 0)
 		assert.Equal(t, stsURL, doc["issuer"])
 		assert.Equal(t, stsURL+"/token", doc["token_endpoint"])
 		assert.Equal(t, stsURL+"/jwks.json", doc["jwks_uri"])
@@ -343,14 +343,14 @@ func TestTokenExchangeEndToEnd(t *testing.T) {
 		resp, err := http.Get(e.http.URL + "/jwks.json")
 		require.NoError(t, err)
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		want, _ := e.mgr.Ring.KeySet().JWKSJSON()
 		assert.JSONEq(t, string(want), string(body))
 		assert.NotContains(t, string(body), `"d":`, "no private key material")
 		for _, p := range []string{"/-/healthy", "/-/ready"} {
 			resp, err := http.Get(e.http.URL + p)
 			require.NoError(t, err)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			assert.Equal(t, http.StatusOK, resp.StatusCode, p)
 		}
 	})
@@ -379,9 +379,9 @@ func TestTokenExchangeEndToEnd(t *testing.T) {
 				labels[issuer+"|"+result] += m.GetCounter().GetValue()
 			}
 		}
-		assert.Equal(t, float64(3), labels[e.google.URL+"|ok"], "%v", labels)
-		assert.Equal(t, float64(2), labels[e.github.URL+"|ok"], "%v", labels)
-		assert.Equal(t, float64(2), labels["service-account|ok"], "%v", labels)
+		assert.InDelta(t, float64(3), labels[e.google.URL+"|ok"], 0, "%v", labels)
+		assert.InDelta(t, float64(2), labels[e.github.URL+"|ok"], 0, "%v", labels)
+		assert.InDelta(t, float64(2), labels["service-account|ok"], 0, "%v", labels)
 		assert.Positive(t, labels[e.google.URL+"|access_denied"], "%v", labels)
 		for k := range labels {
 			issuer, _, _ := strings.Cut(k, "|")
@@ -421,7 +421,7 @@ func getJSON(t *testing.T, u string, v any) {
 	t.Helper()
 	resp, err := http.Get(u)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(v))
 }
@@ -473,7 +473,7 @@ func TestServeTLS(t *testing.T) {
 	}
 	resp, err := get(poolA)
 	require.NoError(t, err)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	assert.Equal(t, 2, resp.ProtoMajor, "HTTP/2")
 	assert.Equal(t, certA, resp.TLS.PeerCertificates[0].SerialNumber.String())
 
@@ -481,7 +481,7 @@ func TestServeTLS(t *testing.T) {
 	e.clock.Advance(11 * time.Second)
 	resp, err = get(poolB)
 	require.NoError(t, err)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	assert.Equal(t, certB, resp.TLS.PeerCertificates[0].SerialNumber.String(), "rotated certificate served")
 }
 
@@ -525,7 +525,7 @@ func TestZeroTrustPolicies(t *testing.T) {
 	assert.Equal(t, []any{}, doc["identity_providers"])
 	resp, err := http.Get(e.http.URL + "/jwks.json")
 	require.NoError(t, err)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	r := e.exchange(e.breakKey, auth.TokenTypeServiceKey)
 	require.Equal(t, http.StatusOK, r.code, "%v", r.body)

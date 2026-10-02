@@ -3,7 +3,6 @@
 package pools_test
 
 import (
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -129,7 +128,7 @@ func TestResolve(t *testing.T) {
 			r, err := pools.Resolve(cat, tc.wp, tc.env)
 			if tc.want.err != nil {
 				require.Error(t, err)
-				assert.True(t, errors.Is(err, tc.want.err), "got %v", err)
+				assert.ErrorIs(t, err, tc.want.err, "got %v", err)
 				return
 			}
 			require.NoError(t, err)

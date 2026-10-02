@@ -3,7 +3,6 @@
 package redact_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,5 +29,5 @@ func TestBytes(t *testing.T) {
 	}
 	plain := "2026-10-02T08:00:00Z level=info msg=\"vm ready\" vm=vm-1 ip=192.168.64.5"
 	require.Equal(t, plain, string(redact.Bytes([]byte(plain))))
-	require.False(t, strings.Contains(string(redact.Bytes([]byte("x"), "")), redact.Marker))
+	require.NotContains(t, string(redact.Bytes([]byte("x"), "")), redact.Marker)
 }

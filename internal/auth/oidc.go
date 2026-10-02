@@ -203,7 +203,7 @@ func (v *OIDCVerifier) discover(ctx context.Context, spec v1alpha1.IssuerSpec) (
 	if err != nil {
 		return nil, fmt.Errorf("fetching discovery document: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("discovery document: HTTP %d", resp.StatusCode)
 	}

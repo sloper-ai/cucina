@@ -708,7 +708,7 @@ func (m *Manager) retryGuest(ctx context.Context, tn string, c ports.Command, ok
 			}
 		}
 		if ctx.Err() != nil {
-			return res, fmt.Errorf("%w (last error: %v)", ctx.Err(), err)
+			return res, fmt.Errorf("%w (last error: %w)", ctx.Err(), err)
 		}
 		if err := m.o.Clock.Sleep(ctx, delay); err != nil {
 			return res, err
@@ -940,7 +940,7 @@ func ScrapeBuildExecutorCount(ctx context.Context, ip netip.Addr, port uint32) (
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return SumCounter(io.LimitReader(resp.Body, 16<<20), "buildbarn_builder_build_executor_duration_seconds_count"), nil
 }
 

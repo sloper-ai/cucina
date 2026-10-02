@@ -226,7 +226,7 @@ func (a *Agent) EnsureIdentity(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		a.log.Info("enrolling host", "serial", a.facts.Serial, "endpoint", cfg.EnrollAddress())
 		resp, err := identity.Enroll(ctx, cucinav1.NewEnrollmentServiceClient(conn), identity.EnrollParams{
 			Token: cfg.SiteEnrollmentToken, Serial: a.facts.Serial, Hostname: a.facts.Hostname, CSRPEM: csr,

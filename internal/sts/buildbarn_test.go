@@ -118,7 +118,7 @@ func TestBuildbarnAcceptsCucinaTokens(t *testing.T) {
 		bbtest.BootStorage(t, storageWithJWT(t, addr, jwksPath, denyPath), bbtest.GRPCReady(addr, nil))
 		conn, err := bbtest.Dial(addr, nil)
 		require.NoError(t, err)
-		t.Cleanup(func() { conn.Close() })
+		t.Cleanup(func() { _ = conn.Close() })
 		return remoteexecution.NewActionCacheClient(conn)
 	}
 	digest := bbtest.DigestOf([]byte("cucina auth test action"))

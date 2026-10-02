@@ -407,7 +407,7 @@ func (l *poolLoop) launchEC2(ctx context.Context, rt *PoolRuntime, a scaling.Act
 	if o.UserData != nil {
 		b, err := o.UserData(l.name, in.Generation)
 		if err != nil {
-			res.Err = fmt.Errorf("%w: rendering boot data: %v", scaling.ErrSkipped, err)
+			res.Err = fmt.Errorf("%w: rendering boot data: %w", scaling.ErrSkipped, err)
 			return res
 		}
 		userData = b
@@ -707,9 +707,10 @@ func summarize(as []scaling.Action) string {
 	parts := make([]string, 0, len(as))
 	for _, a := range as {
 		n := len(a.VMs)
-		if a.Kind == scaling.ActLaunch {
+		switch a.Kind {
+		case scaling.ActLaunch:
 			n = 1
-		} else if a.Kind == scaling.ActFailQueues {
+		case scaling.ActFailQueues:
 			n = len(a.Queues)
 		}
 		parts = append(parts, fmt.Sprintf("%s/%s×%d", a.Kind, a.Reason, n))

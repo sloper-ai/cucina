@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sloper-ai/cucina/internal/config"
 	"github.com/sloper-ai/cucina/internal/keys"
@@ -35,7 +36,7 @@ func secretWith(name string, kv ...string) *corev1.Secret {
 // TestValidateAuthConfig guards the fail-fast configuration check (R-TEST-7): the
 // controller refuses to start with auth settings that would break R-AUTH-3/-9.
 func TestValidateAuthConfig(t *testing.T) {
-	assert.NoError(t, keys.ValidateAuthConfig(authConfig()))
+	require.NoError(t, keys.ValidateAuthConfig(authConfig()))
 	for name, mutate := range map[string]func(*config.Auth){
 		"missing signing secret":    func(c *config.Auth) { c.SigningKeySecret = "" },
 		"missing deny-list":         func(c *config.Auth) { c.DenyListConfigMap = "" },

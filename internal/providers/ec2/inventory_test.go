@@ -100,9 +100,9 @@ func TestTerminate(t *testing.T) {
 	failed, err := e.p.Terminate(ctx, testCluster, targets)
 	require.NoError(t, err)
 	require.Len(t, failed, 3)
-	assert.ErrorIs(t, failed[foreign], ports.ErrNotOwned)
-	assert.ErrorIs(t, failed[untagged], ports.ErrNotOwned)
-	assert.ErrorIs(t, failed["i-0000000000000dead"], ports.ErrNotFound)
+	require.ErrorIs(t, failed[foreign], ports.ErrNotOwned)
+	require.ErrorIs(t, failed[untagged], ports.ErrNotOwned)
+	require.ErrorIs(t, failed["i-0000000000000dead"], ports.ErrNotFound)
 	assert.Equal(t, 1, e.ec2.callCount("TerminateInstances"), "one batched call")
 
 	e.refresh(t) // shutting-down → terminated
@@ -117,7 +117,7 @@ func TestTerminate(t *testing.T) {
 	}
 
 	_, err = e.p.Terminate(ctx, "", []string{foreign})
-	assert.ErrorIs(t, err, ports.ErrInvalid)
+	require.ErrorIs(t, err, ports.ErrInvalid)
 
 	// The IAM tag condition is the second line of defence: a denial is "not owned".
 	inst, err := e.p.Launch(ctx, launchReq("tok-iam"))
@@ -173,7 +173,7 @@ func TestOrphans(t *testing.T) {
 	e.ec2.mu.Unlock()
 	failed, err := e.p.DeleteOrphans(ctx, testCluster, got)
 	require.NoError(t, err)
-	assert.ErrorIs(t, failed[vol], ports.ErrNotOwned)
+	require.ErrorIs(t, failed[vol], ports.ErrNotOwned)
 	_, volLeft := e.ec2.volume(vol)
 	_, eniLeft := e.ec2.eni(eni)
 	assert.True(t, volLeft)
@@ -194,7 +194,7 @@ func TestOrphanENIGraceSurvivesRestart(t *testing.T) {
 	_, eni := e.ec2.addOrphan(ownedTags(testCluster, "p"), e.clock.Now().Add(-time.Hour))
 	failed, err := e.p.DeleteOrphans(ctx, testCluster, []ports.Orphan{{Kind: ports.OrphanENI, ID: eni}})
 	require.NoError(t, err)
-	assert.ErrorIs(t, failed[eni], ports.ErrInvalid)
+	require.ErrorIs(t, failed[eni], ports.ErrInvalid)
 	_, ok := e.ec2.eni(eni)
 	assert.True(t, ok)
 }

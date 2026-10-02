@@ -43,6 +43,8 @@ import "C"
 
 import (
 	"unsafe"
+
+	"howett.net/plist"
 )
 
 // CFSource reads preference values through CFPreferences (root daemon mode).
@@ -92,4 +94,13 @@ func (s *CFSource) Keys() []string {
 		return nil
 	}
 	return s.KeyLister.Keys()
+}
+
+// valueFromXML decodes a single plist value serialised by CFPropertyListCreateData.
+func valueFromXML(data []byte) (any, error) {
+	var v any
+	if _, err := plist.Unmarshal(data, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }

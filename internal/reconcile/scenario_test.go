@@ -84,7 +84,7 @@ func TestScenarioScaleFromZeroToZero(t *testing.T) {
 	for _, in := range terminated {
 		assert.Contains(t, []ports.InstanceState{ports.InstanceShuttingDown, ports.InstanceTerminated}, in.State)
 	}
-	assert.Equal(t, 2.0, testutil.ToFloat64(h.metrics.VMStops.WithLabelValues(string(pool), "idle")))
+	assert.InDelta(t, 2.0, testutil.ToFloat64(h.metrics.VMStops.WithLabelValues(string(pool), "idle")), 0)
 	assert.GreaterOrEqual(t, h.clock.Now().Sub(lastDone), rt.Spec.IdleTimeout, "terminated before the idle timeout")
 	for tok, n := range h.compute.LaunchesPerToken() {
 		assert.Equal(t, 1, n, "token %s launched %d instances", tok, n)
@@ -201,7 +201,7 @@ func TestScenarioTartSpreadStopRestart(t *testing.T) {
 		}
 	}
 	assert.Len(t, stopped, 2, "stopped VMs are kept for their L1 cache")
-	assert.Equal(t, 2.0, testutil.ToFloat64(h.metrics.VMStops.WithLabelValues("macos", "idle")))
+	assert.InDelta(t, 2.0, testutil.ToFloat64(h.metrics.VMStops.WithLabelValues("macos", "idle")), 0)
 
 	// Work returns: the same VMs start again (no new clones).
 	submit(4)

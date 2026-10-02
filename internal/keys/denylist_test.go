@@ -106,7 +106,7 @@ func TestDenyListRejectsUnsafeValues(t *testing.T) {
 		{Kind: "jti", Value: "AAAAAAAAAAAAAAAAAAAAAA"},
 	} {
 		_, err := keys.EncodeDenyList([]keys.Revocation{r}, t0)
-		assert.Error(t, err, "%s %q", r.Kind, r.Value)
+		require.Error(t, err, "%s %q", r.Kind, r.Value)
 	}
 	safe := "sa:a.b_c~d:e@f/g+h=i-j9Z"
 	got, err := keys.NormalizeSubject(safe)
@@ -139,7 +139,8 @@ func TestRevocationStore(t *testing.T) {
 		require.NoError(t, err)
 		return []byte(cm.Data["denylist.json"])
 	}
-	assert.Equal(t, keys.EmptyDenyList, string(file()))
+	empty := []byte(keys.EmptyDenyList) // exact bytes: Buildbarn reads the file as raw text
+	assert.Equal(t, empty, file())
 
 	const sub, sid = "google:110248495921238986420", "Zm9vYmFyYmF6cXV4MTIzND"
 	objs.FailNext("UpdateConfigMap", fmt.Errorf("injected: %w", keys.ErrConflict))
@@ -156,7 +157,8 @@ func TestRevocationStore(t *testing.T) {
 	_, _, err = a.Revoke(ctx, keys.RevokeRequest{Kind: keys.RevokeSession, Value: sid, Actor: "google:admin"})
 	require.NoError(t, err)
 	assert.True(t, denied(t, file(), sid, "google:someone-else"))
-	assert.Equal(t, `{"version":1,"sids":["sid:`+sid+`"],"subs":["sub:`+sub+`"]}`, string(file()),
+	shape := []byte(`{"version":1,"sids":["sid:` + sid + `"],"subs":["sub:` + sub + `"]}`)
+	assert.Equal(t, shape, file(),
 		"the exact file shape published in docs/security.md (chart test vectors depend on it)")
 	clock.Advance(keys.MaxTokenTTL + keys.ClockSkew - time.Second)
 	assert.True(t, a.IsDenied(sid, ""), "kept while a token carrying it can be valid")
@@ -181,13 +183,13 @@ func TestRevocationStore(t *testing.T) {
 
 	require.NoError(t, a.Remove(ctx, keys.RevokeSubject, sub))
 	assert.False(t, a.IsDenied("", sub))
-	assert.Equal(t, keys.EmptyDenyList, string(file()))
+	assert.Equal(t, empty, file())
 
 	// The file is capped: every authorizer scans it on every request.
 	var lastErr error
 	for i := 0; i < 200 && lastErr == nil; i++ {
 		_, _, lastErr = a.Revoke(ctx, keys.RevokeRequest{Kind: keys.RevokeSubject, Value: fmt.Sprintf("github:%04d:%s", i, strings.Repeat("w", 480))})
 	}
-	assert.ErrorIs(t, lastErr, keys.ErrDenyListFull)
+	require.ErrorIs(t, lastErr, keys.ErrDenyListFull)
 	assert.LessOrEqual(t, len(file()), keys.MaxDenyListBytes)
 }

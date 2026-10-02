@@ -142,7 +142,7 @@ func (p *frontendProbe) probe(ctx context.Context, addr string, roots *x509.Cert
 	if err != nil {
 		return false, err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	cctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok), 5*time.Second)
 	defer cancel()
 	_, err = repb.NewCapabilitiesClient(conn).GetCapabilities(cctx, &repb.GetCapabilitiesRequest{InstanceName: p.instance})

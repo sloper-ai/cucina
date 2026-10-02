@@ -186,7 +186,7 @@ type Duration struct{ time.Duration }
 
 // MarshalJSON implements json.Marshaler.
 func (d Duration) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + d.Duration.String() + `"`), nil
+	return []byte(`"` + d.String() + `"`), nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler; it accepts "5m" strings only.

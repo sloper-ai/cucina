@@ -57,9 +57,7 @@ type Server struct {
 	ipLimit    *limiter
 	subLimit   *limiter
 	metrics    *metrics
-	discovery  []byte
 	instances  map[string]bool
-	tlsConfig  *tls.Config
 	mux        *http.ServeMux
 	shutdownTO time.Duration
 }

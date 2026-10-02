@@ -91,12 +91,3 @@ func (l Layered) Keys() []string {
 	sort.Strings(keys)
 	return keys
 }
-
-// valueFromXML decodes a single plist value serialised by CFPropertyListCreateData.
-func valueFromXML(data []byte) (any, error) {
-	var v any
-	if _, err := plist.Unmarshal(data, &v); err != nil {
-		return nil, err
-	}
-	return v, nil
-}

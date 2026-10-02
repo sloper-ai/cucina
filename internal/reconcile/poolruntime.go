@@ -146,7 +146,7 @@ func (b *RuntimeBuilder) Build(ctx context.Context, wp *v1alpha1.WorkerPool, hos
 	for _, w := range s.FloorSchedule {
 		fw, err := scaling.ParseFloorWindow(w.Name, w.Days, w.Start, w.End, int(w.MinRunning))
 		if err != nil {
-			return nil, fmt.Errorf("%w: floorSchedule: %v", pools.ErrInvalidSpec, err)
+			return nil, fmt.Errorf("%w: floorSchedule: %w", pools.ErrInvalidSpec, err)
 		}
 		spec.Floors = append(spec.Floors, fw)
 	}
@@ -162,7 +162,7 @@ func (b *RuntimeBuilder) Build(ctx context.Context, wp *v1alpha1.WorkerPool, hos
 		spec.DailyInstanceHourCap = float64(*s.DailyInstanceHourCap)
 	}
 	if err := scaling.ValidateSpec(spec, b.Scaling); err != nil {
-		return nil, fmt.Errorf("%w: %v", pools.ErrInvalidSpec, err)
+		return nil, fmt.Errorf("%w: %w", pools.ErrInvalidSpec, err)
 	}
 	rt.Spec = spec
 	rt.Resolved = res

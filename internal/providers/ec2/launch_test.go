@@ -166,10 +166,10 @@ func TestLaunchWalkAndErrors(t *testing.T) {
 			}
 			require.Error(t, err)
 			for _, s := range tc.wantErr {
-				assert.ErrorIs(t, err, s)
+				require.ErrorIs(t, err, s)
 			}
 			for _, s := range tc.notErr {
-				assert.NotErrorIs(t, err, s)
+				require.NotErrorIs(t, err, s)
 			}
 			var ce *CapacityError
 			if errors.As(err, &ce) {
@@ -205,7 +205,7 @@ func TestLaunchRejectsInvalidRequests(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			e := newEnv(t)
 			_, err := e.p.Launch(context.Background(), launchReq("tok", mut))
-			assert.ErrorIs(t, err, ports.ErrInvalid)
+			require.ErrorIs(t, err, ports.ErrInvalid)
 			assert.Zero(t, e.ec2.callCount("RunInstances"))
 		})
 	}

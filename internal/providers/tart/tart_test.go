@@ -138,7 +138,7 @@ func TestErrorMapping(t *testing.T) {
 		case "stop":
 			err = rt.Stop(ctx, "x", time.Second)
 		}
-		require.True(t, errors.Is(err, tc.want), "%s: %v", tc.stderr, err)
+		require.ErrorIs(t, err, tc.want, "%s: %v", tc.stderr, err)
 	}
 	ft.AddImage(faketart.Image{Ref: testImage})
 	require.NoError(t, rt.Clone(ctx, testImage, "vm", 0))

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
@@ -33,14 +32,14 @@ func TestRunInstancesTokenBucket(t *testing.T) {
 	e.clock.Advance(time.Minute) // bucket full again
 	before := e.clock.Slept()
 	throttled := &smithyhttp.ResponseError{
-		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 503, Header: http.Header{"Retry-After": []string{"3"}}}},
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{"Retry-After": []string{"3"}}}},
 		Err:      &smithy.GenericAPIError{Code: "RequestLimitExceeded"},
 	}
 	e.ec2.failOnce("RunInstances", throttled)
 	_, err := e.p.Launch(ctx, launchReq("tok-throttled"))
 	var te *ThrottleError
 	require.ErrorAs(t, err, &te)
-	assert.ErrorIs(t, err, ports.ErrThrottled)
+	require.ErrorIs(t, err, ports.ErrThrottled)
 	assert.Equal(t, 3*time.Second, te.RetryAfter)
 
 	_, err = e.p.Launch(ctx, launchReq("tok-after"))
@@ -61,11 +60,10 @@ func TestRetryerDoesNotRetryCapacity(t *testing.T) {
 		"InternalError":                true,
 	} {
 		err := &smithyhttp.ResponseError{
-			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: 500}},
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusInternalServerError}},
 			Err:      &smithy.GenericAPIError{Code: code},
 		}
 		assert.Equal(t, want, r.IsErrorRetryable(err), code)
 	}
 	assert.Greater(t, r.MaxAttempts(), 1)
-	_ = aws.Retryer(r)
 }

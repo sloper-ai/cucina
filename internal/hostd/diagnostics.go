@@ -151,7 +151,7 @@ func tailFile(path string, lines int) ([]byte, int64, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	st, err := f.Stat()
 	if err != nil {
 		return nil, 0, err
@@ -178,7 +178,7 @@ func readFrom(path string, off int64) ([]byte, int64, error) {
 	if err != nil {
 		return nil, off, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return nil, off, err
 	}

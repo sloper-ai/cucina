@@ -4,7 +4,6 @@ package controller_test
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -77,7 +76,7 @@ func testSSMShell(t *testing.T) {
 		other := &controller.SSMShell{API: api, Compute: compute, Cluster: "another-cluster", Clock: controller.SystemClock{}}
 		_, err = other.RunScript(ctx, id, false, "whoami")
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, controller.ErrNotWorker))
+		require.ErrorIs(t, err, controller.ErrNotWorker)
 	}
 	assert.Equal(t, []string{in.ID}, api.sent, "SSM is only called for own workers")
 }

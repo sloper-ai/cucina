@@ -86,5 +86,5 @@ func TestMetricsMatchContractAndLintClean(t *testing.T) {
 	// A second construction on the same registry shares the collectors.
 	m2, err := metrics.New(reg)
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, testutil.ToFloat64(m2.InvariantViolations.WithLabelValues("InstancesNeverExceedMax")))
+	assert.InDelta(t, 1.0, testutil.ToFloat64(m2.InvariantViolations.WithLabelValues("InstancesNeverExceedMax")), 0)
 }

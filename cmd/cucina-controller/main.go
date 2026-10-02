@@ -235,7 +235,7 @@ func keysCmd() *cobra.Command {
 				return err
 			}
 			if newKID != "" {
-				fmt.Fprintln(cmd.OutOrStdout(), newKID)
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), newKID)
 			}
 			return nil
 		}

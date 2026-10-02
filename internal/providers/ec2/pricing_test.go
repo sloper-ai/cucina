@@ -58,7 +58,7 @@ func TestInstancePricesFallBackToTheEmbeddedTable(t *testing.T) {
 	e.price.err = apiError("ServiceUnavailableException")
 
 	got, err := e.p.InstancePrices(ctx, []string{"t4g.nano", "c7i.8xlarge", "z9.huge"}, false)
-	assert.ErrorIs(t, err, ports.ErrNotFound, "a type in neither source is reported")
+	require.ErrorIs(t, err, ports.ErrNotFound, "a type in neither source is reported")
 	assert.Equal(t, ports.InstancePrice{Type: "t4g.nano", USDPerHour: 0.005, VCPU: 2, MemoryGiB: 0.5}, got["t4g.nano"])
 	assert.Equal(t, 32, got["c7i.8xlarge"].VCPU)
 	assert.NotContains(t, got, "z9.huge")
@@ -70,7 +70,7 @@ func TestInstancePricesFallBackToTheEmbeddedTable(t *testing.T) {
 	assert.Equal(t, calls, e.price.calls, "the API is not retried during an outage window")
 
 	_, err = e.p.InstancePrices(ctx, []string{"t4g.nano"}, true)
-	assert.ErrorIs(t, err, ports.ErrNotFound, "Graviton has no Windows price")
+	require.ErrorIs(t, err, ports.ErrNotFound, "Graviton has no Windows price")
 
 	_, err = time.Parse(time.DateOnly, FallbackPrices().AsOf)
 	assert.NoError(t, err, "the embedded table is dated")

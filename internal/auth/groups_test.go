@@ -78,7 +78,7 @@ func TestGroupLookup(t *testing.T) {
 	require.Error(t, err)
 
 	_, err = g.Groups(ctx, "cloud-identity", ports.Claims{"email": "alice@example.com", "email_verified": "false"}, time.Minute)
-	assert.Error(t, err, "unverified e-mail is never looked up")
+	require.Error(t, err, "unverified e-mail is never looked up")
 
 	// Engine integration: group-based grants, and a failed lookup denies the exchange.
 	clock2 := keystest.NewClock(t0)

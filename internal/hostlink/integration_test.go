@@ -44,7 +44,7 @@ func advanceUntil(t *testing.T, what string, limit time.Duration, cond func() bo
 		if time.Now().After(deadline) {
 			t.Fatalf("condition not met within %s (fake clock): %s", limit, what)
 		}
-		time.Sleep(time.Second)
+		<-time.After(time.Second)
 	}
 }
 
@@ -284,7 +284,7 @@ func TestReconnectAndResync(t *testing.T) {
 		advanceUntil(t, "host offline", 2*time.Minute, func() bool { h, _ := e.hostState(t); return !h.Online })
 		require.ErrorIs(t, e.ctrl.Host().StopVM(ctx, serial, "vm-1", time.Minute, "idle"), hostlink.ErrHostOffline)
 		dials := e.net.Dials(hostlinktest.HostAddr)
-		time.Sleep(time.Minute)
+		<-time.After(time.Minute)
 		require.Less(t, e.net.Dials(hostlinktest.HostAddr)-dials, 20, "reconnects back off")
 		e.net.Down(hostlinktest.HostAddr, false)
 		advanceUntil(t, "online after down", 2*time.Minute, e.online(t))
@@ -435,14 +435,14 @@ func TestHostCertificateRenewal(t *testing.T) {
 		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
 		first := e.agent.CertificateExpiry()
 		require.False(t, first.IsZero())
-		lifetime := first.Sub(time.Now())
+		lifetime := time.Until(first)
 		// Two thirds of the lifetime later the housekeeping loop renews.
 		advanceUntil(t, "certificate renewed", lifetime, func() bool { return e.agent.CertificateExpiry().After(first) })
 		hosts, err := ef.Server.Admin().ListHosts(context.Background())
 		require.NoError(t, err)
 		require.Len(t, hosts, 1)
 		require.Equal(t, e.agent.CertificateExpiry(), hosts[0].CertExpiry, "enroll recorded the renewal")
-		require.Less(t, time.Now().Sub(first.Add(-lifetime)), lifetime, "renewed before expiry")
+		require.Less(t, time.Since(first.Add(-lifetime)), lifetime, "renewed before expiry")
 		require.NoError(t, e.ctrl.Host().Ping(context.Background(), serial))
 		e.powerOff(t)
 	})

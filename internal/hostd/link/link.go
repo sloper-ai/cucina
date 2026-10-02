@@ -240,7 +240,7 @@ func (l *Link) session(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stream, err := cucinav1.NewHostServiceClient(conn).Connect(sctx)

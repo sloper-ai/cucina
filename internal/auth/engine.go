@@ -385,7 +385,7 @@ func (e *Engine) evaluate(ctx context.Context, p *compiledPolicy, claims ports.C
 	deny := func(format string, args ...any) *Error {
 		return &Error{Code: CodeAccessDenied, Policy: p.key, Reason: fmt.Sprintf(format, args...)}
 	}
-	cv := map[string]any(claimsValue(map[string]any(claims)).(map[string]any))
+	cv := claimsValue(map[string]any(claims)).(map[string]any)
 	vars := map[string]any{"claims": cv}
 	for _, r := range p.rules {
 		ok, err := r.prg.evalBool(ctx, vars)

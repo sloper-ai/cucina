@@ -92,7 +92,7 @@ func TestServiceKeyLifecycle(t *testing.T) {
 	cm, err := objs.GetConfigMap(ctx, "cucina-denylist")
 	require.NoError(t, err)
 	assert.Contains(t, cm.Data["denylist.json"], `"sid:`+keys.SessionForKey(id)+`"`)
-	assert.ErrorIs(t, replicaA.Revoke(ctx, "aaaaaaaaaaaaaaaa", "x"), keys.ErrUnknownServiceKey)
+	require.ErrorIs(t, replicaA.Revoke(ctx, "aaaaaaaaaaaaaaaa", "x"), keys.ErrUnknownServiceKey)
 
 	// Expiry.
 	short, _, err := replicaA.Create(ctx, keys.CreateKeyRequest{Account: "nightly-cache", TTL: time.Hour})
@@ -104,7 +104,7 @@ func TestServiceKeyLifecycle(t *testing.T) {
 	assert.Equal(t, "service key expired", keyReason(err))
 
 	_, _, err = replicaA.Create(ctx, keys.CreateKeyRequest{Account: keys.BreakGlassAccount})
-	assert.Error(t, err, "the break-glass account is reserved")
+	require.Error(t, err, "the break-glass account is reserved")
 	_, _, err = replicaA.Create(ctx, keys.CreateKeyRequest{Account: "Not_A_Label"})
 	assert.Error(t, err)
 }
@@ -140,7 +140,8 @@ func TestBootstrap(t *testing.T) {
 		return out
 	}
 	first := snapshot()
-	assert.Equal(t, keys.EmptyDenyList, first["cucina-denylist/denylist.json"])
+	emptyList := []byte(keys.EmptyDenyList) // exact bytes: Buildbarn reads the file as raw text
+	assert.Equal(t, emptyList, []byte(first["cucina-denylist/denylist.json"]))
 	assert.Contains(t, first["cucina-jwks/jwks.json"], `"alg":"ES256"`)
 
 	clock.Advance(time.Hour)

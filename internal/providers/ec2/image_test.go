@@ -108,9 +108,9 @@ func TestFastLaunch(t *testing.T) {
 	assert.Equal(t, 1, e.ec2.callCount("DisableFastLaunch"), "disabling a disabled image makes no call")
 
 	_, err = e.p.FastLaunch(ctx, ports.FastLaunchOp{Action: FastLaunchEnable, ImageID: "ami-linux", TargetCount: 1})
-	assert.ErrorIs(t, err, ports.ErrInvalid, "Fast Launch is Windows only")
+	require.ErrorIs(t, err, ports.ErrInvalid, "Fast Launch is Windows only")
 	_, err = e.p.FastLaunch(ctx, ports.FastLaunchOp{Action: "toggle", ImageID: "ami-win"})
-	assert.ErrorIs(t, err, ports.ErrInvalid)
+	require.ErrorIs(t, err, ports.ErrInvalid)
 
 	// The caller's context bounds the wait; the last observed state comes back with it.
 	short, cancel := context.WithCancel(ctx)
@@ -121,6 +121,6 @@ func TestFastLaunch(t *testing.T) {
 	e.ec2.hooks["DescribeFastLaunchImages"] = cancel // expires during the first poll
 	e.ec2.mu.Unlock()
 	st, err = e.p.FastLaunch(short, op(FastLaunchDisable))
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, "disabling", st.State)
 }
