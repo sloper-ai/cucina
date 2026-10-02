@@ -17,6 +17,12 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# R-ARTIFACT: the base is also a client image and must retain its legal payload.
+foreach ($name in @('LICENSE.md', 'THIRD_PARTY_NOTICES.md')) {
+  if ((Get-Item -LiteralPath "C:\ProgramData\cucina\doc\$name").Length -eq 0) { throw "Empty legal document: $name" }
+}
+if (@(Get-ChildItem 'C:\ProgramData\cucina\doc\licenses' -File -Filter '*.txt').Count -eq 0) { throw 'Redistributed license texts missing' }
+
 # --- .NET native images: drain the queue now (VS installs queue many assemblies) ---------------------------
 foreach ($fw in @('Framework64', 'Framework')) {
   $ngen = Join-Path $env:windir "Microsoft.NET\$fw\v4.0.30319\ngen.exe"

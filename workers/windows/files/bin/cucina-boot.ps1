@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 <#
 .SYNOPSIS
-  Boot orchestration for EC2 Windows workers; runs once at every startup as LocalSystem (automatic one-shot service
-  `cucina-boot`, wrapped by shawl).
+  Boot orchestration for EC2 Windows workers; runs once at every startup as LocalSystem (scheduled task
+  `\cucina\cucina-boot`, after Windows setup; ADR 0302).
   Windows has no ExecStartPre, so this script provides the same ordering as the Linux systemd units:
 
     1. reset per-boot runtime state (C:\ProgramData\cucina\run, the counterpart of /run/cucina);

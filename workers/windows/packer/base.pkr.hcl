@@ -95,7 +95,7 @@ build {
   sources = ["source.amazon-ebs.base"]
 
   provisioner "powershell" {
-    inline = ["New-Item -ItemType Directory -Force -Path ${local.stage_dir}/scripts | Out-Null"]
+    inline = ["New-Item -ItemType Directory -Force -Path ${local.stage_dir}/scripts, ${local.stage_dir}/notices/licenses | Out-Null"]
   }
 
   provisioner "file" {
@@ -103,6 +103,7 @@ build {
       "${local.script_dir}/configure-system.ps1",
       "${local.script_dir}/install-vs.ps1",
       "${local.script_dir}/install-base.ps1",
+      "${local.script_dir}/install-notices.ps1",
       "${local.script_dir}/verify-base.ps1",
       "${local.script_dir}/finalize.ps1",
     ]
@@ -112,6 +113,20 @@ build {
   provisioner "file" {
     source      = "${path.root}/../versions.json"
     destination = "${local.stage_dir}/versions.json"
+  }
+
+  provisioner "file" {
+    sources     = ["${path.root}/../../../LICENSE.md", "${path.root}/../../../THIRD_PARTY_NOTICES.md"]
+    destination = "${local.stage_dir}/notices/"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../../../tools/notices/texts/"
+    destination = "${local.stage_dir}/notices/licenses/"
+  }
+
+  provisioner "powershell" {
+    inline = ["& ${local.stage_dir}/scripts/install-notices.ps1 -Source ${local.stage_dir}/notices"]
   }
 
   # Diagnostics for the build log (OS build, EC2Launch CLI surface, free space).

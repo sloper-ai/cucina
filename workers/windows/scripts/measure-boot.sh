@@ -7,7 +7,7 @@
 # again so the shawl services really start (WinFSP mount B:, runner socket). Label runs with --label
 # (e.g. slow-path / fast-launch) to compare launches with and without a pre-provisioned Fast Launch snapshot.
 #
-#   measure-boot.sh [--ami AMI] [--type c7a.2xlarge] [--count 2] [--subnet public|private] [--with-config]
+#   measure-boot.sh [--ami AMI] [--type m7i.large] [--count 2] [--subnet public|private] [--with-config]
 #                   [--label NAME] [--out FILE]
 set -euo pipefail
 
@@ -15,7 +15,7 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=/dev/null
 source "$here/../../linux/scripts/ec2lib.sh"
 
-ami="" type=c7a.2xlarge count=2 subnet_kind=public with_config=0 label=default
+ami="" type=m7i.large count=2 subnet_kind=public with_config=0 label=default
 out=${CUCINA_DEV_STORAGE:?}/logs/images/boot-measurements.jsonl
 while [[ $# -gt 0 ]]; do
   case "$1" in

@@ -77,8 +77,8 @@
   "installed": {
     "linux-ubuntu-arm64": {
       "family": "linux-ubuntu-arm64",
-      "image_version": "20261002.1035",
-      "generation": "6",
+      "image_version": "20261002.1340",
+      "generation": "7",
       "os": {
         "PRETTY_NAME": "Ubuntu 26.04.1 LTS",
         "NAME": "Ubuntu",
@@ -111,7 +111,7 @@
         "gid": 2000
       },
       "worker_agent": true,
-      "worker_agent_version": "cucina-worker-agent 20261002.1034 linux/arm64",
+      "worker_agent_version": "cucina-worker-agent 20261002.legal linux/arm64",
       "paths": {
         "bb_worker_config": "/etc/cucina/bb/worker.json",
         "bb_runner_config": "/etc/cucina/bb/runner.json",
@@ -174,8 +174,8 @@
     },
     "linux-ubuntu-x86_64": {
       "family": "linux-ubuntu-x86_64",
-      "image_version": "20261002.1035",
-      "generation": "6",
+      "image_version": "20261002.1333",
+      "generation": "8",
       "os": {
         "PRETTY_NAME": "Ubuntu 26.04.1 LTS",
         "NAME": "Ubuntu",
@@ -208,7 +208,7 @@
         "gid": 2000
       },
       "worker_agent": true,
-      "worker_agent_version": "cucina-worker-agent 20261002.1034 linux/amd64",
+      "worker_agent_version": "cucina-worker-agent 20261002.legal linux/amd64",
       "paths": {
         "bb_worker_config": "/etc/cucina/bb/worker.json",
         "bb_runner_config": "/etc/cucina/bb/runner.json",

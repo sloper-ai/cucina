@@ -35,6 +35,9 @@ fetch() { # fetch URL SHA256 DEST
 
 cloud-init status --wait >/dev/null 2>&1 || true
 
+# R-ARTIFACT: fail closed before installing components when their legal payload is absent.
+bash "$stage/install-notices.sh" "$stage/notices" /usr/share/doc/cucina
+
 # --- Packages ------------------------------------------------------------------------------------------------
 if [[ "$VARIANT" == ubuntu ]]; then
   export DEBIAN_FRONTEND=noninteractive

@@ -20,8 +20,9 @@ minimal first-boot work, no reboot, masked units, SSM agent as a deb).
   GRUB keeps its `initrdfail` flag and every launch loads the 43–58 MB generic initrd from the cold EBS snapshot
   (measured: about 3 s of initrd plus up to 10 s of slower pre-kernel time). A host-only dracut image is not
   produced by Ubuntu's `update-initramfs`, so shrinking the initrd is not pursued.
-* chrony uses only the Amazon Time Sync Service (169.254.169.123 / fd00:ec2::123); the SSM agent uses dual-stack
-  endpoints (workers may only have IPv6 egress, R-DATA-4).
+* Ubuntu chrony uses only the Amazon Time Sync Service (169.254.169.123 / fd00:ec2::123); the AL2023 comparison
+  image prefers that source but retains its stock fallback pool. Both SSM agents use dual-stack endpoints
+  (workers may only have IPv6 egress, R-DATA-4).
 
 ## Consequences
 Measured (docs/operations/images.md): launch to `systemctl is-system-running` p50 15.8 s (Ubuntu x86_64), 16.3 s

@@ -95,12 +95,13 @@ build {
   sources = ["source.amazon-ebs.worker"]
 
   provisioner "powershell" {
-    inline = ["New-Item -ItemType Directory -Force -Path ${local.stage_dir}/scripts, ${local.stage_dir}/bin | Out-Null"]
+    inline = ["New-Item -ItemType Directory -Force -Path ${local.stage_dir}/scripts, ${local.stage_dir}/bin, ${local.stage_dir}/notices/licenses | Out-Null"]
   }
 
   provisioner "file" {
     sources = [
       "${local.script_dir}/install-worker.ps1",
+      "${local.script_dir}/install-notices.ps1",
       "${local.script_dir}/verify-worker.ps1",
       "${local.script_dir}/finalize.ps1",
     ]
@@ -120,6 +121,21 @@ build {
   provisioner "file" {
     source      = "${path.root}/../versions.json"
     destination = "${local.stage_dir}/versions.json"
+  }
+
+  # Refresh the payload even when the source is an older base AMI without notices.
+  provisioner "file" {
+    sources     = ["${path.root}/../../../LICENSE.md", "${path.root}/../../../THIRD_PARTY_NOTICES.md"]
+    destination = "${local.stage_dir}/notices/"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../../../tools/notices/texts/"
+    destination = "${local.stage_dir}/notices/licenses/"
+  }
+
+  provisioner "powershell" {
+    inline = ["& ${local.stage_dir}/scripts/install-notices.ps1 -Source ${local.stage_dir}/notices"]
   }
 
   provisioner "powershell" {

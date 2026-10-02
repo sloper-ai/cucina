@@ -14,6 +14,7 @@ SHELL := /bin/bash
 HERE          := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 REGION        ?= us-west-1
 STAGE         ?= base
+BUILDER_TYPE  ?= m7i.large
 OUTPUTS       ?= $(HOME)/.config/cucina/aws-e2e/base-outputs.json
 AMIS_FILE     ?= $(HOME)/.config/cucina/aws-e2e/amis.json
 ARTIFACTS     ?= $(CUCINA_DEV_STORAGE)/images/windows
@@ -55,11 +56,12 @@ image-windows: vars
 	  zip -q -9 cucina-worker-agent.zip cucina-worker-agent.exe && split -b 1000k cucina-worker-agent.zip cucina-worker-agent.zip.part- && \
 	  rm cucina-worker-agent.exe cucina-worker-agent.zip; fi
 	@gen=$${GENERATION:-$$($(LINUX_SCRIPTS)/next-generation.sh windows-$(STAGE) $(REGION))}; \
+	base_ami=""; if [ "$(STAGE)" = worker ]; then base_ami=$$(jq -er '."windows-base".ami_id' "$(AMIS_FILE)"); fi; \
 	echo "building windows-$(STAGE) image $(IMAGE_VERSION) (generation $$gen)"; \
 	cd $(HERE)/packer && $(PACKER) init . >/dev/null && \
 	CUCINA_IMAGES_ARTIFACTS="$(ARTIFACTS)" $(PACKER) build -timestamp-ui -only='$(STAGE).*' \
-	  -var-file="$(ARTIFACTS)/env.pkrvars.json" \
-	  -var image_version=$(IMAGE_VERSION) -var generation=$$gen -var amis_file="$(AMIS_FILE)" \
+	  -var-file="$(ARTIFACTS)/env.pkrvars.json" -var base_instance_type="$(BUILDER_TYPE)" -var worker_instance_type="$(BUILDER_TYPE)" \
+	  -var image_version=$(IMAGE_VERSION) -var generation=$$gen -var amis_file="$(AMIS_FILE)" -var base_ami="$$base_ami" \
 	  -var defender_mode=$(DEFENDER_MODE) -var worker_agent_path="$(ARTIFACTS)/agent-parts" -var sysprep_gate_file="$(SYSPREP_GATE)" \
 	  -var enable_fast_launch=$$([ "$(FAST_LAUNCH)" = 1 ] && echo true || echo false) \
 	  -var fast_launch_target_count=$(FAST_LAUNCH_COUNT) . 2>&1 | tee "$(ARTIFACTS)/windows-$(STAGE)-$(IMAGE_VERSION).packer.log"

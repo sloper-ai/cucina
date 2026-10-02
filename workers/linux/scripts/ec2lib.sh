@@ -77,13 +77,15 @@ ec2lib_ssm_run() {
   [[ "$st" == Success ]]
 }
 
-# ec2lib_terminate IID... (only instances carrying this run's cucina:run tag)
+# ec2lib_terminate IID... (only image-test instances carrying all three matching campaign tags)
 ec2lib_terminate() {
   local iid ids=()
   for iid in "$@"; do
     [[ -z "$iid" || "$iid" == None ]] && continue
     if [[ "$(aws ec2 describe-instances --region "$EC2LIB_REGION" --instance-ids "$iid" \
-      --query "Reservations[0].Instances[0].Tags[?Key=='cucina:run'].Value | [0]" --output text 2>/dev/null)" == "${CUCINA_RUN_ID:?}" ]]; then
+      --filters "Name=tag:cucina:env,Values=${CUCINA_ENV:-e2e}" "Name=tag:cucina:run,Values=${CUCINA_RUN_ID:?}" \
+        "Name=tag:cucina:expires,Values=${CUCINA_EXPIRES:?}" "Name=tag:cucina:role,Values=image-test" \
+      --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null)" == "$iid" ]]; then
       ids+=("$iid")
     fi
   done

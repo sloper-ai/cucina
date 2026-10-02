@@ -5,6 +5,15 @@ variable "region" {
   default = "us-west-1"
 }
 
+variable "source_ami" {
+  type        = string
+  description = "Exact, provider-scoped source AMI from the private source-amis.json lock; update deliberately for OS changes."
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]{8,17}$", var.source_ami))
+    error_message = "The source_ami variable must be an exact AMI ID, not a latest-matching filter."
+  }
+}
+
 variable "arch" {
   type = string
   validation {
@@ -25,7 +34,7 @@ variable "variant" {
 variable "instance_type" {
   type        = string
   default     = ""
-  description = "Builder type; empty = c7i.xlarge (x86_64) / c7g.xlarge (arm64)."
+  description = "Builder type; empty = 2-vCPU m7i.large (x86_64) / m7g.large (arm64)."
 }
 
 variable "root_volume_size" {
@@ -117,7 +126,7 @@ locals {
   pins          = jsondecode(file("${path.root}/../versions.json")).pins
   distro        = local.pins[var.variant]
   family        = "linux-${var.variant}-${var.arch}"
-  instance_type = var.instance_type != "" ? var.instance_type : (var.arch == "x86_64" ? "c7i.xlarge" : "c7g.xlarge")
+  instance_type = var.instance_type != "" ? var.instance_type : (var.arch == "x86_64" ? "m7i.large" : "m7g.large")
   qemu          = var.arch == "x86_64" && var.variant == "ubuntu"
   with_agent    = var.worker_agent_path != "" && fileexists(var.worker_agent_path)
   run_smoke     = local.qemu && var.smoke_dir != ""
@@ -148,17 +157,8 @@ locals {
 }
 
 source "amazon-ebs" "linux" {
-  region = var.region
-  source_ami_filter {
-    filters = {
-      name                = local.distro.name[var.arch]
-      architecture        = var.arch
-      root-device-type    = "ebs"
-      virtualization-type = "hvm"
-    }
-    owners      = [local.distro.owner]
-    most_recent = true
-  }
+  region                                = var.region
+  source_ami                            = var.source_ami
   instance_type                         = local.instance_type
   vpc_id                                = var.vpc_id
   subnet_id                             = var.subnet_id
@@ -203,7 +203,7 @@ build {
   sources = ["source.amazon-ebs.linux"]
 
   provisioner "shell" {
-    inline = ["mkdir -p /var/tmp/cucina/agent /var/tmp/cucina/smoke"]
+    inline = ["mkdir -p /var/tmp/cucina/agent /var/tmp/cucina/smoke /var/tmp/cucina/notices/licenses"]
   }
 
   provisioner "file" {
@@ -214,6 +214,22 @@ build {
   provisioner "file" {
     source      = "${path.root}/../versions.json"
     destination = "/var/tmp/cucina/versions.json"
+  }
+
+  # R-ARTIFACT: payload inputs, not links to documentation outside the image.
+  provisioner "file" {
+    sources     = ["${path.root}/../../../LICENSE.md", "${path.root}/../../../THIRD_PARTY_NOTICES.md"]
+    destination = "/var/tmp/cucina/notices/"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../../../tools/notices/texts/"
+    destination = "/var/tmp/cucina/notices/licenses/"
+  }
+
+  provisioner "file" {
+    source      = "${path.root}/../scripts/install-notices.sh"
+    destination = "/var/tmp/cucina/install-notices.sh"
   }
 
   provisioner "file" {
@@ -264,6 +280,8 @@ build {
     ]
     inline = [
       "set -eu",
+      "test -s /usr/share/doc/cucina/LICENSE.md && test -s /usr/share/doc/cucina/THIRD_PARTY_NOTICES.md",
+      "for f in /var/tmp/cucina/notices/licenses/*.txt; do cmp \"$f\" \"/usr/share/doc/cucina/licenses/$(basename \"$f\")\"; done",
       "systemctl is-system-running --wait || true",
       "systemctl --failed --no-legend",
       "systemctl is-active bb-runner.service bb-worker.service cucina-worker-agent.service || true",

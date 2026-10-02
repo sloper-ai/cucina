@@ -7,7 +7,7 @@
 #   in place by cloud-init so the units really start: FUSE mount, runner socket, run_commands_as), plus
 #   `systemd-analyze` and the top of `systemd-analyze blame`.
 #
-#   measure-boot.sh --family linux-ubuntu-x86_64 [--ami AMI] [--type c7i.large] [--count 3]
+#   measure-boot.sh --family linux-ubuntu-x86_64 [--ami AMI] [--type m7i.large] [--count 3]
 #                   [--subnet public|private] [--init-rate MiBps] [--with-config] [--out FILE]
 # Prints one JSON object per launch (also appended to FILE) and a p50 summary.
 set -euo pipefail
@@ -39,7 +39,7 @@ if [[ -z "$ami" ]]; then
 fi
 [[ "$ami" == ami-* ]] || { echo "no AMI for $family" >&2; exit 1; }
 if [[ -z "$type" ]]; then
-  case "$family" in *arm64) type=c7g.large ;; *) type=c7i.large ;; esac
+  case "$family" in *arm64) type=m7g.large ;; *) type=m7i.large ;; esac
 fi
 case "$subnet_kind" in
   public) subnet=$(ec2lib_out public_subnet_id); EC2LIB_PUBLIC_IP=true ;;

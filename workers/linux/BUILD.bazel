@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("//bazel:tiers.bzl", "cucina_sh_test")
+
+cucina_sh_test(
+    name = "notices_test",
+    srcs = ["tests/notices_test.sh"],
+    data = ["scripts/install-notices.sh"],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "integration",
+)

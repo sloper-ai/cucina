@@ -7,7 +7,7 @@
 # BAZEL_VC / BAZEL_VC_FULL_VERSION / BAZEL_WINSDK_FULL_VERSION from C:\ProgramData\cucina\image\toolchain.json,
 # checks that the compile action used exactly those MSVC/SDK directories, then terminates the instance.
 #
-#   verify-bazel.sh [--ami AMI] [--type c7i.2xlarge] [--result FILE]
+#   verify-bazel.sh [--ami AMI] [--type m7i.large] [--result FILE]
 # FILE's first line is "pass ..." or "fail ..." (the worker build's optional sysprep gate reads it).
 set -euo pipefail
 
@@ -15,7 +15,7 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=/dev/null
 source "$here/../../linux/scripts/ec2lib.sh"
 
-ami="" type=c7i.2xlarge
+ami="" type=m7i.large
 logs=${CUCINA_DEV_STORAGE:?}/logs/images
 result="$logs/verify-bazel.result"
 while [[ $# -gt 0 ]]; do

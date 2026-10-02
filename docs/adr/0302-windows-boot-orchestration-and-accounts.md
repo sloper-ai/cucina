@@ -10,9 +10,9 @@ start once the one-shot exits. R-SEC-5 asks for a low-privilege account for acti
 EC2 Fast Launch boots every pre-provisioned snapshot once on a prep instance, so whatever runs at boot also runs there.
 
 ## Decision
-* Buildbarn and agent services are **demand-start**. An automatic-start one-shot service `cucina-boot` (shawl,
-  `--no-restart`, LocalSystem) runs `C:\bb\bin\cucina-boot.ps1` once per boot (a Task Scheduler "at startup" task
-  was measured to fire only ~60 s after boot on WS2025, the SCM starts the service within seconds): clear per-boot state (`C:\ProgramData\cucina\run`, runner socket dir) -> format a raw
+* Buildbarn and agent services are **demand-start**. The LocalSystem Task Scheduler startup task `\cucina\cucina-boot`
+  runs `C:\bb\bin\cucina-boot.ps1` once per boot. It was measured to fire ~60 s after OS boot on WS2025; correctness
+  during Windows setup takes precedence over earlier SCM startup. Clear per-boot state (`C:\ProgramData\cucina\run`, runner socket dir) -> format a raw
   NVMe instance-store disk (non-fatal) -> bootstrap hook `cucina-bootstrap.ps1` (no-op without
   `cucina-worker-agent.exe`, otherwise `cucina-worker-agent bootstrap`; exit 2 = no EC2 user data, "not a worker":
   nothing starts and the instance stays up; any other non-zero = services are **not** started) ->
@@ -26,6 +26,18 @@ EC2 Fast Launch boots every pre-provisioned snapshot once on a prep instance, so
   (`C:\bb\cache`, `C:\bb\filepool`, SYSTEM/Administrators only). bb_worker's WinFSP file system grants the build
   directory to Everyone with owner = SYSTEM, so the runner account can use it but cannot change its ACLs.
 * The dead-man switch is a scheduled task armed from boot (never during image builds).
+
+## Verification and rejected alternative
+The fixed-agent startup-task image passed full selftest on a fresh EC2 instance. An automatic one-shot SCM service
+was then tried to remove the scheduler delay. Its pre-sysprep selftest and WinFSP smoke passed, but the resulting
+Fast Launch image never reached SSM in three launches. A fourth, bounded five-minute reproduction showed the
+Windows setup dialog "The computer restarted unexpectedly or encountered an unexpected error. Windows installation
+cannot proceed." No EC2Launch console output was available. The orchestration change is therefore rejected and the
+previously validated startup-task AMI reused, rather than retaining the broken image or weakening selftest.
+
+Earlier bootstrap execution during Windows setup is the suspected mechanism, not a proven shutdown trace. Do not
+reintroduce the service without a setup-phase guard and successful post-sysprep launches on both Fast Launch and
+ordinary paths. A pre-sysprep smoke test alone cannot establish that an AMI boots.
 
 ## Consequences
 Residual risk (documented in docs/operations/images.md): `bb_worker` is privileged, so a compromise of bb_worker

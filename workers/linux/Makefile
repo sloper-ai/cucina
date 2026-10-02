@@ -14,8 +14,10 @@ HERE          := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 REGION        ?= us-west-1
 ARCH          ?= x86_64
 VARIANT       ?= ubuntu
+BUILDER_TYPE  ?= $(if $(filter arm64,$(ARCH)),m7g.large,m7i.large)
 OUTPUTS       ?= $(HOME)/.config/cucina/aws-e2e/base-outputs.json
 AMIS_FILE     ?= $(HOME)/.config/cucina/aws-e2e/amis.json
+SOURCE_AMIS_FILE ?= $(HOME)/.config/cucina/aws-e2e/source-amis.json
 ARTIFACTS     ?= $(CUCINA_DEV_STORAGE)/images/linux
 # Simply expanded once per make run (a recursive $(shell date) would change between recipe lines).
 ifeq ($(origin IMAGE_VERSION),undefined)
@@ -39,9 +41,11 @@ $(ARTIFACTS):
 
 vars: | $(ARTIFACTS)
 	@test -s "$(OUTPUTS)" || { echo "missing $(OUTPUTS) (aws-e2e base not applied yet)" >&2; exit 1; }
-	@jq '{vpc_id, subnet_id: .public_subnet_id, security_group_ids: [.sg_builders], admin_cidrs: [.admin_cidr]}' \
-	  "$(OUTPUTS)" > "$(ARTIFACTS)/env.pkrvars.json"
-	@chmod 600 "$(ARTIFACTS)/env.pkrvars.json"
+	@test -s "$(SOURCE_AMIS_FILE)" || { echo "missing private source AMI lock $(SOURCE_AMIS_FILE); select and record an exact source AMI first" >&2; exit 1; }
+	@source_ami=$$(jq -er --arg f "$(FAMILY)" '.[$$f].ami_id' "$(SOURCE_AMIS_FILE)"); \
+	jq --arg source_ami "$$source_ami" '{source_ami: $$source_ami, vpc_id, subnet_id: .public_subnet_id, security_group_ids: [.sg_builders], admin_cidrs: [.admin_cidr]}' \
+	  "$(OUTPUTS)" > "$(ARTIFACTS)/$(FAMILY).pkrvars.json"
+	@chmod 600 "$(ARTIFACTS)/$(FAMILY).pkrvars.json"
 
 agent:
 	@mkdir -p "$(dir $(WORKER_AGENT))"
@@ -57,7 +61,7 @@ image-linux: vars smoke-binaries
 	echo "building $(FAMILY) image $(IMAGE_VERSION) (generation $$gen)"; \
 	cd $(HERE)/packer && $(PACKER) init . >/dev/null && \
 	CUCINA_IMAGES_ARTIFACTS="$(ARTIFACTS)" $(PACKER) build -timestamp-ui \
-	  -var-file="$(ARTIFACTS)/env.pkrvars.json" -var arch=$(ARCH) -var variant=$(VARIANT) \
+	  -var-file="$(ARTIFACTS)/$(FAMILY).pkrvars.json" -var arch=$(ARCH) -var variant=$(VARIANT) -var instance_type="$(BUILDER_TYPE)" \
 	  -var image_version=$(IMAGE_VERSION) -var generation=$$gen -var amis_file="$(AMIS_FILE)" \
 	  -var smoke_dir="$(ARTIFACTS)/smoke" -var worker_agent_path="$(WORKER_AGENT)" .
 
@@ -70,8 +74,9 @@ fmt:
 # Static checks only (no AWS calls).
 validate: | $(ARTIFACTS)
 	$(PACKER) fmt -check -diff $(HERE)/packer
-	@echo '{"vpc_id":"vpc-0","subnet_id":"subnet-0","security_group_ids":["sg-0"],"admin_cidrs":["192.0.2.1/32"]}' > "$(ARTIFACTS)/validate.pkrvars.json"
+	@echo '{"source_ami":"ami-00000000000000000","vpc_id":"vpc-0","subnet_id":"subnet-0","security_group_ids":["sg-0"],"admin_cidrs":["192.0.2.1/32"]}' > "$(ARTIFACTS)/validate.pkrvars.json"
 	cd $(HERE)/packer && $(PACKER) init . >/dev/null && for a in x86_64 arm64; do for v in ubuntu al2023; do \
 	  CUCINA_IMAGES_ARTIFACTS="$(ARTIFACTS)" $(PACKER) validate -var-file="$(ARTIFACTS)/validate.pkrvars.json" \
 	    -var arch=$$a -var variant=$$v -var image_version=0.0.0 -var generation=0 . ; done; done
-	$(SHELLCHECK) $(HERE)/scripts/*.sh $(HERE)/files/bin/*
+	$(SHELLCHECK) $(HERE)/scripts/*.sh $(HERE)/files/bin/* $(HERE)/tests/*.sh
+	bash $(HERE)/tests/notices_test.sh

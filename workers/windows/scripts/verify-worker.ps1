@@ -21,6 +21,13 @@ $result = [ordered]@{}
 
 function Assert-True { param([bool]$Condition, [string]$Message) if (-not $Condition) { throw "verify-worker: $Message" } }
 
+# R-ARTIFACT: legal payload survives provisioning, not just temporary Packer staging.
+foreach ($name in @('LICENSE.md', 'THIRD_PARTY_NOTICES.md')) {
+  Assert-True ((Get-Item -LiteralPath "$state\doc\$name").Length -gt 0) "legal document $name missing or empty"
+}
+Assert-True (@(Get-ChildItem "$state\doc\licenses" -File -Filter '*.txt').Count -gt 0) 'redistributed license texts missing'
+$result.legal_payload = 'ok'
+
 # --- 1. Definitions ----------------------------------------------------------------------------------------
 $runner = Get-CimInstance -ClassName Win32_Service -Filter "Name='cucina-bb-runner'"
 $worker = Get-CimInstance -ClassName Win32_Service -Filter "Name='cucina-bb-worker'"
@@ -32,8 +39,10 @@ Assert-True ($runner.StartMode -eq 'Manual' -and $worker.StartMode -eq 'Manual' 
 $deps = @((Get-Service -Name 'cucina-bb-worker').ServicesDependedOn | ForEach-Object { $_.Name })
 Assert-True ($deps -contains 'cucina-bb-runner') 'cucina-bb-worker must depend on cucina-bb-runner'
 Assert-True ($null -ne (Get-ScheduledTask -TaskPath '\cucina\' -TaskName 'cucina-deadman' -ErrorAction SilentlyContinue)) 'task cucina-deadman missing'
-$boot = Get-CimInstance -ClassName Win32_Service -Filter "Name='cucina-boot'"
-Assert-True ($null -ne $boot -and $boot.StartMode -eq 'Auto' -and $boot.StartName -eq 'LocalSystem') 'service cucina-boot must be automatic, LocalSystem'
+$boot = Get-ScheduledTask -TaskPath '\cucina\' -TaskName 'cucina-boot' -ErrorAction SilentlyContinue
+Assert-True ($null -ne $boot) 'startup task cucina-boot missing'
+Assert-True ($boot.Principal.UserId -in @('SYSTEM', 'S-1-5-18')) 'cucina-boot must run as LocalSystem'
+Assert-True (@($boot.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskBootTrigger' }).Count -eq 1) 'cucina-boot must run at startup'
 $result.services = 'ok'
 
 # --- 2. Hook and dead-man ----------------------------------------------------------------------------------

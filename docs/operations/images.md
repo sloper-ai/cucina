@@ -1,18 +1,24 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 # Worker images (EC2 Linux and Windows)
 
-Packer builds every EC2 worker image from this repository with pinned inputs (R-POOL-8). Each AMI carries a version
-label and a pool generation as tags; `WorkerPool.spec.image.amiSelector` picks the newest AMI by tag, and a new version
+Packer builds every EC2 worker image from this repository with pinned Buildbarn and tool downloads (R-POOL-8).
+Linux sources are exact AMIs in the private source lock; Windows workers use the exact registered base AMI.
+Building a new Windows base still selects a matching vendor image, and distro package repositories remain mutable;
+installed versions are recorded, but builds are not bit-for-bit reproducible from package pins. Each AMI carries a
+version label and a pool generation as tags; `WorkerPool.spec.image.amiSelector` picks the newest AMI by tag, and a new version
 starts a new pool generation (R-OPS-2). Pins live in `workers/{linux,windows}/versions.json` (`pins`); every build
 writes what it actually installed to the `installed` section of the same file (R-VER-1).
 
 | Image family | Template | Source | Builder | Root volume |
 | --- | --- | --- | --- | --- |
-| `linux-ubuntu-x86_64` (default Linux) | `workers/linux/packer` | Canonical `ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-*` | c7i.xlarge | 8 GiB gp3 |
-| `linux-ubuntu-arm64` (Graviton) | same, `ARCH=arm64` | Canonical `...-26.04-arm64-server-*` | c7g.xlarge | 8 GiB gp3 |
+| `linux-ubuntu-x86_64` (default Linux) | `workers/linux/packer` | Exact private pin selected from Canonical `ubuntu/images/hvm-ssd-gp3/ubuntu-resolute-26.04-amd64-server-*` | m7i.large (2 vCPU) | 8 GiB gp3 |
+| `linux-ubuntu-arm64` (Graviton) | same, `ARCH=arm64` | Exact private pin selected from Canonical `...-26.04-arm64-server-*` | m7g.large (2 vCPU) | 8 GiB gp3 |
 | `linux-al2023-{x86_64,arm64}` (alternative) | same, `VARIANT=al2023` | Amazon `al2023-ami-2023.*-kernel-6.18-*` | as above | 8 GiB gp3 |
-| `windows-base` (also the `windows-client` AMI) | `workers/windows/packer`, stage `base` | Amazon `Windows_Server-2025-English-Full-Base-*` | c7i.2xlarge | 40 GiB gp3 |
-| `windows-worker` | stage `worker` (source: newest `windows-base`) | own `windows-base` | c7i.xlarge | 60 GiB gp3 |
+| `windows-base` (also the `windows-client` AMI) | `workers/windows/packer`, stage `base` | Amazon `Windows_Server-2025-English-Full-Base-*` | m7i.large (2 vCPU) | 40 GiB gp3 |
+| `windows-worker` | stage `worker` (source: exact registered `windows-base`) | own `windows-base` | m7i.large (2 vCPU) | 60 GiB gp3 |
+
+Build and probe defaults are two-vCPU `.large` instances. `BUILDER_TYPE` selects the Packer builder; historical
+measurements below retain their original instance types and must not be mistaken for new small-instance results.
 
 ## Build, publish, roll out
 
@@ -27,7 +33,7 @@ make -C workers/windows verify-bazel                                # rules_cc M
 make -C workers/windows image-windows STAGE=worker FAST_LAUNCH=1 SYSPREP_GATE=$CUCINA_DEV_STORAGE/logs/images/verify-bazel.result
 make -C workers/linux validate && make -C workers/windows validate  # packer fmt/validate, shellcheck, PSScriptAnalyzer
 make -C workers/linux measure-boot ARCH=x86_64 VARIANT=ubuntu N=5   # boot measurements (terminates the instances)
-workers/windows/scripts/measure-boot.sh --count 2 [--with-config]  # Windows cold start
+workers/windows/scripts/measure-boot.sh --count 2                 # Windows cold start; no user data on agent images
 workers/linux/scripts/selftest-instance.sh --ami <ami>              # launch, agent selftest + not-a-worker check, terminate
 workers/linux/scripts/prune-amis.sh <family>                        # keep current + previous AMI
 ```
@@ -38,6 +44,11 @@ workers/linux/scripts/prune-amis.sh <family>                        # keep curre
   (GetPasswordData) and WinRM over HTTPS with a self-signed certificate that the last step removes again.
 * Every resource carries `cucina:env`, `cucina:run`, `cucina:expires` (`tags`, `run_tags`, `run_volume_tags`,
   `snapshot_tags`). Builders terminate on success and on failure.
+* Linux source selection (ADR 0307): `~/.config/cucina/aws-e2e/source-amis.json` (0600), keyed by image family,
+  contains the deliberately selected `ami_id`, source name, region, architecture, selection time and recorded
+  versions. `SOURCE_AMIS_FILE` overrides its location. A missing lock/entry fails before Packer; builds never
+  silently select a newer Linux base. Update the private pin deliberately for an OS upgrade. Windows worker builds
+  use the exact `windows-base.ami_id` in the private AMI registry; no VS base rebuild is needed for a worker-only update.
 * AMI registry for the e2e environment: `~/.config/cucina/aws-e2e/amis.json` (0600),
   `{ "<family>": { ami_id, name, image_version, generation, created, source_ami, previous: {...} } }`.
 * AMI tags: `cucina:image-family`, `cucina:image-version` (`YYYYMMDD.HHMM` of the build), `cucina:generation`
@@ -53,6 +64,23 @@ workers/linux/scripts/prune-amis.sh <family>                        # keep curre
 
 ## What is in the images
 
+### Legal payload (R-ARTIFACT)
+
+Both Windows stages and every Linux variant stage and install the repository's `LICENSE.md`,
+`THIRD_PARTY_NOTICES.md`, and all maintained `tools/notices/texts/*.txt` files. The final destinations are:
+
+* Linux: `/usr/share/doc/cucina/{LICENSE.md,THIRD_PARTY_NOTICES.md,licenses/*.txt}`.
+* Windows: `C:\ProgramData\cucina\doc\{LICENSE.md,THIRD_PARTY_NOTICES.md,licenses\*.txt}`.
+
+The installers require a complete nonempty payload, verify copies against the staged inputs, and the image smoke
+checks require the installed files. Cleanup retains them, along with package-manager/vendor copyright files.
+`bazelisk test //workers/linux:notices_test --runs_per_test=20` exercises payload preservation and missing-input
+rejection; Windows PowerShell copy/rejection checks and both Packer validations also run locally.
+Fresh-instance selftest now verifies the legal payload and writes private attestations under
+`~/.config/cucina/aws-e2e/images/attestations/`: actual file SHA-256/byte sizes, binary hashes, installed versions,
+source/AMI metadata and fatal selftest results. Pre-payload rollback/comparison AMIs are not retroactively compliant;
+only images whose new attestations pass qualify.
+
 ### Common worker layout (aligned with `cucina-worker-agent`, docs/dev/worker-agent.md)
 
 | | Linux | Windows |
@@ -64,7 +92,7 @@ workers/linux/scripts/prune-amis.sh <family>                        # keep curre
 | Per-boot state, dead-man marks | `/run/cucina/{last-activity,last-contact}` | `C:\ProgramData\cucina\run\{last-activity,last-contact}` |
 | Runner socket directory | `/run/cucina` | `C:\ProgramData\cucina\run` (runner account may write) |
 | Worker agent | `/opt/cucina/bin/cucina-worker-agent` | `C:\bb\bin\cucina-worker-agent.exe` |
-| Bootstrap hook | `/opt/cucina/bin/cucina-bootstrap` (ExecStartPre of `bb-runner.service`) | `C:\bb\bin\cucina-bootstrap.ps1` (run by the automatic one-shot service `cucina-boot`) |
+| Bootstrap hook | `/opt/cucina/bin/cucina-bootstrap` (ExecStartPre of `bb-runner.service`) | `C:\bb\bin\cucina-bootstrap.ps1` (run by the startup task `\cucina\cucina-boot`) |
 | Build directory | FUSE under `/var/lib/cucina` (build root 0755) | WinFSP Mount Manager mount `\\.\B:` |
 | Instance store | formatted + mounted at `/var/lib/cucina/ephemeral` (`/run/cucina/instance-store.json`) | agent (NTFS) or, for Dev Drive mode, the image (`D:`) |
 | Action user | `bbrunner` uid/gid 2000 via `run_commands_as` (bb_runner runs as root) | virtual account `NT SERVICE\cucina-bb-runner` |
@@ -101,8 +129,9 @@ backstop for the agent's own `supervise` dead-man.
 ### Linux (R-POOL-4, ADR 0305, ADR 0306)
 
 FUSE 3 (`user_allow_other`; bb_worker runs as root, render `mountMethod: DIRECT`, `allowOther: true`); chrony against
-the Amazon Time Sync Service only (169.254.169.123, fd00:ec2::123); SSM Agent from the pinned `.deb` (not the snap) on
-dual-stack endpoints; units `cucina-format-instance-store` -> `bb-runner` (ExecStartPre bootstrap) -> `bb-worker`
+the Amazon Time Sync Service (169.254.169.123, fd00:ec2::123). Ubuntu uses only these sources; AL2023 prefers Amazon's
+source and retains its stock fallback pool. Ubuntu SSM Agent comes from the pinned `.deb` (not the snap), AL2023 from
+its package repository; both use dual-stack endpoints. Linux has units `cucina-format-instance-store` -> `bb-runner` (ExecStartPre bootstrap) -> `bb-worker`
 (`After=network-online.target`), `cucina-worker-agent`, `cucina-deadman.timer`. Boot trims: no snapd, no SSH daemon
 (SSM only), no apt/motd/fwupd/man-db timers, no apport/ModemManager/multipathd/udisks2/iscsi/lvm monitors, no
 rsyslog/cron/atd/hibinit-agent/sysstat/systemd-firstboot, cloud-init limited to the EC2 datasource and a minimal module
@@ -110,7 +139,9 @@ list, volatile journal, `noatime`, fsck off, GRUB timeout 0, `networkd-wait-onli
 boot kept working (`grub-initrd-fallback.service` must stay enabled). The x86_64 Ubuntu image adds qemu-user
 (`qemu-user-binfmt`, fix-binary registrations) and cross glibc/libstdc++ runtimes for riscv64, s390x and armhf, usable
 without `QEMU_LD_PREFIX`; every build runs `/opt/cucina/bin/cucina-qemu-smoke-test` (static musl + dynamic glibc
-hello binaries built with a pinned zig) and `cucina-worker-agent selftest` after a reboot.
+hello binaries built with a pinned zig) and `cucina-worker-agent selftest` after a reboot. The AL2023 artifact is
+retained for boot comparisons; it omits qemu/cross runtimes and is not a drop-in replacement for the default x86_64
+pool's emulated runners (ADR 0305). AL2023 arm64 is template-validated only, not built in this campaign.
 
 ### Windows (R-POOL-5, ADR 0301–0304)
 
@@ -123,8 +154,8 @@ hello binaries built with a pinned zig) and `cucina-worker-agent selftest` after
   `ec2launch reset --clean`, so instances launched from it (Packer `worker` stage, `windows-client`) get a new random
   Administrator password and run their user data. `TMP`/`TEMP` for the windows-client: `C:\bb\tmp` (exists on clients
   and workers, writable for Users).
-* **worker** — base + `bb_worker`/`bb_runner` (pinned, SHA-256) as shawl services, the `cucina-boot` one-shot service
-  (automatic start: instance store, bootstrap hook, services), accounts, dead-man task, the agent; a live smoke test (agent `selftest`; runner starts as its virtual account and
+* **worker** — base + `bb_worker`/`bb_runner` (pinned, SHA-256) as shawl services, the `\cucina\cucina-boot` startup task
+  (instance store, bootstrap hook, services), accounts, dead-man task, the agent; a live smoke test (agent `selftest`; runner starts as its virtual account and
   serves its socket; worker mounts WinFSP `B:`; SCM stop drains) runs before **`ec2launch sysprep --shutdown --clean`**.
 
 Residual risk on Windows (R-SEC-5): `bb_worker` runs as LocalSystem (Mount Manager mounts, L1/filePool), so a
@@ -160,7 +191,11 @@ rollout and at teardown.
 
 ## Measurements (2026-10-02, us-west-1b)
 
-### Linux boot (final images with the agent baked in; c7i.large / c7g.large; 5 sequential launches)
+### Linux boot comparison (c7i.large / c7g.large; 5 sequential launches)
+
+These exploratory measurements used Ubuntu generation 5 / AL2023 generation 4, before the final empty-user-data
+agent fix. They describe OS boot, **not a usable rollback image or enrollment readiness**. The final generations
+retain the same boot tuning; their separate post-fix launch checks are below.
 
 Launch = the `RunInstances` call on the dev machine; "running" = systemd startup finished
 (`systemctl is-system-running`), Buildbarn units resolved; "SSM" = first `PingStatus=Online`.
@@ -180,8 +215,10 @@ Launch = the `RunInstances` call on the dev machine; "running" = systemd startup
   of a 43–58 MB initrd removed), masking `sshd-keygen`/`systemd-firstboot`/`hibinit-agent`/`systemd-boot-update`,
   reduced cloud-init (the remaining biggest item: cloud-init-main + -local ≈ 3.5 s on Ubuntu), agent bootstrap ≈ 2.7 s
   on first start (17 MB binary read from a cold snapshot).
-* EBS volume-initialization rate 300 MiB/s on the 8 GiB root (3 launches vs 5): no measurable gain (p50 15.1 s vs
-  15.0 s excluding first launches) because boot reads only a few hundred MB; it stays off (it is billed per launch).
+* EBS volume-initialization rate 300 MiB/s on an earlier 8 GiB Ubuntu x86_64 root: `running` took 16.1/13.7/15.1 s
+  (n=3, median 15.1), versus 24.3/16.9/16.3/12.9/13.8 s without it (n=5, median 16.3). The first uninitialized
+  launch was slow, but later baseline runs were as fast or faster. This small, non-randomized sample does not show
+  a reliable gain; the billed per-launch option stays off.
 
 ### Windows cold start (worker image, c7a.2xlarge, public subnet)
 
@@ -190,24 +227,75 @@ Launch = the `RunInstances` call on the dev machine; "running" = systemd startup
 | Slow path (no Fast Launch snapshot), n=2 | 122–123 s | 145–150 s | 166–167 s | 173–175 s |
 | **Fast Launch** snapshot available, n=4 | **20–24 s** | 50–61 s | **72–88 s** (p50 74 s) | 82–107 s (n=2) |
 
-¹ Measured with a throwaway configuration written by EC2 user data, which EC2Launch runs late (after "Windows is ready");
-in production `\cucina\cucina-boot` runs `cucina-worker-agent bootstrap` right after OS start, so services start well
-before EC2Launch finishes. Boot-task breakdown observed: runner service first start 7–10 s (virtual account first
-logon), worker start 0.3 s, WinFSP mount 1.3 s; the image-side disk probe (5–9 s) is skipped when the agent is present.
+¹ These earlier, agent-less image measurements used throwaway configuration written by EC2 user data, which
+EC2Launch runs late. They do not establish final-image enrollment or action readiness. On the fixed-agent generation
+4, one earlier Fast Launch run reached OS boot at 19.4 s, SSM at 58.5 s, and the startup task at 77.5 s. Task
+Scheduler contributes about a minute after OS boot; it does **not** run bootstrap immediately. An automatic-service
+experiment (generation 5) failed post-sysprep launches with a fatal Windows setup dialog and was rejected (ADR 0302).
+The validated startup-task generation 4 is reused. Boot-task breakdown observed: runner first start 7–10 s (virtual
+account first logon), worker start 0.3 s, WinFSP mount 1.3 s; the image-side disk probe (5–9 s) is skipped when the
+agent is present. `--with-config` is deliberately refused on agent-bearing images because their user data must be
+Cucina boot data, not a PowerShell test script.
+
+### Agent-fix checks before the legal-payload rebuild
+
+Fresh launches with fixed agent `20261002.1034`, after the image-side fatal selftest was restored (historical image generations):
+
+| Image | Generation | Launch→SSM online | Full selftest / no-user-data behavior |
+| --- | --- | --- | --- |
+| Ubuntu x86_64, current | 7 | 28.1 s | pass / stays up, Buildbarn stopped |
+| Ubuntu x86_64, rollback | 6 | 24.8 s | pass / stays up, Buildbarn stopped |
+| Ubuntu arm64 | 6 | 25.0 s | pass / stays up, Buildbarn stopped |
+| AL2023 x86_64 | 5 | 15.8 s | pass / stays up, Buildbarn stopped |
+| Windows, restored Fast Launch, c7a.xlarge | 4 | 64.1 s | pass, including disks / stays up, Buildbarn stopped |
+
+Each row is one verification, not a p50 estimate. An additional Windows c7a.2xlarge Fast Launch sample reached OS
+boot at 23.0 s, EC2Launch ready at 56.6 s, SSM at 63.4 s, startup-task start at 84.3 s, and no-user-data completion
+at 86.1 s. CPU averaged 5.1% over the following 20 s. Without enrollment data, no Buildbarn process should start;
+these timings **do not prove Execute→first-action NFR-P1**. Enrollment/action and Defender workload benchmarks
+belong to the end-to-end campaign. All image-test instances and their volumes/network interfaces were removed.
+These checks established a usable fixed-agent baseline; the later legal-payload rebuild supersedes the current images.
+
+### Legal-payload image verification
+
+All three rebuilt worker images carry agent `20261002.legal` and passed fresh-instance fatal selftest, no-user-data
+behavior, and on-image legal checks. Each contains **nine legal documents, 879,699 bytes total**, byte-identical to
+the repository inputs. Private attestations also record hashes/sizes of the three installed executables.
+
+| Worker image | Generation | Verification instance | Launch→SSM | Legal payload / selftest |
+| --- | --- | --- | --- | --- |
+| Ubuntu x86_64 | 8 | c7i.large, 2 vCPU | 24.4 s | pass / pass |
+| Ubuntu arm64 | 7 | m7g.large, 2 vCPU | 23.7 s | pass / pass |
+| Windows, Fast Launch | 6 | m7i.large, 2 vCPU | 69.4 s | pass / pass, including disks |
+
+These are single boot verifications, not performance benchmarks. The already-running larger bakes were allowed to
+finish when the campaign switched to two-vCPU instances; subsequent ARM baking and all later checks used `.large`.
+Ubuntu x86_64 generation 7 is retained as the T12 baseline and generation 8 is the compliant successor. Old rollback,
+base/client and AL2023 comparison images remain pre-payload artifacts; they are not represented as compliant.
 
 ### Standing cost and spend
 
-* Fast Launch: 4 pre-provisioned snapshots per AMI, 60 GiB volumes, `FullSnapshotSizeInBytes` 34.6 GB each →
-  ≤ 4 × 34.6 GB × $0.055/GB-month ≈ **$7.6/month** upper bound (EBS bills unique blocks; snapshots taken from volumes
-  restored from the AMI snapshot are usually cheaper). Per launch: one replenishment preparation (AWS-managed) plus the
-  snapshot.
-* AMI storage (full sizes): Windows worker ≈ 34.4 GB, Windows base ≈ 34.4 GB, Linux ≈ 2–3 GB each; current + previous
-  per family.
-* Image work on 2026-10-02 (11 Windows and 23 Linux builds, 4 MSVC probes, ~60 test launches, Fast Launch
-  preparations): ≈ $3 of EC2 time (Windows builders $0.36–0.73/h incl. license for 2 h in total, Linux builders
-  ≈ $0.17/h for 2 h, Windows test launches ≈ $0.78/h for ~5 min each) plus snapshot storage.
-* Standing while kept (upper bounds, full snapshot sizes at $0.055/GB-month): Fast Launch ≈ $7.6/month, Windows AMIs
-  (base + current + previous worker) ≈ $5.7/month, Linux AMIs (6) ≈ $0.8/month.
+* Final retained set: **8 AMIs and 12 snapshots** (8 AMI snapshots + 4 completed, tagged Fast Launch snapshots for
+  Windows generation 6). At $0.055/GB-month, their full snapshot sizes give an upper bound of **$15.30/month**
+  (about $0.51/day). This is not an observed bill: shared incremental blocks can cost less. Initial Fast Launch
+  preparation and replenishment also consume instance time.
+* Earlier image work: 10 Windows builds (113.4 instance-minutes), 23 Linux builds (112.7 minutes), 61 logged
+  test/probe launches (158.2 minutes, conservatively using log completion times). Rounded-up instance rates give
+  about $3.50 ordinary EC2; allowing for Fast Launch preparation and storage gives an estimated $5–10, with a
+  **$15 budget reserve**. This is not billing-verified.
+* Resumed work first reused valid artifacts, built one Ubuntu successor for T12, and restored working Windows
+  orchestration (~$0.12 ordinary EC2). The necessary legal-payload rebuilds and their checks added approximately
+  **$0.16 ordinary EC2**. A conservative **$5 cumulative round reserve** covers both phases plus unobserved
+  preparation/storage and an old-pool re-enable, below the $25 cap. Timestamped evidence stays private.
+* Broken Windows generations 3/5 and pre-fix Linux rollback images were removed. Current worker images are Ubuntu
+  x86_64 generation 8, ARM generation 7 and Windows generation 6; one previous per worker family, the Windows
+  base/client and the AL2023 comparison image remain until campaign teardown. Older retained images lack the new
+  legal payload and are explicitly only rollback/comparison inputs.
+* Retiring Fast Launch requires updating the live pool's image reference and waiting for its observed generation
+  first. A paused/max-zero pool still ensures Fast Launch for its selected image: generation 4 was re-enabled after
+  an initial disable until the live pool converged on generation 6. After convergence, generation 4 was disabled
+  and its prepared snapshots were verified gone; generation 6 alone retains four. Leave
+  `AWSServiceRoleForEC2FastLaunch` in place. Image builders/tests, volumes and ENIs were all verified at zero.
 
 ## Installed versions (2026-10-02)
 

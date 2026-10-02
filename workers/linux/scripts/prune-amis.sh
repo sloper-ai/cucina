@@ -23,9 +23,12 @@ region=${AWS_REGION:-us-west-1}
 run=${CUCINA_RUN_ID:?source .work/env.sh (CUCINA_RUN_ID)}
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-mapfile -t all < <(aws ec2 describe-images --region "$region" --owners self \
-  --filters "Name=tag:cucina:image-family,Values=$family" "Name=tag:cucina:run,Values=$run" "Name=tag:cucina:env,Values=${CUCINA_ENV:-e2e}" \
-  --query 'sort_by(Images,&CreationDate)[].ImageId' --output text | tr '\t' '\n' | sed '/^$/d')
+campaign=("Name=tag:cucina:run,Values=$run" "Name=tag:cucina:env,Values=${CUCINA_ENV:-e2e}" "Name=tag:cucina:expires,Values=${CUCINA_EXPIRES:?}")
+# Preserve AWS failures instead of treating a failed process substitution as an empty inventory.
+images=$(aws ec2 describe-images --region "$region" --owners self \
+  --filters "Name=tag:cucina:image-family,Values=$family" "${campaign[@]}" \
+  --query 'sort_by(Images,&CreationDate)[].ImageId' --output text)
+mapfile -t all < <(printf '%s\n' "$images" | tr '\t' '\n' | sed '/^$/d')
 old=()
 if ((${#all[@]} > keep)); then old=("${all[@]:0:${#all[@]}-keep}"); fi
 if ((${#old[@]} == 0)); then
@@ -33,10 +36,17 @@ if ((${#old[@]} == 0)); then
   exit 0
 fi
 for ami in "${old[@]}"; do
-  snaps=$(aws ec2 describe-images --region "$region" --image-ids "$ami" \
+  snaps=$(aws ec2 describe-images --region "$region" --owners self --image-ids "$ami" --filters "${campaign[@]}" \
     --query 'Images[0].BlockDeviceMappings[].Ebs.SnapshotId' --output text)
   echo "prune-amis: $family: deregister $ami (snapshots: $snaps)"
   ((dry)) && continue
+  # Snapshot ownership is checked independently: an AMI's block mapping alone does not grant deletion authority.
+  for s in $snaps; do
+    [[ "$s" == snap-* ]] || { echo "prune-amis: invalid snapshot identity; refusing deletion" >&2; exit 1; }
+    owned=$(aws ec2 describe-snapshots --region "$region" --owner-ids self --snapshot-ids "$s" --filters "${campaign[@]}" \
+      --query 'Snapshots[0].SnapshotId' --output text)
+    [[ "$owned" == "$s" ]] || { echo "prune-amis: snapshot lacks the matching campaign tags; refusing deletion" >&2; exit 1; }
+  done
   if [[ "$family" == windows-* ]]; then "$here/../../windows/scripts/fast-launch.sh" disable --ami "$ami"; fi
   aws ec2 deregister-image --region "$region" --image-id "$ami" --query Return --output text >/dev/null
   for s in $snaps; do

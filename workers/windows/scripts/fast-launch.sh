@@ -42,8 +42,20 @@ done
 
 ec2() { aws ec2 --region "$REGION" "$@"; }
 log() { printf '%s fast-launch: %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2; }
-state() { ec2 describe-fast-launch-images --image-ids "$ami" --query 'FastLaunchImages[0].State' --output text 2>/dev/null || echo none; }
+# API failures must not be mistaken for "disabled": teardown must fail closed.
+state() { ec2 describe-fast-launch-images --image-ids "$ami" --query 'FastLaunchImages[0].State' --output text; }
 tagspec() { echo "{Key=cucina:env,Value=$ENV_TAG},{Key=cucina:run,Value=$RUN_ID},{Key=cucina:expires,Value=$EXPIRES}"; }
+
+# Standalone invocations have the same ownership boundary as prune-amis.sh. An arbitrary AMI ID is not authority
+# to disable a pool or retag its snapshots; require all three campaign tags on our own AMI before any mutation.
+case "$cmd" in
+  enable|disable|tag)
+    owned=$(ec2 describe-images --owners self --image-ids "$ami" \
+      --filters "Name=tag:cucina:env,Values=$ENV_TAG" "Name=tag:cucina:run,Values=$RUN_ID" "Name=tag:cucina:expires,Values=$EXPIRES" \
+      --query 'Images[0].ImageId' --output text)
+    [[ "$owned" == "$ami" ]] || { log "refusing $cmd: AMI does not carry this campaign's three tags"; exit 1; }
+    ;;
+esac
 
 ensure_template() {
   if [[ -z "$lt" && -s "$OUTPUTS" ]]; then lt=$(jq -r '.fast_launch_template_id // empty' "$OUTPUTS"); fi

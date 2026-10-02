@@ -170,21 +170,18 @@ if (-not [System.Diagnostics.EventLog]::SourceExists('cucina')) { New-EventLog -
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
 $psArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File'
 
-# Boot orchestration is an automatic-start one-shot service: the SCM starts it seconds after boot, whereas Task
-# Scheduler deferred an "at startup" task by about a minute (measured on WS2025). shawl runs the script once
-# (--no-restart; exit 0/1/2 are expected outcomes, not service failures) and the service then stops.
-if (Get-ScheduledTask -TaskPath '\cucina\' -TaskName 'cucina-boot' -ErrorAction SilentlyContinue) {
-  Unregister-ScheduledTask -TaskPath '\cucina\' -TaskName 'cucina-boot' -Confirm:$false
-}
+# Keep boot orchestration after Windows setup, using the validated startup task (ADR 0302). The automatic-service
+# variant produced Fast Launch instances stuck in Windows setup; faster SCM startup is not safe evidence of readiness.
 if (Get-Service -Name 'cucina-boot' -ErrorAction SilentlyContinue) {
+  Stop-Service -Name 'cucina-boot' -Force -ErrorAction SilentlyContinue
   Invoke-Native sc.exe @('delete', 'cucina-boot') | Out-Null
   Start-Sleep -Seconds 2
 }
-Invoke-Native $shawl @('add', '--name', 'cucina-boot', '--cwd', 'C:\bb', '--log-dir', "$logs\boot-service", '--log-as', 'shawl',
-  '--no-restart', '--pass', '0,1,2', '--', 'powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-  '-File', "$bin\cucina-boot.ps1") | Out-Null
-Invoke-Native sc.exe @('config', 'cucina-boot', 'start=', 'auto', 'DisplayName=', 'Cucina boot orchestration') | Out-Null
-Invoke-Native sc.exe @('description', 'cucina-boot', 'Runs C:\bb\bin\cucina-boot.ps1 once per boot: instance store, bootstrap hook, Buildbarn services.') | Out-Null
+$bootTrigger = New-ScheduledTaskTrigger -AtStartup
+$bootSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'cucina-boot' -TaskPath '\cucina\' -Force -Principal $principal -Settings $bootSettings `
+  -Trigger $bootTrigger -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "$psArgs $bin\cucina-boot.ps1") | Out-Null
 
 # Armed only from the next boot: a startup trigger that repeats every minute (never during the image build).
 $dmTrigger = New-ScheduledTaskTrigger -AtStartup
@@ -194,7 +191,7 @@ $dmSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfG
   -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'cucina-deadman' -TaskPath '\cucina\' -Force -Principal $principal -Settings $dmSettings `
   -Trigger $dmTrigger -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "$psArgs $bin\cucina-deadman.ps1") | Out-Null
-Write-Output 'boot service: cucina-boot (automatic); scheduled task: \cucina\cucina-deadman'
+Write-Output 'startup tasks: \cucina\cucina-boot and \cucina\cucina-deadman'
 
 # --- Defender: worker-specific exclusions ----------------------------------------------------------------
 try {

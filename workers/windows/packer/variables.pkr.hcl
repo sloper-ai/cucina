@@ -33,12 +33,12 @@ variable "admin_cidrs" {
 
 variable "base_instance_type" {
   type    = string
-  default = "c7i.2xlarge"
+  default = "m7i.large"
 }
 
 variable "worker_instance_type" {
   type    = string
-  default = "c7i.xlarge"
+  default = "m7i.large"
 }
 
 variable "root_volume_size" {
