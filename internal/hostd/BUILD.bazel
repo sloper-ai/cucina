@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "hostd",
+    srcs = [
+        "agent.go",
+        "diagnostics.go",
+        "vmnet.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/hostd",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/hostd/config",
+        "//internal/hostd/facts",
+        "//internal/hostd/identity",
+        "//internal/hostd/l2",
+        "//internal/hostd/lifecycle",
+        "//internal/hostd/link",
+        "//internal/hostd/metrics",
+        "//internal/hostd/redact",
+        "//internal/hostd/relay",
+        "//internal/hostd/render",
+        "//internal/hostd/vmm",
+        "//internal/hostlink/hostcmd",
+        "//internal/ports",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials",
+    ],
+)

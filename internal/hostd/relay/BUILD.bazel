@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "relay",
+    srcs = ["relay.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/relay",
+    visibility = ["//:__subpackages__"],
+)
+
+cucina_go_test(
+    name = "relay_test",
+    srcs = ["relay_test.go"],
+    # Real TCP sockets on localhost: integration tier.
+    tier = "integration",
+    deps = [
+        ":relay",
+        "@com_github_stretchr_testify//require",
+    ],
+)

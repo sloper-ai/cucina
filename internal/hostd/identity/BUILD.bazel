@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "identity",
+    srcs = [
+        "identity.go",
+        "keychain_darwin.go",
+        "keychain_other.go",
+    ],
+    cgo = True,
+    clinkopts = select({
+        "@rules_go//go/platform:darwin": [
+            "-framework CoreFoundation -framework Security",
+        ],
+        "@rules_go//go/platform:ios": [
+            "-framework CoreFoundation -framework Security",
+        ],
+        "//conditions:default": [],
+    }),
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/identity",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/hostd/config",
+        "//internal/ports",
+        "//internal/proto",
+        "@com_github_cenkalti_backoff_v7//:backoff",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)

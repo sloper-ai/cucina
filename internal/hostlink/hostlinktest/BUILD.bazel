@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "hostlinktest",
+    srcs = [
+        "controller.go",
+        "faultnet.go",
+        "pem.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/hostlink/hostlinktest",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/hostlink",
+        "//internal/pki",
+        "//internal/pki/pkitest",
+        "//internal/ports",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//keepalive",
+        "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

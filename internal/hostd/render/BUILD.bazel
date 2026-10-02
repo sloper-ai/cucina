@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "render",
+    srcs = ["render.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/render",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/bbconfig",
+        "//internal/hostd/guest",
+        "//internal/hostd/l2",
+    ],
+)

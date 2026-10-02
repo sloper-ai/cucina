@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "config",
+    srcs = [
+        "cfprefs_darwin.go",
+        "cfprefs_other.go",
+        "config.go",
+        "source.go",
+        "tunables.go",
+    ],
+    cgo = True,
+    clinkopts = select({
+        "@rules_go//go/platform:darwin": [
+            "-framework CoreFoundation",
+        ],
+        "@rules_go//go/platform:ios": [
+            "-framework CoreFoundation",
+        ],
+        "//conditions:default": [],
+    }),
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/config",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "@net_howett_plist//:plist",
+    ],
+)
+
+cucina_go_test(
+    name = "config_test",
+    srcs = ["config_test.go"],
+    tier = "unit",
+    deps = [
+        ":config",
+        "//api/proto/cucina/v1:cucina",
+        "@com_github_stretchr_testify//require",
+        "@net_howett_plist//:plist",
+    ],
+)

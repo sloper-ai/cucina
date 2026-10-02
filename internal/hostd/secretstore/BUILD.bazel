@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "secretstore",
+    srcs = [
+        "file.go",
+        "keychain_darwin.go",
+        "keychain_other.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/secretstore",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/ports",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "@com_github_keybase_go_keychain//:go-keychain",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@com_github_keybase_go_keychain//:go-keychain",
+        ],
+        "//conditions:default": [],
+    }),
+)

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "lifecycle",
+    srcs = [
+        "commands.go",
+        "lifecycle.go",
+        "sizing.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/lifecycle",
+    visibility = ["//:__subpackages__"],
+)
+
+cucina_go_test(
+    name = "lifecycle_test",
+    srcs = ["lifecycle_test.go"],
+    tier = "unit",
+    deps = [
+        ":lifecycle",
+        "@com_github_stretchr_testify//require",
+        "@net_pgregory_rapid//:rapid",
+    ],
+)

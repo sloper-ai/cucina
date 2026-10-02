@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "guest",
+    srcs = ["guest.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/guest",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/ports"],
+)

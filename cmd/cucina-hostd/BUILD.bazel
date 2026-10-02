@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "cucina-hostd_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/sloper-ai/cucina/cmd/cucina-hostd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//internal/hostd",
+        "//internal/hostd/config",
+        "//internal/hostd/facts",
+        "//internal/hostd/identity",
+        "//internal/hostd/logging",
+        "//internal/hostd/privdrop",
+        "//internal/hostd/render",
+        "//internal/hostd/secretstore",
+        "//internal/hostd/sys",
+        "//internal/ports",
+        "//internal/providers/tart",
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)
+
+go_binary(
+    name = "cucina-hostd",
+    embed = [":cucina-hostd_lib"],
+    visibility = ["//visibility:public"],
+)

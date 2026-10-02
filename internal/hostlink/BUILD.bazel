@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "hostlink",
+    srcs = ["hostlink.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/hostlink",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/domain",
+        "//internal/hostlink/hostcmd",
+        "//internal/pki",
+        "//internal/ports",
+        "//internal/proto",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//peer",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+cucina_go_test(
+    name = "hostlink_test",
+    srcs = [
+        "conformance_test.go",
+        "integration_test.go",
+    ],
+    # hostd <-> hostlink over in-memory mTLS gRPC (synctest) and the HostFleet conformance suite: integration tier.
+    tier = "integration",
+    deps = [
+        ":hostlink",
+        "//api/proto/cucina/v1:cucina",
+        "//internal/domain",
+        "//internal/hostd",
+        "//internal/hostd/config",
+        "//internal/hostd/facts",
+        "//internal/hostd/identity",
+        "//internal/hostd/render",
+        "//internal/hostd/secretstore",
+        "//internal/hostd/sys",
+        "//internal/hostlink/hostlinktest",
+        "//internal/ports",
+        "//internal/ports/porttest",
+        "//internal/providers/tart",
+        "//internal/providers/tart/faketart",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)

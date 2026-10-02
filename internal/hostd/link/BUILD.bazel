@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "link",
+    srcs = ["link.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/link",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/ports",
+        "//internal/proto",
+        "@com_github_cenkalti_backoff_v7//:backoff",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//keepalive",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

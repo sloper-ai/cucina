@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "logging",
+    srcs = [
+        "logging.go",
+        "oslog_darwin.go",
+        "oslog_other.go",
+    ],
+    cgo = True,
+    importpath = "github.com/sloper-ai/cucina/internal/hostd/logging",
+    visibility = ["//:__subpackages__"],
+)
