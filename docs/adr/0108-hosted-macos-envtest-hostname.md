@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 # 0108 — Give hosted macOS envtest a valid hostname
 
-* Status: accepted (2026-10-02); hosted regression validation pending
+* Status: accepted (2026-10-02); hosted regression validated
 
 ## Context
 
@@ -41,6 +41,7 @@ Controlled validation executes the actual workflow body with stateful fake `sudo
 the allowed hosted-macOS context changes only fake state; incorrect read-back fails. All five
 cases pass, as do actionlint and shellcheck. No real hostname command was executed locally.
 
-The next hosted run must still prove normal Lease creation and successful teardown under the
-original deadline. Remove the preparation when the pinned upstream handles long hostnames,
-then repeat that hosted check rather than relaxing the test.
+Hosted run 37040910826 at `c91cd48` executed the guarded preparation and passed all 129 tests, with every test
+executed rather than cached or skipped. Envtest completed under its unchanged 20-second shutdown deadline.
+Remove the preparation when the pinned upstream handles long hostnames, then repeat that hosted check rather
+than relaxing the test.
