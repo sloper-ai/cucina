@@ -83,5 +83,9 @@ if [[ -n $oci ]]; then
 fi
 tool "${args[@]}"
 
-"$release_root/release/notes.sh" --version "$(version_of "$out")" >"$out/meta/release-notes.md"
+commit="$(sed -n 's/^ *"commit": "\(.*\)",$/\1/p' "$out/meta/buildinfo.json")"
+"$release_root/release/notes.sh" --version "$(version_of "$out")" --commit "$commit" >"$out/meta/release-notes.md"
+if grep -q '"dirty": true' "$out/meta/buildinfo.json"; then
+	printf '\nValidation build from dirty sources; not publishable. Commit identifies its baseline only.\n' >>"$out/meta/release-notes.md"
+fi
 info "assembled $(version_of "$out"): $out/assets ($(find "$out/assets" -type f | wc -l | tr -d ' ') files)"

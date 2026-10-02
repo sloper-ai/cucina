@@ -8,7 +8,9 @@ with Bazel (R-BUILD-3), checks that they all carry that version, and publishes t
 Pull requests run the same workflow as a **dry run** that publishes nothing.
 
 > Nothing has been published yet. The first release is the maintainers' call: see
-> [First release checklist](#first-release-checklist).
+> [First release checklist](#first-release-checklist). Publishing, tap bootstrap and live
+> attestation verification below are operator-only procedures and still need first-release
+> validation. Local validation builds/checks artifacts without calling a publisher.
 
 ## What a release contains
 
@@ -24,9 +26,10 @@ Pull requests run the same workflow as a **dry run** that publishes nothing.
 | `cucina-<v>.tgz` | the Helm chart package (also in GHCR, below) |
 | `cucina-host-<M>-<m>-<p>.pkg` | the **signed** macOS host package (R-MAC-8/-9); version = numeric core of `<v>` |
 | `cucina-host-<M>-<m>-<p>.plist` | its MDM manifest (ManifestURL for `InstallEnterpriseApplication` and `com.apple.configuration.package`) |
-| `cucina-host-<M>-<m>-<p>.json` | the values Apple Business's package form asks for (URL, SHA-256, bundle ID, version) |
+| `cucina-host-<M>-<m>-<p>.manifest.json` | structural JSON manifest, equivalent to the plist (`items[].assets` and bundle metadata) |
+| `cucina-host-<M>-<m>-<p>.json` | the values Apple Business's package form asks for (URL, SHA-256, bundle ID, version); not the structural manifest |
 | `cucina-host-<M>-<m>-<p>.pkg.sha256`, `….install-enterprise-application.plist`, `….ddm-package.json` | checksum and example MDM command/declaration |
-| `cucina-host-signer-<sha1>.pem` | public certificate of the package signer (for the trust profile) |
+| `cucina-host-signer-application.pem`, `cucina-host-signer-installer.pem` | public certificates for the two signing roles (both go in the MDM trust profile) |
 | `SHA256SUMS` | SHA-256 of every asset above (`sha256sum -c` format) |
 
 Each CLI archive holds `cucinactl`, `cucina-credential-helper` (a hard link — a copy in the zip —
@@ -46,7 +49,10 @@ final versions only).
 macOS **worker VM images** are not released: they go to the *private* package
 `ghcr.io/sloper-ai/cucina-worker-macos` (Xcode's licence forbids public redistribution) through the
 manual [`macos-worker-image.yml`](../../.github/workflows/macos-worker-image.yml) on a self-hosted
-Mac (labels `self-hosted, macOS, ARM64`; Tart, Packer and the image's Xcode installed). Hosts pull
+Mac (labels `self-hosted, macOS, ARM64`; Tart, Packer, `gh` and the image's Xcode installed). Protect
+its `macos-images` environment with approved refs/reviewers. Before enabling pushes, the operator
+must bootstrap the package as **private** and grant the workflow access: every push performs an
+API visibility check and refuses a missing, inaccessible or non-private package. Hosts pull
 it with a separate read-only package credential that the controller hands to hostd at pull time,
 never via profiles or images ([ADR 0702](../adr/0702-hostd-registry-credentials.md)). Linux and
 Windows AMIs are built per AWS account with Packer and never published.
@@ -72,11 +78,12 @@ plan ─┬─ build-linux (ubuntu: //release:linux)  ─┐
 * **assemble** runs `release/assemble.sh`: merges the dists only if they come from the same stamped
   build, writes `SHA256SUMS` and the formula, verifies everything (versions, archive contents,
   binary formats, chart pin, image labels and notices, package version, signer and manifests) and
-  generates the notes (`release/notes.sh`: commit subjects since the previous tag, new ADRs). It
-  prints the publish plan of the dry run.
+  generates the notes (`release/notes.sh`: commit subjects since the previous tag and new ADRs,
+  both anchored to the built commit). PR and local dry runs never invoke `release/publish.sh`.
 * **publish-*** push exactly the verified bytes: `crane push` of the OCI layouts (the pushed digest
   must match), `helm push`, `gh release create --verify-tag`, a commit to the tap. They need
-  `CUCINA_PUBLISH=1`, which only these jobs set.
+  `CUCINA_PUBLISH=1`, clean stamped source metadata, and a tag-push GitHub Actions context whose
+  repository/commit match that metadata. Dirty, unstamped, local and manual-dispatch builds are refused.
 * **verify-published-pkg** downloads the published manifest and package the way a Mac does
   (`macos/pkg/scripts/verify-manifest.sh`: HTTPS, following GitHub's redirect) and compares the SHA-256.
 
@@ -94,20 +101,31 @@ write` only in the publish jobs; `contents: write` only for the release). Action
 3. Approve the `release` environment if it has reviewers; watch the run; check the summary.
 4. Bump `VERSION` to the next planned version in the next change.
 
-Dry run locally (macOS host for the macOS parts; nothing is published, no credentials needed):
+Dry run locally (a complete release requires a macOS host; nothing is published and no
+credentials are needed). On Linux, run `release/build.sh linux --out DIR` for that lane only;
+`dry-run.sh` refuses an incomplete full release before building anything:
 
 ```sh
-release/dry-run.sh                    # all parts + assemble + publish plan, version 0.0.0-dryrun
+release/dry-run.sh                    # all parts + assembly + checks, version 0.0.0-dryrun; no publisher calls
 release/dry-run.sh --version 0.3.0-rc.1 --out /tmp/rel --lint
 BAZEL_STARTUP_ARGS=--output_base=/path BAZEL_ARGS=--jobs=4 release/dry-run.sh   # shared machine
 bazel build //release:all             # unstamped (0.0.0-dev), fastbuild: quick check of the graph
 ```
 
-Sign a package by hand (local keychain; R-MAC-9):
+Local dirty builds are marked in `meta/buildinfo.json` and the image label
+`ai.sloper.cucina.source-dirty`; they cannot be published. When validating while others edit,
+freeze the source files (not a symlink to a live `.git`) and provide `CUCINA_SOURCE_COMMIT`,
+`CUCINA_SOURCE_DIRTY=true`, `SOURCE_DATE_EPOCH` and `CUCINA_SOURCE_REPO` (read-only history for
+notes). Every lane must use that same snapshot. A moving commit is deliberately rejected during
+assembly.
+
+Sign a package by hand (local keychain; R-MAC-9; both private certificates already trusted
+according to docs/mdm/signing.md):
 
 ```sh
 bazel run --stamp --workspace_status_command=release/workspace-status.sh //release:pkg_sign -- \
-  --identity "Cucina Host Package Signing" --out /tmp/signed
+  --identity "Cucina Host Application Signing" \
+  --installer-identity "Cucina Host Package Signing" --out /tmp/signed
 ```
 
 ## Verifying a release
@@ -118,7 +136,7 @@ sha256sum -c SHA256SUMS                          # macOS: shasum -a 256 -c SHA25
 gh attestation verify cucinactl-0.1.0-linux-amd64.tar.gz --repo sloper-ai/cucina
 gh attestation verify oci://ghcr.io/sloper-ai/cucina-controller:0.1.0 --repo sloper-ai/cucina
 gh attestation verify oci://ghcr.io/sloper-ai/charts/cucina:0.1.0 --repo sloper-ai/cucina
-pkgutil --check-signature cucina-host-0-1-0.pkg  # signer = cucina-host-signer-*.pem
+pkgutil --check-signature cucina-host-0-1-0.pkg  # signer = cucina-host-signer-installer.pem
 crane config ghcr.io/sloper-ai/cucina-controller:0.1.0 | jq .config.Labels
 ```
 
@@ -131,8 +149,8 @@ MDM client (Foundation) follows it, and `verify-published-pkg` proves it for eve
 (ADR 0753). Whether **Apple Business's own validation** follows the redirect is not documented;
 verify it once (part of MT-001):
 
-1. `curl -sSIL https://github.com/sloper-ai/cucina/releases/download/v0.1.0/cucina-host-0-1-0.pkg | grep -iE '^(HTTP|location)'`
-   shows `302` then `200`.
+1. `curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' -o /dev/null --write-out 'status=%{http_code} redirects=%{num_redirects}\n' https://github.com/sloper-ai/cucina/releases/download/v0.1.0/cucina-host-0-1-0.pkg`
+   must report status `200` after at least one redirect. Do not print the signed redirect URL's query string.
 2. In Apple Business, add the package with that URL, SHA-256 and bundle ID; it must reach a
    valid/ready state without errors.
 3. Assign it to a test Mac and confirm the install (`/var/log/install.log`, `pkgutil --pkg-info
@@ -142,16 +160,33 @@ verify it once (part of MT-001):
 
 ## One-time setup (operator)
 
-**Signing the host package (R-MAC-9).** Create the private signing identity
-(`macos/pkg/scripts/make-signing-cert.sh`, docs/mdm/signing.md), export it with its key as a
-password-protected PKCS#12, then in *Settings → Environments* create `release` (optionally with
-required reviewers and a `v*` tag rule) with the secrets `CUCINA_PKG_SIGNING_P12` (`base64 -i
-signing.p12`) and `CUCINA_PKG_SIGNING_P12_PASSWORD`, and set the repository variable
-`CUCINA_PKG_SIGNING=true`. Test it without publishing: *Actions → release → Run workflow* with
-`sign` checked signs the dry-run package and checks the signer. Without it a tag build fails, unless `CUCINA_RELEASE_WITHOUT_PKG=true`
-(then the release has no host package; `make -C macos/pkg pkg-publish` can add it later, which
-does not work once immutable releases are on). Anyone with the key can ship silently trusted
-packages: keep it only there and rotate it per docs/operations/rotate-pkg-signing-cert.md.
+**Signing the host package (R-MAC-9).** Create two private identities with
+`macos/pkg/scripts/make-signing-cert.sh`: `--purpose application` (codeSigning EKU) and
+`--purpose installer` (Apple's no-EKU recipe). Follow docs/mdm/signing.md and export each with
+its key as a password-protected PKCS#12. A codeSigning-only certificate is rejected by
+`productbuild`; do not reuse the application identity as the installer identity.
+
+Create the `release` environment with required reviewers and approved refs, then add:
+
+| Secret | Content |
+| --- | --- |
+| `CUCINA_PKG_SIGNING_P12` | base64 application PKCS#12 |
+| `CUCINA_PKG_SIGNING_P12_PASSWORD` | application PKCS#12 password |
+| `CUCINA_PKG_INSTALLER_P12` | base64 installer PKCS#12 |
+| `CUCINA_PKG_INSTALLER_P12_PASSWORD` | installer PKCS#12 password |
+
+Set repository variable `CUCINA_PKG_SIGNING=true`. The GitHub-hosted runner imports both into
+one throwaway keychain, temporarily trusts the installer certificate for `productbuild`,
+removes the trust on exit, and deletes the keychain (also after partial import failures).
+This trust-changing mode is rejected outside hosted CI; it has not been run on the dev Mac.
+MDM must distribute **both public certificates** before the package.
+
+Test the configured signing path without publishing: *Actions → release → Run workflow* with
+`sign` checked. Without configured signing a tag build fails, unless
+`CUCINA_RELEASE_WITHOUT_PKG=true` (then no host package is published; a later manual upload is
+possible only when immutable releases are off and checksums/provenance are regenerated).
+Anyone holding these private keys can ship silently trusted code: rotate them per
+[rotate-pkg-signing-cert.md](rotate-pkg-signing-cert.md).
 
 **Homebrew tap.** Create the public repository `sloper-ai/homebrew-tap` with a `Formula/`
 directory (`gh repo create sloper-ai/homebrew-tap --public --add-readme`). Create a fine-grained
@@ -191,8 +226,9 @@ moves them) and consider enabling immutable releases.
       covers the Apple Business URL check above).
 - [ ] `VERSION` is `0.1.0` on the commit to tag; `THIRD_PARTY_NOTICES.md` regenerated
       (tools/notices/generate.sh).
-- [ ] Environment `release` with `CUCINA_PKG_SIGNING_P12`, `CUCINA_PKG_SIGNING_P12_PASSWORD`,
-      `HOMEBREW_TAP_TOKEN`; variable `CUCINA_PKG_SIGNING=true`.
+- [ ] Environment `release` with both application/installer PKCS#12 secrets and passwords
+      listed above, plus `HOMEBREW_TAP_TOKEN`; variable `CUCINA_PKG_SIGNING=true`.
+- [ ] Signed manual dry run passes, both public signer certificates installed through MDM.
 - [ ] `sloper-ai/homebrew-tap` exists with `Formula/`; org settings allow public packages;
       `v*` tag ruleset in place.
 - [ ] `git tag -s v0.1.0 -m "Cucina 0.1.0" && git push origin v0.1.0`; approve `release`.

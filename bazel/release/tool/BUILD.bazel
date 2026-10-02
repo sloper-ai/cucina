@@ -45,7 +45,10 @@ cucina_go_test(
     timeout = "short",
     srcs = ["files_test.go"],
     embed = [":tool_lib"],
-    runfiles_env = {"FORMULA_TEMPLATE": "//release:homebrew/cucinactl.rb.tmpl"},
+    runfiles_env = {
+        "CUCINA_RELEASE_BIN": ":tool",
+        "FORMULA_TEMPLATE": "//release:homebrew/cucinactl.rb.tmpl",
+    },
     tier = "integration",
     deps = ["@com_github_stretchr_testify//require"],
 )

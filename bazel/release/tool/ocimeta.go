@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,6 +33,7 @@ func ImageLabels(bi BuildInfo, title, description, baseName, baseDigest string) 
 		"org.opencontainers.image.documentation": repoURL + "/blob/" + bi.Tag() + "/docs/operations/releasing.md",
 		"org.opencontainers.image.licenses":      license,
 		"org.opencontainers.image.vendor":        vendor,
+		"ai.sloper.cucina.source-dirty":          strconv.FormatBool(bi.Dirty),
 	}
 	if bi.Commit != "" {
 		labels["org.opencontainers.image.revision"] = bi.Commit

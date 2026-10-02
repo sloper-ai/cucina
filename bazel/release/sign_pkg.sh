@@ -52,4 +52,5 @@ mkdir -p "$out"
 	--license "$(abs "$license")" --notices "$(abs "$notices")" --version "$CORE" --out "$out/$base.pkg"
 /bin/sh "$(abs "$make_manifest")" --pkg "$out/$base.pkg" --version "$CORE" \
 	--url "$RELEASE_URL/$base.pkg" --manifest-url "$RELEASE_URL/$base.plist" --out-dir "$out" >/dev/null
+plutil -convert json -o "$out/$base.manifest.json" "$out/$base.plist"
 echo "signed $VERSION (package version $CORE): $out/$base.pkg (+ manifests)"

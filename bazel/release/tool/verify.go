@@ -38,7 +38,7 @@ const (
 var archiveDocs = []string{"LICENSE.md", "THIRD_PARTY_NOTICES.md"}
 
 // pkgCompanions are the files scripts/make-manifest.sh writes next to the package (ADR 0753).
-var pkgCompanions = []string{".pkg", ".plist", ".json", ".pkg.sha256", ".install-enterprise-application.plist", ".ddm-package.json"}
+var pkgCompanions = []string{".pkg", ".plist", ".json", ".manifest.json", ".pkg.sha256", ".install-enterprise-application.plist", ".ddm-package.json"}
 
 type verifier struct {
 	dir        string
@@ -174,8 +174,17 @@ func (v *verifier) checkCLIArchive(p Platform) {
 			v.failf("%v", err)
 			return
 		}
-		v.expectOutput(name, exePath, []string{"--version"}, "cucinactl "+v.bi.Version)
-		v.expectOutput(name, helperPath, []string{"--version"}, helper+" "+v.bi.Version)
+		for _, bin := range []string{exePath, helperPath} {
+			got, err := v.runNative(bin, "--version")
+			if err == nil {
+				err = CheckCLIVersion(filepath.Base(bin), v.bi.Version, got)
+			}
+			if err != nil {
+				v.failf("%s: %v", name, err)
+			} else {
+				v.notef("ran %s --version: %s", filepath.Base(bin), got)
+			}
+		}
 	}
 }
 
@@ -363,6 +372,30 @@ func (v *verifier) checkPkg() {
 	if err != nil {
 		v.failf("%v", err)
 		return
+	}
+	if raw, ok := v.read(base + ".manifest.json"); ok {
+		var manifest struct {
+			Items []struct {
+				Assets []struct {
+					Kind   string `json:"kind"`
+					URL    string `json:"url"`
+					SHA256 string `json:"sha256"`
+				} `json:"assets"`
+				Metadata map[string]string `json:"metadata"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			v.failf("%s.manifest.json: %v", base, err)
+		} else if len(manifest.Items) != 1 || len(manifest.Items[0].Assets) != 1 {
+			v.failf("%s.manifest.json: expected one item with one package asset", base)
+		} else {
+			item := manifest.Items[0]
+			asset := item.Assets[0]
+			if asset.Kind != "software-package" || asset.URL != v.bi.ReleaseURL(base+".pkg") || asset.SHA256 != sum ||
+				item.Metadata["bundle-identifier"] != pkgID || item.Metadata["bundle-version"] != v.bi.Core || item.Metadata["title"] == "" {
+				v.failf("%s.manifest.json: asset or bundle metadata does not describe this package", base)
+			}
+		}
 	}
 	var meta pkgJSON
 	if raw, ok := v.read(base + ".json"); ok {

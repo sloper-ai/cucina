@@ -31,5 +31,13 @@ mkdir -p "$out"
 	cat "$work/build.log" >&2
 	exit 1
 }
+# Inspect the actual payload (including licence notices, untouched Tart and launchd settings),
+# not just the archive's Distribution metadata. This never installs the package.
+/bin/sh "$(dirname "$build_pkg")/check-pkg.sh" "$out/$base.pkg" --version "$CORE" >"$work/check.log" 2>&1 || {
+	cat "$work/check.log" >&2
+	exit 1
+}
 /bin/sh "$make_manifest" --pkg "$out/$base.pkg" --version "$CORE" --url "$RELEASE_URL/$base.pkg" \
 	--manifest-url "$RELEASE_URL/$base.plist" --out-dir "$out" >/dev/null
+# Structural JSON manifest (items[].assets/metadata), separate from Apple Business form data.
+plutil -convert json -o "$out/$base.manifest.json" "$out/$base.plist"

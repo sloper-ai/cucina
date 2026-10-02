@@ -26,6 +26,7 @@ const DefaultRepository = "sloper-ai/cucina"
 const (
 	keyVersion    = "STABLE_CUCINA_VERSION"
 	keyCommit     = "STABLE_CUCINA_COMMIT"
+	keyDirty      = "STABLE_CUCINA_DIRTY"
 	keyEpoch      = "STABLE_CUCINA_SOURCE_DATE_EPOCH"
 	keyRepository = "STABLE_CUCINA_REPOSITORY"
 )
@@ -48,6 +49,7 @@ type BuildInfo struct {
 	Epoch      int64  `json:"epoch"`      // SOURCE_DATE_EPOCH: commit time (0 when unstamped)
 	Repository string `json:"repository"` // OWNER/REPO on GitHub
 	Stamped    bool   `json:"stamped"`
+	Dirty      bool   `json:"dirty"` // uncommitted source changes; never publish these builds
 }
 
 // ParseVersion validates a release version and returns its MAJOR.MINOR.PATCH core.
@@ -57,6 +59,15 @@ func ParseVersion(v string) (core string, prerelease bool, err error) {
 		return "", false, fmt.Errorf("version %q is not MAJOR.MINOR.PATCH[-PRERELEASE] (SemVer 2.0.0, no build metadata)", v)
 	}
 	return m[1] + "." + m[2] + "." + m[3], m[4] != "", nil
+}
+
+// CheckCLIVersion validates the public --version banner of either CLI personality.
+func CheckCLIVersion(program, version, output string) error {
+	want := strings.TrimSuffix(program, ".exe") + " " + version
+	if strings.TrimSpace(output) != want {
+		return fmt.Errorf("%s --version printed %q, want %q", program, output, want)
+	}
+	return nil
 }
 
 // NewBuildInfo validates the fields and derives Core and Prerelease.
@@ -79,7 +90,7 @@ func NewBuildInfo(version, commit string, epoch int64, repository string, stampe
 	}
 	return BuildInfo{
 		Version: version, Core: core, Prerelease: pre, Commit: commit, Epoch: epoch,
-		Repository: repository, Stamped: stamped,
+		Repository: repository, Stamped: stamped, Dirty: !stamped,
 	}, nil
 }
 
@@ -111,7 +122,15 @@ func BuildInfoFromStatus(status map[string]string) (BuildInfo, error) {
 			return BuildInfo{}, fmt.Errorf("%s: %w", keyEpoch, err)
 		}
 	}
-	return NewBuildInfo(version, status[keyCommit], epoch, status[keyRepository], true)
+	bi, err := NewBuildInfo(version, status[keyCommit], epoch, status[keyRepository], true)
+	if err != nil {
+		return BuildInfo{}, err
+	}
+	bi.Dirty, err = strconv.ParseBool(status[keyDirty])
+	if err != nil {
+		return BuildInfo{}, fmt.Errorf("%s must be true or false: %w", keyDirty, err)
+	}
+	return bi, nil
 }
 
 // LoadBuildInfo reads a JSON file written by `buildinfo`.
@@ -126,8 +145,11 @@ func LoadBuildInfo(path string) (BuildInfo, error) {
 	if err := dec.Decode(&bi); err != nil {
 		return BuildInfo{}, fmt.Errorf("%s: %w", path, err)
 	}
-	// Re-validate: the file may come from another job.
-	return NewBuildInfo(bi.Version, bi.Commit, bi.Epoch, bi.Repository, bi.Stamped)
+	// Re-validate: the file may come from another job. Preserve the dirty bit; it is part
+	// of the build identity used to reject mixed dists in finalize.
+	validated, err := NewBuildInfo(bi.Version, bi.Commit, bi.Epoch, bi.Repository, bi.Stamped)
+	validated.Dirty = bi.Dirty || !bi.Stamped
+	return validated, err
 }
 
 // Created is the image/archive timestamp: the commit time, so rebuilds are reproducible.
@@ -210,6 +232,7 @@ func (b BuildInfo) Env() string {
 		{"VERSION", b.Version}, {"CORE", b.Core}, {"PRERELEASE", strconv.FormatBool(b.Prerelease)},
 		{"COMMIT", b.Commit}, {"EPOCH", strconv.FormatInt(b.Epoch, 10)}, {"REPOSITORY", b.Repository},
 		{"TAG", b.Tag()}, {"RELEASE_URL", strings.TrimSuffix(b.ReleaseURL(""), "/")},
+		{"DIRTY", strconv.FormatBool(b.Dirty)},
 	} {
 		fmt.Fprintf(&s, "%s='%s'\n", kv[0], kv[1])
 	}

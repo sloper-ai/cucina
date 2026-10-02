@@ -7,6 +7,7 @@ import (
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
+	"encoding/binary"
 	"fmt"
 	"strings"
 )
@@ -15,6 +16,7 @@ import (
 // libc++, a MinGW runtime DLL) would be missing on a stock Windows host (ADR 0103).
 var windowsSystemDLLs = map[string]bool{
 	"advapi32.dll": true, "bcrypt.dll": true, "bcryptprimitives.dll": true, "crypt32.dll": true,
+	"combase.dll":  true, // WinRT, Windows 8+/Server 2012+ (Microsoft Learn: roapi/RoInitialize)
 	"iphlpapi.dll": true, "kernel32.dll": true, "msvcrt.dll": true, "ncrypt.dll": true,
 	"ntdll.dll": true, "ole32.dll": true, "oleaut32.dll": true, "powrprof.dll": true,
 	"secur32.dll": true, "shell32.dll": true, "shlwapi.dll": true, "user32.dll": true,
@@ -58,20 +60,72 @@ func CheckBinary(data []byte, p Platform) error {
 		if f.Machine != pe.IMAGE_FILE_MACHINE_AMD64 {
 			return fmt.Errorf("PE machine %#x, want AMD64", f.Machine)
 		}
-		libs, err := f.ImportedLibraries()
+		libs, err := windowsImports(f)
 		if err != nil {
 			return err
 		}
 		for _, l := range libs {
 			l = strings.ToLower(l)
 			if !windowsSystemDLLs[l] && !strings.HasPrefix(l, "api-ms-win-") {
-				return fmt.Errorf("imports %s, which stock Windows does not ship", l)
+				return fmt.Errorf("imports %s, which is not an approved system DLL", l)
 			}
 		}
 	default:
 		return fmt.Errorf("unknown OS %q", p.OS)
 	}
 	return nil
+}
+
+// Read import descriptor names after debug/pe has parsed the section layout. Go 1.27's
+// ImportedLibraries is a no-op; ImportedSymbols omits ordinal-only imports, so neither proves
+// the release's DLL dependency contract. Names in the import directory cover both forms.
+func windowsImports(f *pe.File) ([]string, error) {
+	h, ok := f.OptionalHeader.(*pe.OptionalHeader64)
+	if !ok {
+		return nil, fmt.Errorf("windows release is not PE32+")
+	}
+	rvaData := func(rva uint32) ([]byte, error) {
+		for _, s := range f.Sections {
+			if rva >= s.VirtualAddress && uint64(rva)-uint64(s.VirtualAddress) < uint64(s.Size) {
+				data, err := s.Data()
+				if err != nil {
+					return nil, err
+				}
+				return data[rva-s.VirtualAddress:], nil
+			}
+		}
+		return nil, fmt.Errorf("PE import RVA %#x is outside its sections", rva)
+	}
+	dir := h.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT]
+	if dir.VirtualAddress == 0 {
+		return nil, nil
+	}
+	data, err := rvaData(dir.VirtualAddress)
+	if err != nil {
+		return nil, err
+	}
+	if dir.Size > uint32(len(data)) {
+		return nil, fmt.Errorf("truncated PE import directory")
+	}
+	data = data[:dir.Size]
+	var libraries []string
+	for len(data) >= 20 {
+		descriptor := data[:20]
+		data = data[20:]
+		if bytes.Equal(descriptor, make([]byte, 20)) {
+			return libraries, nil
+		}
+		name, err := rvaData(binary.LittleEndian.Uint32(descriptor[12:16]))
+		if err != nil {
+			return nil, err
+		}
+		end := bytes.IndexByte(name, 0)
+		if end <= 0 {
+			return nil, fmt.Errorf("missing or unterminated PE DLL name")
+		}
+		libraries = append(libraries, string(name[:end]))
+	}
+	return nil, fmt.Errorf("unterminated PE import directory")
 }
 
 // ContainsVersion reports whether the binary embeds the version string (Go -X / Rust env!

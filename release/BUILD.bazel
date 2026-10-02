@@ -32,6 +32,24 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
+# Production guard: never invoke this script test outside Bazel's network-blocked sandbox.
+cucina_sh_test(
+    name = "publish_guard_test",
+    timeout = "short",
+    srcs = ["publish_guard_test.sh"],
+    args = ["$(rootpath :publish.sh)"],
+    data = [
+        "lib.sh",
+        "publish.sh",
+    ],
+    tags = ["block-network"],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "integration",
+)
+
 _MANUAL = ["manual"]
 
 _MACOS = ["@platforms//os:macos"]
@@ -57,7 +75,8 @@ filegroup(
 )
 
 # --- cucinactl (R-CLI-1): macOS arm64 (macOS exec), Linux musl, Windows ------------------------
-# Windows targets MinGW/UCRT (gnullvm): rules_rs cannot link Rust for MSVC yet (ADR 0103).
+# Windows releases retain the validated MinGW/UCRT (gnullvm) ABI of ADR 0103; adopting the
+# newer MSVC foundation fix (ADR 0107) is a separate release-platform change.
 _CLI = {
     "darwin_arm64": ("@rules_rs//rs/platforms:aarch64-apple-darwin", "cucinactl"),
     "linux_amd64": ("@rules_rs//rs/platforms:x86_64-unknown-linux-musl", "cucinactl"),

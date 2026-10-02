@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Installable bare-kind profile for the nightly system lane (R-TEST-2/-6).
+# charts/cucina/ci/*.yaml are static rendering fixtures: medium/large deliberately require
+# external issuers, monitoring CRDs and EBS. Keep those fixtures unchanged.
+sizeProfile: small
+images:
+  pullPolicy: IfNotPresent
+  controller:
+    repository: ghcr.io/sloper-ai/cucina-controller
+    tag: 0.0.0-dev
+    digest: ""
+storage:
+  mode: file
+  storageClassName: standard
+controller:
+  aws:
+    enabled: false
+pools: []
+exposure:
+  client:
+    type: ClusterIP
+  api:
+    type: ClusterIP
+  worker:
+    type: ClusterIP
+endpoints:
+  client:
+    host: localhost
+  worker:
+    host: localhost

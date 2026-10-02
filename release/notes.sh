@@ -4,15 +4,18 @@
 # conventional-commit type (other subjects are listed as they are), and the ADRs added since,
 # filled into release/notes.md.tmpl. Needs the git history and tags (fetch-depth: 0 in CI).
 #
-# usage: release/notes.sh --version V [--previous-tag TAG] [--repo OWNER/REPO] > notes.md
+# usage: release/notes.sh --version V [--commit SHA] [--previous-tag TAG] [--repo OWNER/REPO] > notes.md
+# Frozen git-less source snapshots set CUCINA_SOURCE_REPO to a read-only history checkout;
+# the explicitly selected commit, not that checkout's current HEAD, is used throughout.
 set -euo pipefail
 # shellcheck source=release/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-version='' previous='' repo="${CUCINA_REPOSITORY:-${GITHUB_REPOSITORY:-sloper-ai/cucina}}"
+version='' previous='' head="${CUCINA_SOURCE_COMMIT:-HEAD}" repo="${CUCINA_REPOSITORY:-${GITHUB_REPOSITORY:-sloper-ai/cucina}}"
 while [[ $# -gt 0 ]]; do
 	case $1 in
 	--version) version=$2 && shift 2 ;;
+	--commit) head=$2 && shift 2 ;;
 	--previous-tag) previous=$2 && shift 2 ;;
 	--repo) repo=$2 && shift 2 ;;
 	*) die "usage: notes.sh --version V [--previous-tag TAG] [--repo OWNER/REPO]" ;;
@@ -22,16 +25,16 @@ done
 tag="v$version"
 core="${version%%-*}"
 owner="$(printf '%s' "${repo%%/*}" | tr '[:upper:]' '[:lower:]')"
-git_() { git -C "$release_root" "$@"; }
+git_() { git -C "${CUCINA_SOURCE_REPO:-$release_root}" "$@"; }
 
-head="$(git_ rev-parse HEAD)"
+head="$(git_ rev-parse --verify --end-of-options "$head^{commit}")"
 if [[ -z $previous ]]; then
-	previous="$(git_ describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude "$tag" HEAD 2>/dev/null || true)"
+	previous="$(git_ describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude "$tag" "$head" 2>/dev/null || true)"
 fi
-range=HEAD
+range="$head"
 since="the beginning (first release)"
 if [[ -n $previous ]]; then
-	range="$previous..HEAD"
+	range="$previous..$head"
 	since="[$previous](https://github.com/$repo/releases/tag/$previous)"
 fi
 
@@ -63,14 +66,14 @@ changes="$(git_ log --no-merges --format='%h%x09%s' "$range" | awk -F '\t' '
 [[ -n $changes ]] || changes="No changes."
 
 if [[ -n $previous ]]; then
-	adr_files="$(git_ diff --name-only --diff-filter=A "$previous" HEAD -- 'docs/adr/[0-9]*.md')"
+	adr_files="$(git_ diff --name-only --diff-filter=A "$previous" "$head" -- 'docs/adr/[0-9]*.md')"
 else
-	adr_files="$(git_ ls-files 'docs/adr/[0-9]*.md')"
+	adr_files="$(git_ ls-tree -r --name-only "$head" -- docs/adr | grep -E '^docs/adr/[0-9]{4}-.*\.md$' || true)"
 fi
 adrs=''
 while IFS= read -r f; do
 	[[ -n $f ]] || continue
-	title="$(sed -n 's/^# *//p' "$release_root/$f" | head -n 1)"
+	title="$(git_ show "$head:$f" | sed -n 's/^# *//p' | head -n 1)"
 	adrs+="- [${title:-$f}](https://github.com/$repo/blob/$tag/$f)"$'\n'
 done <<<"$adr_files"
 [[ -n $adrs ]] || adrs="No new ADRs."

@@ -30,6 +30,7 @@ jobs:
     name: build (+ push) cucina-worker-macos
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 360
+    environment: macos-images # restrict allowed refs and require a maintainer approval
     permissions:
       contents: read
       packages: write
@@ -46,10 +47,18 @@ jobs:
         env:
           XCODE: ${{ inputs.xcode }}
           OWNER: ${{ github.repository_owner }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TART_REGISTRY_USERNAME: ${{ github.actor }}
           TART_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           CUCINA_PUBLISH: "1"
         run: |
           owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          # Fail closed: never trust a default visibility, inherited org setting or a label.
+          # The operator must bootstrap the PRIVATE package and grant this workflow access.
+          visibility="$(gh api "orgs/$owner/packages/container/cucina-worker-macos" --jq '.visibility')"
+          if [ "$visibility" != private ]; then
+            echo "::error::refusing to push an Xcode image to a package not confirmed private"
+            exit 1
+          fi
           CUCINA_IMAGE_REPOSITORY="ghcr.io/$owner/cucina-worker-macos" \
             make -C workers/macos push XCODE="$XCODE" CUCINA_VERSION="$(tr -d '[:space:]' < VERSION)"

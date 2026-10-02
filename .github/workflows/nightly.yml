@@ -88,6 +88,8 @@ jobs:
     env:
       KIND: kind@0.33.0
       CT: aqua:helm/chart-testing@3.14.0
+      # Kubernetes 1.36 line; digest from kind v0.33.0 release notes.
+      KIND_NODE: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,7 +112,7 @@ jobs:
           key: bazel-nightly-system-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           restore-keys: bazel-nightly-system-${{ runner.os }}-${{ runner.arch }}-
       - name: kind cluster
-        run: mise exec "$KIND" -- kind create cluster --name cucina --wait 5m
+        run: mise exec "$KIND" -- kind create cluster --name cucina --image "$KIND_NODE" --wait 5m
       - name: load the controller image (built by Bazel, no registry)
         run: |
           bazelisk build --config=ci --output_groups=+tarball //release:controller_image_load
@@ -129,24 +131,25 @@ jobs:
           fi
           # shellcheck disable=SC2086 # one target per word
           bazelisk test --config=ci --config=nightly $targets
-      - name: ct install (every ci/ values profile)
+      - name: ct install and helm test (bare-kind profile)
         run: |
-          # ct discovers ci/*-values.yaml: install from a copy with the profiles renamed.
           work="$RUNNER_TEMP/ct"
           mkdir -p "$work/charts"
           cp -R charts/cucina "$work/charts/cucina"
-          for f in "$work"/charts/cucina/ci/values-*.yaml; do
-            base="$(basename "$f" .yaml)"
-            mv "$f" "$work/charts/cucina/ci/${base#values-}-values.yaml"
-          done
+          # Render fixtures depend on external infra; ct gets one genuinely installable profile.
+          rm -rf "$work/charts/cucina/ci"
+          mkdir -p "$work/charts/cucina/ci"
+          cp release/kind-values.yaml "$work/charts/cucina/ci/kind-values.yaml"
           cd "$work"
-          mise exec "$CT" -- ct install --charts charts/cucina --chart-dirs charts \
-            --helm-extra-set-args "--set=images.controller.tag=0.0.0-dev --set=images.pullPolicy=IfNotPresent"
+          mise exec "$CT" -- ct install --charts charts/cucina --chart-dirs charts
       - name: cluster state on failure
         if: failure()
         run: |
           kubectl get pods -A -o wide || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -n 50 || true
+      - name: delete the dedicated kind cluster
+        if: always()
+        run: mise exec "$KIND" -- kind delete cluster --name cucina
 
   security:
     name: security scans (fresh advisory data)
@@ -209,8 +212,15 @@ jobs:
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           install_args: go
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gremlins
+          key: gremlins-0.6.0-go1.27.1-${{ runner.os }}-${{ runner.arch }}
       - name: install gremlins v0.6.0
-        run: GOBIN="$RUNNER_TEMP/bin" go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+        run: |
+          if [ ! -x "$RUNNER_TEMP/gremlins/gremlins" ]; then
+            GOBIN="$RUNNER_TEMP/gremlins" go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+          fi
       - name: unleash (PR - changed lines only; weekly - full)
         env:
           EVENT: ${{ github.event_name }}
@@ -221,10 +231,11 @@ jobs:
           if [ "$EVENT" = pull_request ]; then diff=(--diff "origin/$BASE_REF"); fi
           status=0
           # Scope (R-TEST-5.6): STS/auth, autoscaler core, VM state machines, config rendering.
-          for pkg in internal/sts internal/auth internal/scaling internal/hostd/vmm internal/bbconfig; do
+          for pkg in internal/sts internal/auth internal/keys internal/scaling internal/hostd/lifecycle internal/bbconfig; do
             name="$(printf '%s' "$pkg" | tr / -)"
             echo "::group::$pkg"
-            "$RUNNER_TEMP/bin/gremlins" unleash "${diff[@]}" --output "mutation/$name.json" "./$pkg" \
+            "$RUNNER_TEMP/gremlins/gremlins" unleash "${diff[@]}" --workers 2 --test-cpu 2 \
+              --output "$GITHUB_WORKSPACE/mutation/$name.json" "./$pkg" \
               | tee "mutation/$name.txt" || status=1
             echo "::endgroup::"
           done

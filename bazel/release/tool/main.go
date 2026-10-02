@@ -5,8 +5,8 @@
 // workflow and release/*.sh run it with `bazel run`. It never uses the network and never
 // publishes anything.
 //
-//	buildinfo  [--stable-status F] --out-json F [--out-version F] [--out-core F]
-//	oci-meta   --buildinfo F --title T --description D [--base-name N --base-digest D]
+//	buildinfo  [--stable-status F] --out-json F [--out-env F]
+//	oci-meta   --buildinfo F --title T --description D [--base-name N --base-layout DIR]
 //	           --out-labels F --out-created F --out-tags F
 //	archive    --buildinfo F --format tar.gz|zip --top TEMPLATE --exe NAME=PATH
 //	           [--link NAME]... [--doc NAME=PATH]... --out F

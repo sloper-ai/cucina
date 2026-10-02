@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: FSL-1.1-ALv2
 # Release dry run (R-OPS-7, ADR 0151): builds every release artifact of the current commit
-# with a fake version, runs every release check and prints what the publish steps would do.
-# It NEVER publishes: no tag, release, package or tap commit (it has no credentials, and
-# release/publish.sh runs only with --dry-run here).
+# with a fake version and runs every release check. It NEVER calls the publishing entrypoint:
+# no tag, release, registry package or tap operation is reachable from this script.
 #
 # usage: release/dry-run.sh [--version V] [--out DIR] [--lint] [--no-all]
 #
@@ -12,8 +11,8 @@
 #   --lint       also run actionlint and shellcheck over the workflows and release scripts
 #   --no-all     skip the in-graph //release:all + //release:verify_test comparison (macOS)
 #
-# It runs exactly the release workflow's steps: release/build.sh per runner (macOS parts only
-# on a macOS host), release/assemble.sh, release/publish.sh --dry-run. Bazel options: see
+# It runs the release workflow's build and assembly steps, all on a macOS host (Linux/Windows
+# artifacts cross-build). On Linux use `release/build.sh linux --out DIR` for that lane. See
 # release/lib.sh (BAZEL, BAZEL_STARTUP_ARGS, BAZEL_ARGS).
 set -euo pipefail
 # shellcheck source=release/lib.sh
@@ -29,6 +28,7 @@ while [[ $# -gt 0 ]]; do
 	*) die "unknown argument $1 (see the header of $0)" ;;
 	esac
 done
+[[ $(host_os) == macos ]] || die "a complete release dry run needs macOS; for the Linux-only lane use release/build.sh linux --out DIR"
 [[ -n $out ]] || out="$(mktemp -d "${TMPDIR:-/tmp}/cucina-release-dry-run.XXXXXX")"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
@@ -40,29 +40,12 @@ if [[ $lint == 1 ]]; then
 	(cd "$release_root" && actionlint && shellcheck -x release/*.sh bazel/release/*.sh)
 fi
 
-dists=()
-if [[ $(host_os) == macos ]]; then
-	"$release_root/release/build.sh" macos --out "$out/macos"
-	dists+=("$out/macos/dist-macos")
-	expect=(--expect macos --expect linux)
-else
-	info "not a macOS host: the macOS artifacts (cucinactl darwin, cucina-hostd, the pkg) are skipped"
-	expect=(--expect linux)
-fi
+"$release_root/release/build.sh" macos --out "$out/macos"
 "$release_root/release/build.sh" linux --out "$out/linux"
-dists+=("$out/linux/dist-linux")
+"$release_root/release/assemble.sh" --out "$out/release" --pkg unsigned --oci "$out/linux/oci" \
+	--version "$version" --expect macos --expect linux "$out/macos/dist-macos" "$out/linux/dist-linux"
 
-pkg=unsigned
-[[ $(host_os) == macos ]] || pkg=none
-"$release_root/release/assemble.sh" --out "$out/release" --pkg "$pkg" --oci "$out/linux/oci" \
-	--version "$version" "${expect[@]}" "${dists[@]}"
-
-info "publish plan (dry run):"
-for step in images chart github; do
-	"$release_root/release/publish.sh" "$step" --release "$out/release" --oci "$out/linux/oci" --dry-run
-done
-
-if [[ $all == 1 && $(host_os) == macos ]]; then
+if [[ $all == 1 ]]; then
 	# The single-graph build (bazel build //release:all) must produce the same assets.
 	"$release_root/release/build.sh" all --out "$out/all"
 	if ! diff -u "$out/all/release/assets/SHA256SUMS" "$out/release/assets/SHA256SUMS"; then

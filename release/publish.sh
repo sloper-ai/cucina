@@ -46,6 +46,14 @@ repo="$(field repository)"
 prerelease="$(field prerelease)"
 owner="$(printf '%s' "${repo%%/*}" | tr '[:upper:]' '[:lower:]')"
 [[ -n $version && -n $repo ]] || die "cannot read $release/meta/buildinfo.json"
+if [[ $dry == 0 ]]; then
+	[[ $(field stamped) == true && $(field dirty) == false ]] ||
+		die "refusing to publish a dirty, unstamped or unknown-source build"
+	[[ ${GITHUB_ACTIONS:-} == true && ${GITHUB_EVENT_NAME:-} == push && ${GITHUB_REF:-} == "refs/tags/v$version" ]] ||
+		die "publishing is restricted to the tag-triggered GitHub Actions workflow"
+	[[ ${GITHUB_REPOSITORY:-} == "$repo" && -n $(field commit) && ${GITHUB_SHA:-} == "$(field commit)" ]] ||
+		die "release source does not match this workflow's repository and commit"
+fi
 
 # run <cmd...>: execute, or print in dry-run mode.
 run() {

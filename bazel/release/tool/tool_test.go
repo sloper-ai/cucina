@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"debug/pe"
+	"encoding/binary"
 	"os"
 	"strings"
 	"testing"
@@ -40,7 +42,7 @@ func TestVersionPolicy(t *testing.T) {
 	}
 
 	status, err := ReadStatus(strings.NewReader("BUILD_USER someone\nSTABLE_CUCINA_VERSION 0.2.0\n" +
-		"STABLE_CUCINA_COMMIT abc1234\nSTABLE_CUCINA_SOURCE_DATE_EPOCH 1790000000\n"))
+		"STABLE_CUCINA_COMMIT abc1234\nSTABLE_CUCINA_SOURCE_DATE_EPOCH 1790000000\nSTABLE_CUCINA_DIRTY false\n"))
 	require.NoError(t, err)
 	bi, err := BuildInfoFromStatus(status)
 	require.NoError(t, err)
@@ -50,6 +52,13 @@ func TestVersionPolicy(t *testing.T) {
 
 	_, err = BuildInfoFromStatus(map[string]string{"BUILD_USER": "someone"})
 	require.ErrorContains(t, err, "release/workspace-status.sh")
+
+	// R-AUTH-8: Windows argv[0] has .exe, but the public banner uses the personality name.
+	for _, name := range []string{"cucinactl", "cucina-credential-helper", "cucinactl.exe", "cucina-credential-helper.exe"} {
+		banner := strings.TrimSuffix(name, ".exe") + " 0.2.0"
+		require.NoError(t, CheckCLIVersion(name, "0.2.0", banner))
+		require.Error(t, CheckCLIVersion(name, "0.1.0", banner))
+	}
 }
 
 // R-AUTH-8: Bazel runs the credential helper by path without arguments, so the archives ship
@@ -91,6 +100,59 @@ func TestCLIArchiveShipsCredentialHelper(t *testing.T) {
 			require.Equal(t, []byte("notices"), byName[spec.Top+"/THIRD_PARTY_NOTICES.md"].Data)
 			require.Equal(t, os.FileMode(0o644), byName[spec.Top+"/LICENSE.md"].Mode)
 		})
+	}
+}
+
+// R-CLI-1 / ADR 0103 regression: Windows archives must not require an unbundled runtime DLL.
+// debug/pe.ImportedLibraries is unimplemented; checking it silently accepted every dependency.
+func TestWindowsRequiresOnlySystemDLLs(t *testing.T) {
+	for _, tc := range []struct {
+		dll     string
+		ordinal bool
+		allowed bool
+	}{
+		{"kernel32.dll", false, true},
+		{"kernel32.dll", true, true},
+		{"combase.dll", false, true},
+		{"badextra.dll", false, false},
+		{"badextra.dll", true, false},
+	} {
+		// Minimal in-memory PE import-table fixture. No executable code, compiler or filesystem.
+		dos := make([]byte, 64)
+		copy(dos, "MZ")
+		binary.LittleEndian.PutUint32(dos[60:], 64)
+		var b bytes.Buffer
+		b.Write(dos)
+		b.WriteString("PE\x00\x00")
+		optional := pe.OptionalHeader64{Magic: 0x20b, NumberOfRvaAndSizes: 16}
+		optional.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT] = pe.DataDirectory{VirtualAddress: 0x1000, Size: 40}
+		require.NoError(t, binary.Write(&b, binary.LittleEndian, pe.FileHeader{
+			Machine: pe.IMAGE_FILE_MACHINE_AMD64, NumberOfSections: 1,
+			SizeOfOptionalHeader: uint16(binary.Size(optional)), Characteristics: pe.IMAGE_FILE_EXECUTABLE_IMAGE,
+		}))
+		require.NoError(t, binary.Write(&b, binary.LittleEndian, optional))
+		section := pe.SectionHeader32{VirtualSize: 512, VirtualAddress: 0x1000, SizeOfRawData: 512, PointerToRawData: 512}
+		copy(section.Name[:], ".idata")
+		require.NoError(t, binary.Write(&b, binary.LittleEndian, section))
+		image := make([]byte, 1024)
+		copy(image, b.Bytes())
+		idata := image[512:]
+		binary.LittleEndian.PutUint32(idata, 0x1040)      // OriginalFirstThunk
+		binary.LittleEndian.PutUint32(idata[12:], 0x1060) // DLL name RVA
+		binary.LittleEndian.PutUint32(idata[16:], 0x1040) // FirstThunk
+		thunk := uint64(0x1080)
+		if tc.ordinal {
+			thunk = 1<<63 | 1
+		}
+		binary.LittleEndian.PutUint64(idata[0x40:], thunk)
+		copy(idata[0x60:], tc.dll)
+		copy(idata[0x82:], "ExitProcess") // hint (2 bytes) + import name
+		err := CheckBinary(image, Platform{"windows", "amd64"})
+		if tc.allowed {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, tc.dll)
+		}
 	}
 }
 

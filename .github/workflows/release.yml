@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  BAZEL_ARGS: --config=ci
+  BAZEL_ARGS: --config=ci --jobs=4
   CUCINA_REPOSITORY: ${{ github.repository }}
   CRANE: crane@0.22.1
   HELM: helm@4.3.0
@@ -207,7 +207,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      signer: ${{ steps.keychain.outputs.IDENTITY_SHA1 }}
+      signer: ${{ steps.keychain.outputs.INSTALLER_IDENTITY_SHA1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,22 +223,27 @@ jobs:
         env:
           CUCINA_PKG_SIGNING_P12: ${{ secrets.CUCINA_PKG_SIGNING_P12 }}
           CUCINA_PKG_SIGNING_P12_PASSWORD: ${{ secrets.CUCINA_PKG_SIGNING_P12_PASSWORD }}
+          CUCINA_PKG_INSTALLER_P12: ${{ secrets.CUCINA_PKG_INSTALLER_P12 }}
+          CUCINA_PKG_INSTALLER_P12_PASSWORD: ${{ secrets.CUCINA_PKG_INSTALLER_P12_PASSWORD }}
         run: |
           macos/pkg/scripts/ci-keychain.sh create --p12-base64-env CUCINA_PKG_SIGNING_P12 \
-            --pass-env CUCINA_PKG_SIGNING_P12_PASSWORD >> "$GITHUB_OUTPUT"
+            --pass-env CUCINA_PKG_SIGNING_P12_PASSWORD \
+            --installer-p12-base64-env CUCINA_PKG_INSTALLER_P12 \
+            --installer-pass-env CUCINA_PKG_INSTALLER_P12_PASSWORD \
+            --keychain "$RUNNER_TEMP/cucina-signing.keychain-db" >> "$GITHUB_OUTPUT"
       - name: sign, check, write the manifests
         env:
           KEYCHAIN: ${{ steps.keychain.outputs.KEYCHAIN }}
-          IDENTITY: ${{ steps.keychain.outputs.IDENTITY_SHA1 }}
+          IDENTITY: ${{ steps.keychain.outputs.APPLICATION_IDENTITY_SHA1 }}
+          INSTALLER_IDENTITY: ${{ steps.keychain.outputs.INSTALLER_IDENTITY_SHA1 }}
+          CUCINA_SIGNING_RUNNER: ${{ runner.environment }}
         run: |
           release/sign-pkg.sh --inputs "$RUNNER_TEMP/pkg-inputs" --out "$RUNNER_TEMP/pkg-signed" \
-            --identity "$IDENTITY" --keychain "$KEYCHAIN"
+            --identity "$IDENTITY" --installer-identity "$INSTALLER_IDENTITY" --keychain "$KEYCHAIN" --trust-installer
           tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/pkg-signed.tar" pkg-signed
-      - name: delete the keychain
-        if: always() && steps.keychain.outputs.KEYCHAIN != ''
-        env:
-          KEYCHAIN: ${{ steps.keychain.outputs.KEYCHAIN }}
-        run: macos/pkg/scripts/ci-keychain.sh delete --keychain "$KEYCHAIN"
+      - name: delete the keychain (including partial import failures)
+        if: always() && (steps.keychain.outcome == 'success' || steps.keychain.outcome == 'failure')
+        run: macos/pkg/scripts/ci-keychain.sh delete --keychain "$RUNNER_TEMP/cucina-signing.keychain-db"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pkg-signed
@@ -300,9 +305,7 @@ jobs:
             args+=(--pkg unsigned) # dry run: check the unsigned package too
           fi
           release/assemble.sh "${args[@]}" "$RUNNER_TEMP/dist-macos" "$RUNNER_TEMP/dist-linux"
-          for step in images chart github; do
-            release/publish.sh "$step" --release "$RUNNER_TEMP/release" --oci "$RUNNER_TEMP/oci" --dry-run
-          done
+          # PR/manual validation never invokes release/publish.sh, even in its dry-run mode.
           {
             echo '```'
             cat "$RUNNER_TEMP/release/assets/SHA256SUMS"

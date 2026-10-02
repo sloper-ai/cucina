@@ -18,8 +18,11 @@ macOS package cannot carry a SemVer pre-release (ADR 0753).
   OCI tags reject `+`). A release tag is `v` + VERSION; the workflow refuses a mismatch.
 * Release builds run `bazel build --stamp --workspace_status_command=release/workspace-status.sh`.
   It publishes `STABLE_CUCINA_VERSION` (VERSION, or `$CUCINA_VERSION` for dry runs),
-  `STABLE_CUCINA_COMMIT`, `STABLE_CUCINA_SOURCE_DATE_EPOCH` (commit time) and
-  `STABLE_CUCINA_REPOSITORY`.
+  `STABLE_CUCINA_COMMIT`, `STABLE_CUCINA_SOURCE_DATE_EPOCH` (commit time),
+  `STABLE_CUCINA_REPOSITORY` and `STABLE_CUCINA_DIRTY`. Build metadata and OCI labels preserve
+  the dirty bit; publishing rejects dirty, unstamped or unknown-source builds. A frozen,
+  git-less validation copy may supply `CUCINA_SOURCE_COMMIT`, `CUCINA_SOURCE_DIRTY` and
+  `SOURCE_DATE_EPOCH` explicitly. It must never share the mutable checkout's `.git` link.
 * Binaries: `//bazel/release:stamp.bzl`. Go uses `x_defs = go_version_x_defs(...)` (rules_go
   stamping; only the link actions rerun). Rust reads `option_env!("CUCINA_VERSION")` from
   `rustc_env_files = RUST_VERSION_ENV_FILES` with `stamp = -1` (only `cucinactl` recompiles),
