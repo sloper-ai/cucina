@@ -18,5 +18,6 @@ cucina_go_test(
     deps = [
         ":relay",
         "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//test/bufconn",
     ],
 )

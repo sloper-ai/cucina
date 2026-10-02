@@ -9,9 +9,11 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/sloper-ai/cucina/internal/hostd/relay"
 )
@@ -102,5 +104,64 @@ func TestRelay(t *testing.T) {
 	mu.Lock()
 	require.Equal(t, []bool{true, true}, outcomes["vm-1"])
 	mu.Unlock()
+	// An echoed packet may reach the peer before the relay goroutine resumes
+	// its post-Write counter update. Half-close and drain to EOF: the relay
+	// counts each write before propagating FIN, so this orders final totals
+	// without polling, sleeping or assuming goroutine scheduling.
+	for _, c := range []net.Conn{c1, c2} {
+		require.NoError(t, c.(*net.TCPConn).CloseWrite())
+		_, err := io.Copy(io.Discard, c)
+		require.NoError(t, err)
+	}
 	require.EqualValues(t, 8, r.BytesFromVMs.Load())
+	require.EqualValues(t, 8, r.BytesToVMs.Load())
+}
+
+// Guards: R-DATA-7 / T13 — persistent L2/TLS connections report both directions
+// incrementally, before EOF; closing a connection neither loses nor doubles bytes.
+func TestRelayCountsLiveTraffic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ln := bufconn.Listen(1024)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		r := &relay.Relay{
+			Listener: ln,
+			// bufconn uses opaque, non-IP addresses. The real TCP test above
+			// separately proves bridge admission and per-VM connection limits.
+			Admit:    &admit{m: map[netip.Addr]string{{}: "vm-1"}},
+			Upstream: func() string { return "upstream.test:1" },
+			DialUpstream: func(context.Context, string) (net.Conn, error) {
+				upstream, peer := net.Pipe()
+				go func() { _, _ = io.Copy(peer, peer); _ = peer.Close() }()
+				return upstream, nil
+			},
+		}
+		require.NoError(t, r.Start())
+		done := make(chan error, 1)
+		go func() { done <- r.Serve(ctx) }()
+		defer func() { cancel(); require.NoError(t, <-done) }()
+		client, err := ln.DialContext(ctx)
+		require.NoError(t, err)
+		defer func() { _ = client.Close() }()
+		for i, payload := range []string{"ping", "pong"} {
+			_, err := client.Write([]byte(payload))
+			require.NoError(t, err)
+			b := make([]byte, len(payload))
+			_, err = io.ReadFull(client, b)
+			require.NoError(t, err)
+			require.Equal(t, payload, string(b))
+			// Receipt of the echo alone does not order the relay goroutine's
+			// post-Write accounting. Quiescence waits for that goroutine to
+			// block on its next read, without closing this persistent stream.
+			synctest.Wait()
+			require.Equal(t, []string{"vm-1"}, r.LiveVMs())
+			require.EqualValues(t, (i+1)*4, r.BytesFromVMs.Load())
+			require.EqualValues(t, (i+1)*4, r.BytesToVMs.Load())
+		}
+		require.NoError(t, client.Close())
+		synctest.Wait()
+		require.Empty(t, r.LiveVMs())
+		require.EqualValues(t, 8, r.BytesFromVMs.Load())
+		require.EqualValues(t, 8, r.BytesToVMs.Load())
+	})
 }
