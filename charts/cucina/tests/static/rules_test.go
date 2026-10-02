@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
 	"sigs.k8s.io/yaml"
+
+	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
 )
 
 // TestPrometheusRules renders the PrometheusRule (default thresholds), checks it with

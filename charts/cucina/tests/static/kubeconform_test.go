@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
 	"sigs.k8s.io/yaml"
+
+	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
 )
 
 // TestManifestsValidateStrictly runs kubeconform -strict over the chart rendered with

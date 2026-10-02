@@ -16,9 +16,10 @@ import (
 	"testing"
 
 	"github.com/buildbarn/bb-remote-execution/pkg/proto/configuration/bb_scheduler"
+	"google.golang.org/protobuf/encoding/protojson"
+
 	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
 	"github.com/sloper-ai/cucina/internal/bbtest"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // A rendered Buildbarn configuration of one component.

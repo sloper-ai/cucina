@@ -11,13 +11,14 @@ import (
 	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
 	"github.com/buildbarn/bb-remote-execution/pkg/proto/buildqueuestate"
 	"github.com/buildbarn/bb-storage/pkg/proto/fsac"
-	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
-	"github.com/sloper-ai/cucina/internal/bbtest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+
+	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
+	"github.com/sloper-ai/cucina/internal/bbtest"
 )
 
 // TestRenderedControlPlaneServes boots the small profile as rendered (two storage
@@ -74,7 +75,11 @@ func TestRenderedControlPlaneServes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { conn.Close() })
+		t.Cleanup(func() {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close gRPC connection: %v", err)
+			}
+		})
 		return conn
 	}
 	all := []string{"main"}

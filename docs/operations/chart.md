@@ -34,7 +34,7 @@ creates, idempotently and never overwriting, the objects Helm must not own becau
 
 ## Install (UC10)
 
-1. Prerequisites: Kubernetes ≥ 1.32 (tested 1.36), Helm 3.x or 4.x, a StorageClass (k3s `local-path`; EKS: EBS CSI,
+1. Prerequisites: Kubernetes ≥ 1.32 (local lifecycle: kind 1.34; CRD/RBAC integration: envtest 1.36), Helm 3.x or 4.x, a StorageClass (k3s `local-path`; EKS: EBS CSI,
    see [eks.md](eks.md)). Optional: cert-manager, Prometheus Operator, Gateway API CRDs.
 2. Write a values file with at least `endpoints.client.host` (public name/IP of the client endpoint),
    `endpoints.worker.host` (private address workers use), `pools` ([`samples/pools.yaml`](../../charts/cucina/samples/pools.yaml)),
@@ -50,11 +50,18 @@ creates, idempotently and never overwriting, the objects Helm must not own becau
 
    `values.schema.json` rejects unknown or malformed values before anything is created (R-TEST-7); cross-field checks
    (unknown platform, size class, instance name, minRunning > max, CAS < 19 GiB, timeouts) fail the same way.
-4. Log in with the break-glass key printed by `NOTES.txt` (`cucinactl login <sts-url> --ca-file cucina-ca.pem --key -`;
+4. Log in with the break-glass key using the command printed by `NOTES.txt` (`cucinactl login <sts-url> --ca-file cucina-ca.pem --key -`;
    `--ca-file` is needed while the endpoints use the chart-generated certificates and is stored in the profile as
-   `ca_file`, so later commands trust the same CA), create the OIDC trust policies, then disable the key: `helm upgrade … --set auth.breakGlass.enabled=false` (the TrustPolicy that scopes it is
-   removed; the controller stops accepting it). Rotate it by deleting the Secret and running `helm upgrade` (the bootstrap
-   hook creates a new one).
+   `ca_file`, so later commands trust the same CA). Create the OIDC trust policies and verify another administrator can log in, then **revoke the issued key**:
+
+   ```sh
+   BG_KEY_ID=$(kubectl -n cucina get secret cucina-break-glass -o jsonpath='{.data.key-id}' | base64 -d)
+   cucinactl keys revoke "$BG_KEY_ID" --reason "OIDC administrators configured"
+   ```
+
+   `auth.breakGlass.enabled=false` stops future bootstrap generation and removes the chart's TrustPolicy, but **does not revoke a previously registered key**: without that policy the auth engine falls back to its built-in break-glass policy. Set it false in your values after revocation if you no longer want bootstrap credentials.
+   To rotate instead, explicitly revoke the old key first, delete only `secret/cucina-break-glass`, and run `helm upgrade` with `auth.breakGlass.enabled=true` to bootstrap a replacement. Deleting the plaintext Secret alone does not revoke the old key's hashed registration.
+   Before retiring the key, provision a restricted service-account key and set `hooks.test.credentialSecret` (entry `key`) in your values: both `helm test` and the controller's five-minute cache canary otherwise keep using the revoked break-glass key. See [credential rotation](rotate-ca-credentials.md#3-other-credentials).
 
 ## Upgrade
 
@@ -102,8 +109,9 @@ kubectl delete crd workerpools.cucina.sloper.ai machosts.cucina.sloper.ai trustp
 ## Certificates and keys
 
 * **Server certificates** (chart-generated groups): issued by Cucina's CA, renewed by the leader at 2/3 of
-  `tls.serverCertificateDuration`; Buildbarn re-reads them every `tls.refreshInterval`, the controller via fsnotify — no
-  restarts. With cert-manager, the `Certificate` objects renew them (`renewBefore`).
+  `tls.serverCertificateDuration`; Buildbarn re-reads them every `tls.refreshInterval`. Controller/STS listeners check
+  changed files during TLS handshakes, at most once per 10 seconds. Allow for the kubelet's Secret-projection delay;
+  neither change restarts a Pod. With cert-manager, the `Certificate` objects renew them (`renewBefore`).
 * **CA rotation** (docs/security.md §PKI): introduce the new root into the CA bundle (`ca.crt` holds both), restart the
   Buildbarn pods (`kubectl rollout restart deploy/cucina-frontend deploy/cucina-scheduler sts/cucina-storage`;
   `clientCertificateAuthorities` is read at start, ADR 0400), switch issuance, wait for leaf renewal, remove the old root,
@@ -143,11 +151,13 @@ chart-generated certificates (SAN `localhost`) verify without editing `/etc/host
 ```sh
 helm install cucina charts/cucina -n cucina --create-namespace -f kind-values.yaml --wait
 helm test -n cucina cucina --logs
-kubectl -n cucina get secret cucina-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > cucina-ca.pem
+umask 077
+mkdir -p -m 700 "$HOME/.config/cucina"
+kubectl -n cucina get secret cucina-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > "$HOME/.config/cucina/cucina-ca.pem"
 kubectl -n cucina port-forward svc/cucina-api-sts 8443:8443 &
 kubectl -n cucina port-forward svc/cucina-api-management 8444:8444 &
 kubectl -n cucina get secret cucina-break-glass -o jsonpath='{.data.key}' | base64 -d \
-  | cucinactl login https://localhost:8443 --ca-file cucina-ca.pem --key -
+  | cucinactl login https://localhost:8443 --ca-file "$HOME/.config/cucina/cucina-ca.pem" --key -
 cucinactl status
 ```
 

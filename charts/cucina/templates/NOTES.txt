@@ -21,19 +21,23 @@ Endpoints
      kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "cucina.frontend.name" . }} deploy/{{ include "cucina.scheduler.name" . }} deploy/{{ include "cucina.controller.name" . }}
      helm test -n {{ .Release.Namespace }} {{ .Release.Name }}
 
-2. Trust Cucina's CA (public data) when the client endpoint uses the chart-generated certificate:
+2. Trust Cucina's CA when the client endpoint uses the chart-generated certificate.
+   Keep the environment's certificate outside the repository:
 
-     kubectl -n {{ .Release.Namespace }} get secret {{ include "cucina.caSecret" . }} -o jsonpath='{.data.ca\.crt}' | base64 -d > cucina-ca.pem
+     umask 077
+     mkdir -p -m 700 "$HOME/.config/cucina"
+     kubectl -n {{ .Release.Namespace }} get secret {{ include "cucina.caSecret" . }} -o jsonpath='{.data.ca\.crt}' | base64 -d > "$HOME/.config/cucina/cucina-ca.pem"
 {{- if .Values.auth.breakGlass.enabled }}
 
 3. Log in as the break-glass administrator (R-AUTH-12). The key goes from the Secret to cucinactl
    on stdin; do not store it in files or shell history:
 
      kubectl -n {{ .Release.Namespace }} get secret {{ include "cucina.breakGlassSecret" . }} -o jsonpath='{.data.key}' | base64 -d \
-       | cucinactl login {{ include "cucina.stsUrl" . }} --ca-file cucina-ca.pem --key -
+       | cucinactl login {{ include "cucina.stsUrl" . }} --ca-file "$HOME/.config/cucina/cucina-ca.pem" --key -
 
-   Once OIDC administrators exist (trustPolicies), disable the key: --set auth.breakGlass.enabled=false
-   (docs/operations/chart.md, Install step 4).
+   Once another administrator works, give canaries a replacement credential and explicitly revoke
+   the issued break-glass key (docs/operations/chart.md, Install step 4). Then set
+   auth.breakGlass.enabled=false to stop future bootstrap generation; the flag alone does not revoke keys.
 {{- end }}
 
 4. First steps:
