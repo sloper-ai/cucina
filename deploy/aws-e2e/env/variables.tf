@@ -87,14 +87,15 @@ variable "ubuntu_ami_ssm_parameter" {
 # --- sizing ------------------------------------------------------------------------------
 
 variable "k3s_instance_type" {
-  type    = string
-  default = "m8i.2xlarge"
+  description = "Instance type of the k3s node. Small functional-test default (ADR 0004); larger tests require an explicit operator request."
+  type        = string
+  default     = "m7i.large"
 }
 
 variable "client_instance_type" {
-  description = "Instance type of linux-client and windows-client."
+  description = "Instance type of linux-client and windows-client. Small functional-test default (ADR 0004); larger tests require an explicit operator request."
   type        = string
-  default     = "m7i.xlarge"
+  default     = "m7i.large"
 }
 
 variable "k3s_private_ip_host" {

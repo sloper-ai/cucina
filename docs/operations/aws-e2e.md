@@ -9,10 +9,16 @@ infrastructure: for EKS see the chart's R-CP-8 notes.
 | Layer | Creates | Costs while idle |
 | --- | --- | --- |
 | `base` | dual-stack VPC, public + private subnet in one AZ, IGW, egress-only IGW, S3 gateway endpoint, security groups, IAM (two controller policies, worker / k3s-node / client roles and instance profiles), ECR repositories, a Fast Launch prep launch template | about $0 (see Cost) |
-| `env` | k3s node (the only Elastic IP), `linux-client`, `windows-client` | about $1.29 per hour while up |
+| `env` | k3s node (the only Elastic IP), `linux-client`, `windows-client` | about $0.59 per hour while up (compute, EBS and public IPv4; see Cost) |
 
 Worker pools are **not** created by OpenTofu. `cucina-controller` launches them from chart values; the
 layers only create their prerequisites.
+
+**Small functional-test scope ([ADR 0004](../adr/0004-small-functional-test-resources.md)).** The k3s
+node and both clients default to `m7i.large` (2 vCPU, 8 GiB); campaign workers use `m7i.large` (x86_64)
+or `m7g.large` (arm64), at most one instance per pool and zero when idle. Larger benchmark instances
+require a new explicit operator request. These runs validate functionality, not the original multi-worker
+throughput NFRs; those performance comparisons remain **not run**, not passed on relaxed thresholds.
 
 ## Bring up
 
@@ -202,9 +208,9 @@ Fast Launch is enabled and is left in place at teardown (§12). It already exist
 
 * **k3s node and clients**: `shutdown -h +480` armed at boot (and re-armed at every boot by
   `cucina-guard.service`; Windows: a startup task running `shutdown.exe /s /t 28800`) with
-  `InstanceInitiatedShutdownBehavior=stop`: after 8 hours the instances stop, EBS keeps costing
-  about $0.13/h for everything. Extend a session with `sudo cucina-guard 240` (Linux) or
-  `C:\ProgramData\Cucina\guard.ps1 240` (Windows), or shorten with `guard_minutes`.
+  `InstanceInitiatedShutdownBehavior=stop`: after 8 hours the instances stop, but the default EBS
+  allocation and retained EIP still cost about $0.131/h (see Cost). Extend a session with
+  `sudo cucina-guard 240` (Linux) or `C:\ProgramData\Cucina\guard.ps1 240` (Windows), or shorten with `guard_minutes`.
 * **Workers**: dead-man switch (R-POOL-7, `InstanceInitiatedShutdownBehavior=terminate`).
 * Every resource carries `cucina:expires`; `sweep.sh` finds anything past it by tag, and the
   campaign ends with `down.sh`.
@@ -219,11 +225,36 @@ Standing cost with nothing running:
 | ECR (`cucina/*`, lifecycle keeps the last 10 images) | $0.10 per GB-month (cents) |
 | Public IPv4 / EIP, NAT gateway, interface endpoints | none exist in `base` |
 
-While `env` is up (hourly): k3s `m8i.2xlarge` $0.494 + its volumes (30 GiB root, 300 GiB gp3 at 6000 IOPS /
-500 MiB/s = $0.093) + EIP $0.005; `linux-client` `m7i.xlarge` $0.235 + 100 GiB $0.013 + public IPv4 $0.005;
-`windows-client` `m7i.xlarge` Windows $0.419 + 150 GiB $0.020 + public IPv4 $0.005. About **$1.29 per
-hour, $10.3 per 8-hour guard window**. Workers are priced by the controller (R-OBS-5); for scale, 4
-`c8i.8xlarge` Linux workers are $7.5 per hour.
+While all three `env` instances are up, using the small defaults (USD, On-Demand shared tenancy):
+
+| Node | Compute / h | EBS / h | Public IPv4 / h | Total / h |
+| --- | ---: | ---: | ---: | ---: |
+| k3s `m7i.large` Linux | $0.117600 | $0.092712 | $0.005000 (EIP) | $0.215312 |
+| `linux-client` `m7i.large` | $0.117600 | $0.013151 | $0.005000 | $0.135751 |
+| `windows-client` `m7i.large` Windows | $0.209600 | $0.019726 | $0.005000 | $0.234326 |
+| **Total** | **$0.444800** | **$0.125589** | **$0.015000** | **$0.585389** |
+
+Compute prices are from the [AWS us-west-1 price list](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-west-1/index.csv),
+retrieved 2026-10-02, effective 2026-09-01. Windows uses the standard `RunInstances:0002` rate, **not**
+the $0.1176/h “Windows without licenses” (`RunInstances:0002:box`) rate.
+
+The EBS estimate retains the existing storage settings and converts monthly prices using a **730-hour
+planning month**, not a billing guarantee:
+
+* Capacity: `(30 + 300 + 100 + 150) GiB × $0.096/GiB-month = $55.68/month`.
+* Extra performance on the k3s data volume (6000 IOPS, 500 MiB/s), above gp3's included 3000 IOPS and
+  125 MiB/s: `3000 × $0.006/IOPS-month + 375 × $0.048/(MiB/s)-month = $36.00/month`.
+* EBS total: `$91.68 / 730 = $0.125589/h`. Three public IPv4 addresses add `$0.015/h`.
+
+Total infrastructure estimate: **$0.585389/h (about $0.59), $4.68 per 8-hour guard window**. After the
+instances stop, EBS plus the retained EIP still cost `$0.130589/h`; destroy them to end those charges.
+These totals exclude workers, image builders, ECR, AMI/Fast Launch snapshots, chargeable data transfer
+and taxes. They are not a measured campaign bill.
+
+Workers are priced separately by the controller (R-OBS-5). Compute-only small-worker rates are
+`m7i.large` Linux **$0.1176/h**, `m7i.large` standard Windows **$0.2096/h**, and `m7g.large` Linux
+**$0.0952/h**; worker EBS and any public IPv4 fallback add to those rates. Functional pools stay bounded
+at one instance each.
 
 ## The tag sweep
 
@@ -253,8 +284,9 @@ Launch, then deregister the AMI, then delete its snapshots; `--delete-amis` does
 `tflint`, `tofu test` with `mock_provider` and `command = plan` for both layers, a stubbed-curl test of the
 kubelet ECR credential provider, `shellcheck`, and structural checks (no NAT gateway, exactly one EIP, no
 world-open ingress, tags on every resource, hygiene, SPDX headers, identical provider locks). What
-`tofu test` asserts: the three tags on every resource, no `0.0.0.0/0` / `::/0` ingress, no NAT route, IMDSv2
-on every instance, k3s hop limit 2 and the data volume sizing, the 8-hour guard, pinned SHA-256s, the worker
+`tofu test` asserts: the three tags on every resource, no `0.0.0.0/0` / `::/0` ingress, no NAT route,
+`m7i.large` defaults for the k3s node and both clients (ADR 0004), IMDSv2 on every instance, k3s hop limit 2
+and the data volume sizing, the 8-hour guard, pinned SHA-256s, the worker
 role has no `ec2:` action, the controller policies' tag conditions, `PassRole` scope and size limits, the Fast Launch prep
 template (instances and volumes only: tagging ENIs makes Fast Launch fail), k3s advertising its private
 address, non-overlapping pod / service CIDRs. The real apply / destroy is the integration test; there is no
@@ -277,6 +309,11 @@ Terratest.
 * **Spot**: not used in the campaign; it would need `AWSServiceRoleForEC2Spot`, which exists here.
 
 ## Measured on real instances (pre-flight, 2026-10-02)
+
+The bootstrap timings below came from the original, larger topology **before ADR 0004**; they are not
+measurements of the new `m7i.large` defaults. A separate small-topology preflight reported seven pods
+at a combined 157 MiB RSS in one sample. That is neither peak memory nor the full node footprint, and
+it does not establish benchmark capacity or a throughput-NFR pass for the 8 GiB nodes.
 
 Ubuntu 26.04.1 (kernel 7.0 AWS flavour) and the `windows-base` AMI, launched with the user data of the `env`
 layer, then terminated. The k3s node: SSM Online about 30 s after launch, bootstrap done about 45 s after boot

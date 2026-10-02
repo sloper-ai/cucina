@@ -40,10 +40,10 @@ variables {
 run "k3s_node" {
   command = plan
 
-  # §10.1: m8i.2xlarge, root 30 GiB, data volume ~300 GiB gp3 >= 6000 IOPS / >= 500 MiB/s, DeleteOnTermination.
+  # Guards: ADR 0004 — default to a two-vCPU m7i.large for functional tests; keep §10.1 storage unchanged.
   assert {
-    condition     = aws_instance.k3s.instance_type == "m8i.2xlarge" && aws_instance.k3s.root_block_device[0].volume_size == 30
-    error_message = "k3s node: m8i.2xlarge with a 30 GiB root volume"
+    condition     = aws_instance.k3s.instance_type == "m7i.large" && aws_instance.k3s.root_block_device[0].volume_size == 30
+    error_message = "k3s node: m7i.large with a 30 GiB root volume (small functional-test default, ADR 0004)"
   }
   assert {
     condition = alltrue([
@@ -166,10 +166,10 @@ run "private_ip_host_number_is_validated" {
 run "clients" {
   command = plan
 
-  # §10.1: m7i.xlarge Ubuntu 26.04 / Windows Server 2025 (from the windows-base AMI), SSM-managed, 8 h guard.
+  # Guards: ADR 0004 — both clients default to two-vCPU m7i.large; retain §10.1 AMIs, SSM and the 8 h guard.
   assert {
-    condition     = aws_instance.linux_client.instance_type == "m7i.xlarge" && aws_instance.windows_client[0].instance_type == "m7i.xlarge"
-    error_message = "clients: m7i.xlarge"
+    condition     = aws_instance.linux_client.instance_type == "m7i.large" && aws_instance.windows_client[0].instance_type == "m7i.large"
+    error_message = "both clients: m7i.large (small functional-test default, ADR 0004)"
   }
   assert {
     condition     = aws_instance.windows_client[0].ami == "ami-0123456789abcdef0"
