@@ -28,7 +28,8 @@ since() { perl -e 'printf "%.1f", $ARGV[1] - $ARGV[0]' "$1" "$2"; }
 
 tart get "$image" >/dev/null 2>&1 || die "image $image not found in $TART_HOME"
 vm="cucina-imgtest-$(openssl rand -hex 4)"
-logdir="${LOG_DIR:-${TMPDIR:-/tmp}}"
+logdir="${LOG_DIR:-${CUCINA_DEV_STORAGE:-$HOME/Library/Caches/cucina}/macimage/logs}"
+mkdir -p "$logdir"
 runlog="$logdir/$vm.run.log"
 run_pid=""
 
@@ -44,10 +45,13 @@ trap cleanup EXIT
 
 cores="$(sysctl -n hw.ncpu)"
 mem_gib=$(($(sysctl -n hw.memsize) / 1073741824))
-vcpus=$(((cores - 2) / SLOTS))
-mem_mb=$((((mem_gib - 8) / SLOTS) * 1024))
+vcpus=${VCPUS:-$(((cores - 2) / SLOTS))}
+mem_mb=${MEMORY_MIB:-$((((mem_gib - 8) / SLOTS) * 1024))}
+[ "$(tart list --format json | jq '[.[] | select(.Running)] | length')" -lt 2 ] || die "both VM slots are occupied"
 tart clone "$image" "$vm"
 tart set "$vm" --cpu "$vcpus" --memory "$mem_mb"
+# Tart rejects an equal-size resize; a clone already has the golden image's capacity.
+disk_gb="$(tart get "$image" --format json | jq -r .Disk)"
 echo "cloned $image -> $vm ($vcpus vCPUs, $((mem_mb / 1024)) GiB)"
 
 boot_json=""
@@ -65,8 +69,15 @@ for i in $(seq 1 "$BOOTS"); do
     sleep 0.25
   done
   t_agent="$(now)"
-  build_user="$(with_timeout 10 tart exec "$vm" /usr/bin/plutil -extract buildUser raw -o - /usr/local/cucina/image.json)"
-  until [ "$(with_timeout 10 tart exec "$vm" /usr/bin/stat -f %Su /dev/console 2>/dev/null)" = "$build_user" ]; do
+  # Use hostd's actual manifest operation (cat), not a cold guest CoreFoundation/plutil process with a 10s deadline.
+  # Guest startup/RPC reconnects can be transient; retry under the same overall readiness deadline.
+  until guest_facts="$(with_timeout 30 tart exec "$vm" /bin/cat /usr/local/cucina/image.json 2>/dev/null)" &&
+    build_user="$(printf '%s' "$guest_facts" | jq -er 'select(.schema == 1) | .buildUser | select(type == "string" and length > 0)' 2>/dev/null)"; do
+    [ "$(since "$t0" "$(now)" | cut -d. -f1)" -lt "$READY_TIMEOUT" ] || die "boot $i: image manifest not readable after ${READY_TIMEOUT}s"
+    kill -0 "$run_pid" 2>/dev/null || die "boot $i: tart run exited"
+    sleep 0.25
+  done
+  until [ "$(with_timeout 30 tart exec "$vm" /usr/bin/stat -f %Su /dev/console 2>/dev/null)" = "$build_user" ]; do
     [ "$(since "$t0" "$(now)" | cut -d. -f1)" -lt "$READY_TIMEOUT" ] || die "boot $i: $build_user not logged in after ${READY_TIMEOUT}s"
     sleep 0.25
   done
@@ -83,14 +94,13 @@ for i in $(seq 1 "$BOOTS"); do
     printf '%s\n' "$out" | sed 's/^/  smoke: /'
     smoke_json="$(printf '%s\n' "$out" | tail -n 1)"
     case "$smoke_json" in "{"*) ;; *) smoke_json="{\"passed\":0,\"failed\":1,\"failures\":\"no summary\"}" ;; esac
-    guest_facts="$(with_timeout 20 tart exec "$vm" /bin/cat /usr/local/cucina/image.json)"
     $smoke_ok || echo "SMOKE TEST FAILED" >&2
     render_ok=null
     if [ "$(printf '%s' "$guest_facts" | jq -r .workerAgent)" = present ]; then
       # The in-VM render call site with sample settings and a throwaway CA (this clone is deleted afterwards).
       ca="$(openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout /dev/null -subj /CN=imgtest-ca -days 1 2>/dev/null)"
       printf '%s\n' "$ca" | with_timeout 30 tart exec -i "$vm" /usr/bin/sudo -n -- /bin/sh -c 'cat > /etc/cucina/pki/ca.crt'
-      settings='{"pool":"imgtest","node":"imgtest/'"$vm"'","runners":[{"name":"xcode","platform":[{"name":"OSFamily","value":"macos"},{"name":"ISA","value":"arm-a64"},{"name":"xcode-version","value":"'"$(printf '%s' "$guest_facts" | jq -r .xcode.version)"'"}]},{"name":"generic","platform":[{"name":"OSFamily","value":"macos"},{"name":"ISA","value":"arm-a64"}]}],"schedulerEndpoint":"192.0.2.1:8983","storageEndpoint":"192.0.2.1:8981","serverName":"workers.cucina.example","buildDirectory":"native","l1Placement":"vm-disk","maximumMessageSizeBytes":"16777216","sizeClass":1}'
+      settings='{"pool":"imgtest","node":"imgtest/'"$vm"'","runners":[{"name":"xcode","platform":[{"name":"OSFamily","value":"macos"},{"name":"ISA","value":"arm-a64"},{"name":"xcode-version","value":"'"$(printf '%s' "$guest_facts" | jq -r .xcode.version)"'"}]},{"name":"generic","platform":[{"name":"OSFamily","value":"macos"},{"name":"ISA","value":"arm-a64"}]}],"schedulerEndpoint":"192.0.2.1:8983","storageEndpoint":"192.0.2.1:8981","serverName":"workers.cucina.example","buildDirectory":"native","l1Placement":"vm-disk","maximumMessageSizeBytes":"16777216","sizeClass":1,"instanceNamePrefixes":["main"]}'
       if printf '%s' "$settings" | with_timeout 60 tart exec -i "$vm" /usr/bin/sudo -n -- /usr/local/cucina/libexec/cucina-render >"$logdir/$vm.render.json" 2>&1 &&
         with_timeout 20 tart exec "$vm" /usr/bin/plutil -convert xml1 -o /dev/null /etc/cucina/bb/worker.json; then
         render_ok=true
@@ -107,7 +117,8 @@ for i in $(seq 1 "$BOOTS"); do
 done
 
 vmdir="$TART_HOME/vms/$image"
-disk_logical=$(stat -f %z "$vmdir/disk.img")
+disk_logical=$((disk_gb * 1000000000)) # Tart reports virtual capacity in decimal GB.
+disk_backing=$(stat -f %z "$vmdir/disk.img") # Container EOF is not necessarily its virtual capacity.
 disk_alloc=$(($(command du -k "$vmdir/disk.img" | awk '{print $1}') * 1024))
 p50_agent="$(printf '%s' "[$boot_json]" | jq '[.[].agent_s] | sort | .[(length - 1) / 2 | floor]')"
 max_agent="$(printf '%s' "[$boot_json]" | jq '[.[].agent_s] | max')"
@@ -117,11 +128,11 @@ max_session="$(printf '%s' "[$boot_json]" | jq '[.[].session_s] | max')"
 result="$(jq -n \
   --arg image "$image" --arg vm "$vm" --argjson vcpus "$vcpus" --argjson mem_mb "$mem_mb" \
   --argjson boots "[$boot_json]" --argjson smoke "$smoke_json" --argjson guest "$guest_facts" --argjson render "${render_ok:-null}" \
-  --argjson logical "$disk_logical" --argjson alloc "$disk_alloc" \
+  --argjson logical "$disk_logical" --argjson backing "$disk_backing" --argjson alloc "$disk_alloc" \
   --argjson p50a "$p50_agent" --argjson maxa "$max_agent" --argjson p50s "$p50_session" --argjson maxs "$max_session" \
   '{image: $image, testVm: $vm, vm: {vcpus: $vcpus, memoryMiB: $mem_mb},
     boots: $boots, bootToReady: {agentP50: $p50a, agentMax: $maxa, sessionP50: $p50s, sessionMax: $maxs},
-    disk: {logicalBytes: $logical, allocatedBytes: $alloc},
+    disk: {logicalBytes: $logical, backingFileBytes: $backing, allocatedBytes: $alloc},
     guest: $guest, smoke: $smoke, renderCallSite: $render}')"
 if [ -n "$report" ]; then
   mkdir -p "$(dirname "$report")"
@@ -129,4 +140,4 @@ if [ -n "$report" ]; then
   echo "report: $report"
 fi
 printf '%s\n' "$result" | jq -c '{image, bootToReady, disk, smoke: {passed: .smoke.passed, failed: .smoke.failed}}'
-[ "$(printf '%s' "$smoke_json" | jq -r .failed)" = "0" ]
+[ "$(printf '%s' "$smoke_json" | jq -r .failed)" = "0" ] && [ "${render_ok:-false}" = true ]

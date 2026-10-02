@@ -15,6 +15,10 @@ mdutil -a -i off >/dev/null
 
 # --- Software Update: images are rebuilt instead (R-VER-3); no background checks or downloads in a worker.
 softwareupdate --schedule off >/dev/null 2>&1 || true
+# On Golden Gate the running updater overwrites these preferences during boot. Immutable worker images use
+# image replacement for updates; disable its launchd job in the guest, then write the preferences.
+launchctl disable system/com.apple.softwareupdated
+launchctl bootout system/com.apple.softwareupdated >/dev/null 2>&1 || true
 for key in AutomaticCheckEnabled AutomaticDownload AutomaticallyInstallMacOSUpdates ConfigDataInstall CriticalUpdateInstall; do
   defaults write /Library/Preferences/com.apple.SoftwareUpdate "$key" -bool false
 done
@@ -34,6 +38,19 @@ defaults write /Library/Preferences/com.apple.mDNSResponder.plist NoMulticastAdv
 # No crash-reporter dialogs in a session nobody looks at.
 defaults write /Library/Preferences/com.apple.CrashReporter DialogType -string none
 
+# --- R-MAC-7: no Rosetta. Cirrus preinstalls it; remove only its guest payload and receipt, not OS frameworks.
+# The pinned base has SIP disabled. Refuse to claim success if a future base protects these files.
+if [ -e /Library/Apple/usr/libexec/oah/runtime ]; then
+  launchctl disable system/com.apple.oahd
+  launchctl bootout system/com.apple.oahd >/dev/null 2>&1 || true
+  rm -rf /Library/Apple/usr/libexec/oah /Library/Apple/usr/share/rosetta /Library/Apple/usr/lib/libRosettaAot.dylib /var/db/oah
+  pkgutil --forget com.apple.pkg.RosettaUpdateAuto >/dev/null
+  # Golden Gate keeps supplemental Apple receipts here. pkgutil reports success but leaves these two behind.
+  rm -f /Library/Apple/System/Library/Receipts/com.apple.pkg.RosettaUpdateAuto.bom \
+    /Library/Apple/System/Library/Receipts/com.apple.pkg.RosettaUpdateAuto.plist
+fi
+[ ! -e /Library/Apple/usr/libexec/oah/runtime ] || die "Rosetta runtime is still installed"
+
 # --- Tart Guest Agent: RPC (tart exec, tart ip --resolver=agent) in the root daemon, nothing in the GUI session.
 daemon_plist=/Library/LaunchDaemons/org.cirruslabs.tart-guest-daemon.plist
 agent_plist=/Library/LaunchAgents/org.cirruslabs.tart-guest-agent.plist
@@ -47,6 +64,7 @@ agent_bin="$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$daemon_pli
   -c 'Add :ProgramArguments:1 string --run-daemon' \
   -c 'Add :ProgramArguments:2 string --run-rpc' \
   "$daemon_plist"
+/usr/libexec/PlistBuddy -c 'Set :EnvironmentVariables:PATH /usr/local/cucina/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin' "$daemon_plist"
 plutil -lint "$daemon_plist" >/dev/null
 chown root:wheel "$daemon_plist"
 chmod 0644 "$daemon_plist"

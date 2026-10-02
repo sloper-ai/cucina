@@ -15,9 +15,9 @@ locals {
   base_image  = var.base_image != "" ? var.base_image : local.base_pinned
 
   image_version = "${var.xcode_version}-${var.cucina_version}"
-  vm_name       = "cucina-worker-macos:${local.image_version}"
+  vm_name       = var.vm_name_override != "" ? var.vm_name_override : "cucina-worker-macos:${local.image_version}"
 
-  stage       = "/private/tmp/cucina-stage"
+  stage       = "/private/var/tmp/cucina-stage" # survives the provisioning reboot; removed by finalize
   xcode_share = "cucina-xcode"
   # Provisioning scripts run as root; the Cirrus build account has passwordless sudo.
   sudo_exec = "chmod +x {{ .Path }}; sudo -n env {{ .Vars }} {{ .Path }}"
@@ -25,6 +25,7 @@ locals {
     "CUCINA_STAGE=${local.stage}",
     "BUILD_USER=${local.layout.builderUser}",
     "BUILD_UID=${local.layout.builderUid}",
+    "BUILD_ADMIN=${var.ssh_username}",
     "WORKER_USER=${local.layout.workerUser}",
     "DATA_VOLUME=${local.layout.dataVolume}",
     "IMAGE_VERSION=${local.image_version}",
@@ -75,6 +76,15 @@ build {
   provisioner "file" {
     source      = "${local.root}/scripts/smoke.sh"
     destination = "${local.stage}/files/cucina-smoke"
+  }
+
+  provisioner "file" {
+    sources = [
+      "${local.root}/../../LICENSE.md",
+      "${local.root}/../../THIRD_PARTY_NOTICES.md",
+      "${local.root}/../../macos/pkg/payload/cucina-kcpassword",
+    ]
+    destination = "${local.stage}/files/"
   }
 
   provisioner "file" {

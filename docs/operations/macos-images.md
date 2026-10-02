@@ -1,146 +1,167 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+# macOS worker images
 
-# macOS worker images (Tart)
+Build, version, test and retain Cucina's private Tart worker images (R-MAC-3/4/7, R-VER-1..3,
+R-OPS-2/-7, R-CACHE-2/-3, R-DATA-5). Source: [`workers/macos`](../../workers/macos/README.md).
+The authoritative guest contract is [hostd §1](../dev/hostd.md). Decisions: ADRs
+[0350](../adr/0350-macos-worker-image.md), [0351](../adr/0351-macos-build-directory.md),
+[0352](../adr/0352-xcode-source-for-worker-images.md), [0353](../adr/0353-macos-runner-concurrency.md).
 
-How the golden macOS VM images that Mac hosts run are built, versioned, tested, stored and published
-(R-MAC-3/4/7, R-VER-1..3, R-OPS-2/-7, R-DATA-5, R-CACHE-2/-3). Source: [`workers/macos`](../../workers/macos/README.md).
-The contract between the image and `cucina-hostd` is [docs/dev/hostd.md §1](../dev/hostd.md). Decisions:
-ADR [0350](../adr/0350-macos-worker-image.md) (image design), [0351](../adr/0351-macos-build-directory.md) (build
-directory), [0352](../adr/0352-xcode-source-for-worker-images.md) (where Xcode comes from),
-[0353](../adr/0353-macos-runner-concurrency.md) (runner concurrency).
+## Image identity and rollout
 
-## 1. What an image is
+The local image is `cucina-worker-macos:<xcode>-<cucina_version>`. Its tag is recorded in
+`/etc/cucina/image-version` and `/usr/local/cucina/image.json` (schema 1); future pushes add the same version as OCI
+labels. Changing a WorkerPool's image reference initiates a new rollout generation: hostd pre-pulls the image and
+re-clones each VM at its next idle stop. Ordinary scale-to-zero stops preserve the VM disk and L1.
 
-* A Tart VM built by Packer (`packer-plugin-tart` 1.21.0) from Cirrus Labs' `ghcr.io/cirruslabs/macos-<release>-xcode:<tag>`
-  (Golden Gate = macOS 27, Tahoe = 26), pinned by digest in `workers/macos/versions.json`.
-* Name and version: `cucina-worker-macos:<xcode>-<cucina_version>`, e.g. `cucina-worker-macos:27.0-0.1.0`. The tag is
-  the **image version**: it is written to `/etc/cucina/image-version` and `/usr/local/cucina/image.json` inside the guest
-  and to OCI labels (`ai.sloper.cucina.image-version`, `…xcode-version`, `…xcode-build`, `…buildbarn`) when pushed.
-* A pool's generation is its image reference (R-POOL-8, R-OPS-2): pointing a `WorkerPool` at a new tag starts a new
-  generation; hostd pre-pulls it and re-clones each VM at its next idle stop (VMs are persistent otherwise).
-* Contents (details in the workers/macos README): exactly one Xcode at `/Applications/Xcode.app`, Buildbarn
-  `bb_worker`/`bb_runner` (`20260930T173749Z-1a3be95`), optional `cucina-worker-agent`, launchd plists that hostd
-  bootstraps, the unprivileged auto-login build user `builder`, the case-sensitive data volume `/Volumes/cucina`,
-  Spotlight/Software Update/sleep/Screen Sharing off. No credentials.
+The default is macOS 27 (Golden Gate), Xcode 27.0 **27A266a**. The pinned base already contains that exact build at
+`/Applications/Xcode_27.app`; the build moves it to `/Applications/Xcode.app`. The image includes unmodified,
+SHA-256-verified Buildbarn worker/runner binaries, the darwin/arm64 worker agent, and both Cucina licence/notices files.
+Nothing Buildbarn-related starts before hostd injects configuration and credentials.
 
-### Fixed toolchain paths (R-XPLAT-8)
+### Fixed exec-side toolchain paths (R-XPLAT-8)
 
-| What | Path / value |
+| Item | Path / value |
 | --- | --- |
-| Xcode | `/Applications/Xcode.app` (real directory; the only Xcode; no Command Line Tools) |
-| `DEVELOPER_DIR` / `xcode-select -p` | `/Applications/Xcode.app/Contents/Developer` |
-| macOS SDK (`-isysroot`) | `/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk` (`MacOSX<ver>.sdk` links to it) |
-| Toolchain | `/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/{clang,ld,…}`; `/usr/bin/clang` forwards there |
-| `XCODE_VERSION_OVERRIDE` key | `<major>.<minor>.<patch>.<build>`, e.g. `27.0.0.27A266a` (`image.json` → `xcode.xcodeVersionOverride`), mapped to the developer dir by bb_runner's `appleXcodeDeveloperDirectories` |
+| Only Xcode | `/Applications/Xcode.app` (real directory; no other Xcode or Command Line Tools) |
+| `DEVELOPER_DIR`, `xcode-select -p` | `/Applications/Xcode.app/Contents/Developer` |
+| SDK used by `-isysroot` | `/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk` |
+| Toolchain binaries | `/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/` |
+| Xcode override key | `27.0.0.27A266a`, recorded in `image.json.xcode.xcodeVersionOverride` |
 
-## 2. Building an image
+`xcrun` may return the versioned `MacOSX27.0.sdk` path. Smoke checks require that it and the fixed alias resolve to the
+same SDK, rather than requiring identical spelling. Clients need not hold or upload the SDK.
 
-Prerequisites on the build Mac: macOS ≥ the guest's macOS, Tart 2.40.1, Packer 1.16.1 (the plugin is installed by
-`packer init`), `jq`, the base image already in `TART_HOME` (the Makefile refuses to let Packer pull ~70 GB
-implicitly: `tart pull <base>` first), and, if the Cirrus image ships a different Xcode build than the one pinned, that
-Xcode in `/Applications/Xcode.app` on the build Mac (§3).
+## Build and verify
+
+On Apple silicon, use a host OS **at least as new as the guest**, Tart 2.40.1, Packer 1.16.1, Go, Bazelisk, jq and
+shellcheck. Keep bulk files on the designated data volume and credentials on encrypted storage. The base must already
+be cached in `TART_HOME`; the Makefile checks before Packer clones it. Never launch a second pull while another owns
+Tart's download lock.
 
 ```sh
-source .work/env.sh                                    # TART_HOME etc. (dev Mac); or export TART_HOME yourself
-make -C workers/macos image-macos XCODE=27.0 CUCINA_VERSION=0.1.0
+export TART_HOME="$CUCINA_DEV_STORAGE/tart"
+make -C workers/macos validate
+make -C workers/macos image-macos XCODE=27.0 CUCINA_VERSION=0.1.0-dev
 ```
 
-`image-macos` = `build` → `smoke` → `report`:
-1. `fetch`: Buildbarn binaries downloaded and verified against the release `sha256` asset **and** the pins.
-2. `agent`: `go build ./cmd/cucina-worker-agent` for darwin/arm64 (or `WORKER_AGENT=<path>`).
-3. `packer build`: clone the base, grow the disk (`disk_size_gb`, recovery partition removed), then in the guest:
-   Xcode (keep or copy, §3), system settings, build user + auto-login, data volume, Cucina payload, one reboot (first
-   automatic login of `builder`), finalize (SSH passwords off, `admin` password rotated, staging removed), verify (the
-   in-guest smoke test must pass). Log: `$CUCINA_DEV_STORAGE/logs/macimage-packer-<xcode>-<stamp>.log`.
-4. `smoke` (`scripts/test-image.sh`): clone to a throwaway `cucina-imgtest-*` VM sized like hostd would, boot it 3×
-   with hostd's flags, time boot-to-ready, run `cucina-smoke` through `tart exec`, record sizes, **delete** the clone.
-   Report JSON: `$CUCINA_DEV_STORAGE/macimage/reports/`.
+The one-command pipeline is sequential, even with parallel make:
+1. Verify/download pinned worker/runner binaries; build `cucina-worker-agent` or use `WORKER_AGENT=<binary>`.
+2. Packer clones the digest-pinned Cirrus base, grows the disk, selects Xcode, prepares the standard build account,
+   disables background updates/indexing, creates case-sensitive APFS, installs the payload, reboots and runs the
+   in-guest smoke gate. Staging uses `/private/var/tmp`, which survives that reboot, and is removed afterwards.
+3. Clone a throwaway VM for three boots and `tart exec` smoke/render checks. Reports distinguish guest-agent and
+   GUI-session readiness, plus virtual capacity, backing-file length and allocated extents.
+4. Fetch checksum-pinned **host-only** bb_storage/bb_scheduler and run a tiny remote C++ compile/link/test with both
+   runner queues. No local fallback or action-cache acceptance is allowed. These servers are not baked into the image.
+5. Report sizes; all test clones are stopped and deleted. No publishing is part of this command.
 
-`FORCE=1` replaces an existing local image of the same tag. A Packer failure leaves no VM behind (the plugin deletes
-its VM on error); `make clean-test-vms` removes leftover test clones.
+Useful controls: `PKR_VAR_cpu_count`, `PKR_VAR_memory_gb` size the bake; `VCPUS`/`MEMORY_MIB` size smoke clones;
+`BOOTS` selects the number of timing samples. `SMOKE_BUILD_DIRECTORY` defaults to `nfsv4`.
+Normal test sizing is hostd's formula: `(cores-2)/2` vCPUs and `(RAM-8 GiB)/2` memory.
 
-## 3. Where Xcode comes from
+Logs are under `$CUCINA_DEV_STORAGE/logs`; boot reports under `$CUCINA_DEV_STORAGE/macimage/reports`; remote-build
+results under `$CUCINA_DEV_STORAGE/macimage/bench`. For explicit diagnostics, Packer accepts `-on-error=abort` with
+`-var vm_name_override=cucina-imgtest-<name>`; that leaves an owned diagnostic VM rather than silently cleaning it.
+Clean only the names you created: `make -C workers/macos clean-test-vms VMS='cucina-imgtest-<owned-name>'`.
+`FORCE=1` replaces an existing local golden image; prefer a new version for normal rollouts.
 
-Each image carries **exactly one** Xcode, matching the pool's `xcode-version` (R-MAC-7):
+## Xcode sources and new releases
 
-1. **A Cirrus `-xcode:<tag>` image** whose Xcode has the pinned build: nothing else to do. Cirrus publishes
-   `ghcr.io/cirruslabs/macos-golden-gate-xcode:<ver>` (and `macos-tahoe-xcode` for side-by-side 26.x pools) shortly after
-   Xcode releases; they may contain several Xcodes, simulator runtimes and CI tooling. The build removes every Xcode
-   but the pinned one.
-2. **Otherwise, an `Xcode.app` supplied by the operator** (ADR 0352): the build shares it read-only into the build VM
-   (`--dir`, build time only) and copies it to `/Applications/Xcode.app` with `ditto`. This is how the campaign image
-   gets the dev Mac's exact 27.0 (27A266a) build when Cirrus' image differs. To obtain a specific build:
-   * **Manual step (needs the user's Apple ID; never automated, never stored):** sign in at
-     <https://developer.apple.com/download/all/>, download `Xcode_<ver>.xip`, expand it (`xip --expand` or `unxip`),
-     move the result to `/Applications/Xcode.app` (or point `XCODE_APP=` at it), run it once or
-     `sudo xcodebuild -license accept`. Tools such as `xcodes` can download with an interactive Apple ID login; do not
-     put Apple ID credentials, session cookies or app-specific passwords into the repository, CI variables or images.
-   * Xcode's licence forbids redistribution outside the organization: images containing it go only to the **private**
-     GHCR package (§6).
+1. Prefer a Cirrus `ghcr.io/cirruslabs/macos-<release>-xcode:<tag>` containing the required build. Pin its digest and
+   exact Xcode build in `versions.json`; remove all other Xcodes during provisioning.
+2. Otherwise supply an expanded Xcode bundle with `XCODE_APP=<path>`. The optional Packer share is read-only and used
+   only to copy Xcode during the bake—not for build directories or CAS. The default campaign needs no share.
+3. **Manual acquisition:** the operator signs in to <https://developer.apple.com/download/all/> with their Apple ID,
+   downloads the requested `.xip` and expands it. Never store Apple ID passwords, cookies or app-specific passwords
+   in the repository, CI configuration or image. The build performs licence acceptance and first launch in the guest.
 
-## 4. A new Xcode, macOS or Cucina release (R-VER-3)
+A new Xcode is a `versions.json` entry plus `packer/xcode-<ver>.pkrvars.hcl`, then
+`make -C workers/macos image-macos XCODE=<ver> CUCINA_VERSION=<version>`. After validation and a separately authorized
+private release, update the pool's image reference/generation. Separate Xcode-keyed pools support side-by-side versions;
+Tahoe/macOS 26 and beta variants are not downloaded or tested by this campaign. Update hosts through MDM before rolling
+out a guest newer than their OS.
 
-1. New Xcode: add `xcode."<ver>"` to `versions.json` (build, base image + digest after `tart pull`) and
-   `packer/xcode-<ver>.pkrvars.hcl`; new macOS: a `macosReleases` entry (Cirrus release name).
-2. `make -C workers/macos image-macos XCODE=<ver> CUCINA_VERSION=<semver>` (build + smoke test).
-3. Publish (release workflow or `make push`, §6), then bump the pool: a new `WorkerPool` (new `xcode-version` pool, kept
-   side by side with the old one, R-VER-2) or a new image reference on the existing pool (generation bump, R-OPS-2).
-4. Hosts must run a macOS version **≥ the guest's** (Virtualization.framework cannot boot newer guests): update hosts
-   through MDM first (docs/macos/mac-mini-setup.md), then roll out the image.
+## Storage, concurrency and caching
 
-Beta Xcode/macOS images are built the same way with a distinct tag and used only by an opt-in pool (R-VER-2 SHOULD).
+* **Minimum virtual disk: 250 GB.** Tart's `--disk-size` uses decimal GB and cannot shrink an image. The current Tart
+  adapter passes its `diskGiB` value through to that CLI only when growth is needed; equal/smaller requests keep the
+  image's existing capacity. Set **250** to express the intended capacity clearly; a request for 120 does not shrink it.
+* `/Volumes/cucina` is root-owned, case-sensitive APFS with ownership enabled and Spotlight off. Native build/input
+  cache directories live there; persistent L1 and file pool are under `/var/db/cucina`, root 0700. L1 defaults to
+  **40 GiB** and is separate from the native cache that bb_worker clears at startup.
+* **NFSv4 is the measured choice** (ADR 0351). The image supports both modes; hostd/controller must resolve `auto`
+  accordingly or send `buildDirectory=nfsv4` explicitly.
+* Both Xcode and generic arm64 platforms offer vCPU slots on the same VM. CPU/memory oversubscription is possible
+  during mixed workloads; lower concurrency factors for memory-heavy pools (ADR 0353).
 
-## 5. Disk budget on hosts (R-DATA-5)
-
-| Item | Size (this campaign, measured) |
+| Budget item | Size / policy |
 | --- | --- |
-| Base image `macos-golden-gate-xcode:27` in the OCI cache | see the campaign report |
-| Worker image (local VM, sparse disk) | see the campaign report |
-| Per VM on top of the image (clone = copy-on-write) | L1 up to 40 GiB (default) + native build-dir input cache (≤ 16 GiB) + file pool high-water mark + build directories |
-| Host L2 cache (hostd) | 200 GiB default (R-CACHE-4) |
+| Downloaded Golden Gate base | Tart reports 140 GB virtual, approximately 81 GB allocated |
+| Golden worker | 250 GB virtual; exact backing-file/allocated sizes are in the generated boot report |
+| Each persistent VM's growth | 40 GiB L1 + up to 16 GiB native input cache + file-pool high-water mark + build outputs |
+| Host L2 | 200 GiB default (not part of the image) |
 
-* Tart clones are APFS copy-on-write: a VM costs only what it writes. On macOS 27 hosts hostd clones with
-  `tart clone --stacked` from a pulled OCI image (immutable base + writable overlay); images built locally (the
-  campaign) are cloned without `--stacked`.
-* Several images side by side (R-VER-2) share nothing at the file level, but **Tart's chunked disk layers** let a
-  host that already holds one version download only the changed chunks of the next one (same for the registry on
-  push). Keep image changes small and in one place (the Cucina payload) to keep deltas small.
-* Hostd keeps the cache inside a budget with `tart prune --space-budget=<n>GB` (R-MAC-5); budget at least
-  2 images + 2 VMs (≈ 2 x image + 2 x 70 GB) + L2 on a 1 TB Mac mini.
+APFS clones share extents until modified; `du`/per-file allocation can count shared blocks more than once. Backing-file
+EOF also need not equal virtual disk capacity. Budget several images, two VM working sets and host L2; keep meaningful
+free space on a 1 TB host rather than sizing from compressed download size alone.
 
-## 6. Publishing (private GHCR package, R-OPS-7)
+Tart's chunked OCI disk layers allow unchanged chunks to be reused across image versions. Supported macOS 27 hosts can
+use **stacked OCI clones** (immutable parent + writable overlay); locally built campaign images use ordinary clones.
+For sites, use a zot mirror with scheduled **sync** from private GHCR and idle-hour pre-pulls. Do not assume unverified
+pull-through support for Tart media types. Hostd's cache budget uses `tart prune --space-budget=<n>` (decimal GB; no
+`GB` suffix). No pruning or publishing was performed by this image task; downloaded bases are retained.
 
-* Package: `ghcr.io/sloper-ai/cucina-worker-macos` (**private**: Xcode may not be redistributed publicly).
-* `CUCINA_PUBLISH=1 TART_REGISTRY_USERNAME=… TART_REGISTRY_PASSWORD=… make -C workers/macos push XCODE=27.0` runs
-  `scripts/push.sh` (`tart push` with the version labels). Credentials come from the environment only (a token with
-  `write:packages`), never from files or the keychain.
-* Hosts pull with a **read-only** package credential that the controller holds and hands to hostd over its mTLS channel
-  at pull time (`TART_REGISTRY_*` environment variables for that `tart pull` only). It is never in images, profiles
-  or the pkg. Site mirrors (zot) sync from the same package.
-* GHCR storage and transfer are currently free for private packages; GitHub may change this with a month's notice.
-* **Nothing is published during the acceptance campaign**: the campaign uses the locally built image; `push.sh`
-  refuses to run without `CUCINA_PUBLISH=1`.
+## Private publishing (prepared, not executed)
 
-## 7. Security notes
+The only intended destination is the **private** `ghcr.io/sloper-ai/cucina-worker-macos` package because the image
+contains Xcode. Before a release, verify package visibility is private. `scripts/push.sh` wraps `tart push` with version
+labels and refuses without `CUCINA_PUBLISH=1`; publishing is a separate, explicitly authorized release operation.
+Credentials are passed via `TART_REGISTRY_USERNAME`/`TART_REGISTRY_PASSWORD`, never stored in the image or keychain.
 
-* Build time: the Cirrus base has `admin`/`admin` with passwordless sudo, SSH and Screen Sharing on. These defaults
-  are usable only while Packer builds the image, and only from the build Mac (Tart's shared NAT network). The build
-  turns SSH password logins off, disables Screen Sharing and replaces `admin`'s password with an unrecorded random
-  value; hostd needs no password (`tart exec` runs as root through the Tart Guest Agent daemon).
-* Actions run as the standard user `builder` (R-SEC-5); bb_worker runs as root (`image.json` `workerUser`), so the
-  worker key hostd pushes at each start (`/etc/cucina/pki`, 0700 root), the L1 and the file pool are out of the
-  actions' reach. A VM is still shared by the actions of one pool over its lifetime (persistent VMs, ≤ 7 days), so a
-  pool remains the trust boundary ("one pool per trust level").
-* Rosetta is present in the Cirrus base (SIP-protected, cannot be removed); no x86_64 runner is advertised and macOS
-  x86_64 is out of scope.
+Hosts and site mirrors use a separate **read-only** package credential delivered by the controller to hostd over mTLS
+at pull time. The credential-flow decision belongs to hostd's ADRs. GHCR storage/transfer are currently free, including
+private packages, but GitHub may change that with notice. Nothing was published during this campaign.
 
-## 8. Troubleshooting
+## Local validation evidence
 
-| Symptom | Check |
-| --- | --- |
-| `tart exec` never answers | `tart run` log; the guest agent daemon: `launchctl print system/org.cirruslabs.tart-guest-daemon` (via VNC/recovery) |
-| `builder` not logged in after boot | `defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser`; `/etc/kcpassword` present; FileVault must be off in the guest |
-| `/Volumes/cucina` missing | `diskutil apfs list`; the volume is in the boot container and mounts at boot |
-| `xcodebuild` asks for the licence | image built without `xcodebuild -license accept`; rebuild (the verify step checks it) |
-| Wrong Xcode build in a pool | `tart exec <vm> cat /usr/local/cucina/image.json`; the pool's `xcode-version` must equal `xcode.version` |
-| Smoke test details | `tart exec <vm> sudo -n -- /usr/local/cucina/libexec/cucina-smoke` |
+The final local image is **`cucina-worker-macos:27.0-0.1.0-dev`** (macOS 27.0/26A428, Xcode 27.0/27A266a).
+A pristine Packer build passed in **3m44s**. Its guest smoke passed **52 checks**, and the host-side render call site
+and tiny NFSv4 remote C++ build/test passed, including both runner property sets as an unprivileged user.
+
+At **7 vCPUs / 20 GiB**, the final three starts measured:
+
+| Phase | Samples | Median / maximum |
+| --- | --- | --- |
+| Guest Agent (`tart exec true`) | 18.3, 16.5, 25.5 s | 18.3 / 25.5 s |
+| Builder GUI ready | 18.9, 17.8, 27.4 s | 18.9 / 27.4 s |
+
+An earlier completed three-boot series included an **88.1 s GUI-ready outlier**; do not treat the final series as a
+worst-case guarantee. These are boot subphase measurements, **not** the full Execute-at-zero → first-action NFR-P1;
+controller-driven T13, WAN/cache behavior and post-shutdown L1 hit ratios remain campaign checks.
+
+Virtual capacity is **250,000,000,000 bytes**; backing-file length **92,125,028,352 bytes**; allocated file extents
+**87,929,040,896 bytes**. After cleanup, `du` reported **158 GiB** under TART_HOME (76 GiB retained base cache,
+82 GiB golden VM, subject to shared-extent double counting). All `cucina-imgtest-*` VMs created by this task were deleted.
+The source/base image and stopped golden remain; nothing was published. ADR 0351 contains the full native/NFSv4 data.
+
+## Security and troubleshooting
+
+* Cirrus' known admin credentials exist during the bake. Shared vmnet NAT is not an isolation boundary between VMs:
+  build only alongside trusted guests, with no external port forwarding. Finalization disables SSH password and
+  keyboard-interactive authentication, disables Screen Sharing and rotates the admin password.
+* Actions run as standard `builder`, not root. Root owns the worker's PKI/state and log directory; each daemon owns its
+  own log. Hostd must preserve those permissions. Use one pool per trust level.
+* No controller identity, registry token or worker key is baked in. Local auto-login uses macOS's reversible
+  `/etc/kcpassword` representation, root 0600. Its login keychain is prepared with the same password.
+* Golden Gate's `sysadminctl` can return success while failing to update that file (`SACSetAutoLoginPassword error:22`)
+  in SSH/system context. The image invokes it in the existing base administrator GUI bootstrap and verifies the stored
+  password prefix using the pkg's shared codec. Smoke tests actual GUI and noninteractive keychain behavior.
+* The pinned Cirrus base has SIP disabled. The build does not change host SIP; it removes inherited Rosetta payload,
+  cache and the supplemental Apple receipts that `pkgutil --forget` leaves behind. No x86_64 runner is offered.
+
+For a failed VM, inspect `tart run` output, `image.json`, `xcode-select -p`, `diskutil apfs list`, and the Guest Agent
+job `system/org.cirruslabs.tart-guest-daemon`. Before hostd injection run
+`tart exec <vm> sudo -n -- /usr/local/cucina/libexec/cucina-smoke`; afterwards pass `--configured` to expect running
+Buildbarn jobs. A console owner alone is insufficient evidence of a usable session—the smoke also checks the login
+keychain without an interactive prompt.

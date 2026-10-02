@@ -17,16 +17,16 @@ Keep (b): each runner offers `vCPUs` slots; both share the VM's CPUs.
 * In practice a VM sees one kind of work at a time: a hermetic macOS-target build sends compile, link and test actions
   to `generic` (R-XPLAT-1 default placement); an Xcode/rules_apple build sends almost everything to `xcode`. A split (a)
   would leave half of every VM idle in both common cases; (c) doubles VMs for the same hardware and Apple's 2-VM cap.
-* When both kinds overlap, the VM runs up to 2 x vCPUs actions: the macOS scheduler time-slices them (throughput stays
-  about the same, per-action latency rises), and the autoscaler sizes VM count from the **sum** of demand over vCPUs
+* When both kinds overlap, the VM may run up to 2 x vCPUs actions: the macOS scheduler time-slices them, so per-action
+  latency can rise and memory pressure can reduce throughput. The autoscaler sizes VM count from the **sum** of demand over vCPUs
   (`docs/contracts.md` §3: `ceil(sum_r D_r / N)`), so sustained overlap adds VMs rather than queueing behind
   oversubscription, up to the pool's `max` and the host slots.
 * Memory headroom: a VM gets (host RAM - 8 GB) / slots (20 GB on a 48 GB host with 2 slots, 28 GB on the recommended
-  64 GB Mac mini); 2 x vCPUs typical clang/swiftc actions fit. Pools with memory-heavy actions lower one runner's
-  factor in `platforms.extra` (Helm) without an image change.
+  64 GB Mac mini). This is not a guarantee that arbitrary mixed actions fit: memory-heavy pools must lower one or
+  both concurrency factors in `platforms.extra` (Helm), without an image change.
 
 ## Consequences
-* Worst-case per-action latency doubles while both runners are saturated; acceptable for build actions, documented
-  in the operations guide.
+* There is no fixed worst-case latency bound under oversubscription. The measured image checks each runner
+  separately, not simultaneous maximum-size Xcode and generic workloads; operators must size for their workload.
 * The concurrency is rendered from `WorkerSettings.runners[].concurrency` (0 = vCPUs), so the policy lives in
   `platforms/pools.json` and the image needs no change to alter it.

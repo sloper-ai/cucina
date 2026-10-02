@@ -1,66 +1,66 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+# macOS worker image
 
-# macOS worker image (`workers/macos`)
-
-Packer + [`packer-plugin-tart`](https://github.com/cirruslabs/packer-plugin-tart) (pinned `= 1.21.0`) template that turns
-Cirrus Labs' `ghcr.io/cirruslabs/macos-<release>-xcode:<tag>` into the Cucina worker image
-`cucina-worker-macos:<xcode>-<cucina_version>` (R-MAC-7). Hosts run it with `cucina-hostd`, which configures every VM
-at every start through the Tart Guest Agent; the in-VM contract is [docs/dev/hostd.md §1](../../docs/dev/hostd.md).
-Operations (versions, Xcode sources, disk budget, publishing): [docs/operations/macos-images.md](../../docs/operations/macos-images.md).
+Packer + `packer-plugin-tart` **1.21.0** turn a digest-pinned Cirrus macOS/Xcode image into
+`cucina-worker-macos:<xcode>-<cucina_version>` in `TART_HOME`. Nothing is published by the build.
+The guest contract is [hostd §1](../../docs/dev/hostd.md); the [operations guide](../../docs/operations/macos-images.md)
+covers versions, disk budgets, credentials and private GHCR publishing.
 
 ```sh
-make -C workers/macos image-macos XCODE=27.0   # build -> smoke test (throwaway clone) -> report
-make -C workers/macos validate                 # packer init/fmt/validate + shellcheck, no VM
-make -C workers/macos clean-test-vms           # delete leftover cucina-imgtest-* VMs
+make -C workers/macos image-macos XCODE=27.0   # build -> smoke/three boots -> report
+make -C workers/macos validate               # Packer fmt/validate + shellcheck
+# Delete only explicitly named clones you created; never a fleet-wide prefix sweep:
+make -C workers/macos clean-test-vms VMS='cucina-imgtest-<owned-name>'
 ```
 
 | Path | Purpose |
 | --- | --- |
-| `versions.json` | Pins: plugin, base image per Xcode (+ digest), Xcode build, Buildbarn release + SHA-256, layout. |
-| `packer/` | `plugins.pkr.hcl`, `variables.pkr.hcl`, `macos.pkr.hcl`, one `xcode-<ver>.pkrvars.hcl` per Xcode. |
-| `provision/` | Guest scripts (root, in order): inspect, Xcode, system, build user, data volume, Cucina payload, finalize, verify. |
-| `files/` | launchd plists, newsyslog and sshd drop-ins, the in-VM render call site. |
-| `scripts/` | Host side: `fetch-buildbarn.sh`, `test-image.sh` (boot-to-ready + smoke), `smoke.sh` (in-guest, installed as `cucina-smoke`), `push.sh` (private GHCR, guarded). |
-| `bench/` | R-CACHE-3 measurement harness (NFSv4 vs native build directory in a Tart guest), see ADR 0351. |
+| `versions.json` | Base digest, Xcode build, Buildbarn release/checksums and account layout. |
+| `packer/` | Plugin/source template, variables and per-Xcode vars files. |
+| `provision/` | Guest provisioning: Xcode, system settings, standard build user, APFS, payload, reboot, finalization and smoke. |
+| `files/` | launchd, SSH and newsyslog configuration; `cucina-render`. |
+| `scripts/` | Verified downloads, in-guest smoke, host-side boot/render checks and guarded private publishing. |
+| `bench/` | Real remote C++ build/test comparison of native and NFSv4 build directories (ADR 0351). |
 
-## What the image contains
+## Payload and contract
 
-* **Exactly one Xcode** at `/Applications/Xcode.app` (a real directory), selected with `xcode-select`, licence accepted,
-  first launch done; no other Xcode bundle and no Command Line Tools. Fixed paths for the exec-side SDK (R-XPLAT-8):
-  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`,
-  `SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`
-  (`MacOSX<ver>.sdk` is a symlink to it), `/usr/bin/clang` resolves through `xcode-select` to Xcode's toolchain.
-  `image.json` records `xcode.xcodeVersionOverride` (e.g. `27.0.0.27A266a`), the key of bb_runner's
-  `appleXcodeDeveloperDirectories` for Bazel's `XCODE_VERSION_OVERRIDE`.
-* **Buildbarn** `bb_worker`/`bb_runner` (bb-remote-execution `20260930T173749Z-1a3be95`, darwin/arm64, SHA-256 checked
-  against the release's `sha256` asset and `versions.json`, again inside the guest) in `/usr/local/cucina/bin`, plus
-  `cucina-worker-agent` when built (`/usr/local/cucina/libexec/cucina-render` is the in-VM render call site).
-* **launchd**: `/usr/local/cucina/launchd/ai.sloper.cucina.bb-worker.plist` (system domain = LaunchDaemon, runs as
-  root: `image.json` `workerUser: "root"`) and `ai.sloper.cucina.bb-runner.plist` (LaunchAgent, `gui/<uid>` of the
-  build user, `LimitLoadToSessionType=Aqua`); both
-  `ProcessType=Interactive`, `KeepAlive`. They are *not* in `/Library/Launch*`: nothing Buildbarn-related runs until
-  hostd has pushed configs and credentials and bootstraps them (hostd §1.2). They share bb_runner's UNIX socket
-  `/var/run/cucina/runner.sock`.
-* **Build user** `builder` (uid 600): a standard account (no sudo, not admin; `_developer` group) that is logged in
-  automatically, so bb_runner and every action run unprivileged in a GUI session (R-MAC-4, R-SEC-5), while bb_worker
-  (root) keeps the worker key, the L1 and the file pool out of the actions' reach and can mount NFSv4. The Tart Guest
-  Agent's RPC (`tart exec`) runs in its root LaunchDaemon (`--run-daemon --run-rpc`): answers before the GUI login and
-  gives hostd root through `sudo -n` without any sudoers entry (hostd §1.1 option B).
-* **Case-sensitive APFS volume** `cucina` at `/Volumes/cucina` (`build/`, `tmp/` for the build user; `cache/`,
-  `state/` for bb_worker; owners enabled, no Spotlight, no FSEvents journal) in the boot container, so it grows with
-  the disk. The persistent L1 (40 GiB default, rendered by hostd; suggested under `state/`) lives on the VM disk and
-  survives VM shutdown (R-CACHE-2).
-* **Headless settings**: Spotlight off on all volumes, no Software Update checks/downloads, no sleep or screensaver,
-  Screen Sharing disabled, no Bonjour advertisements, SSH without passwords; the Cirrus `admin` password is rotated
-  to an unrecorded random value at the end of the build.
-* **Version label**: `/usr/local/cucina/image.json` (schema 1, hostd reads it) and `/etc/cucina/image-version`
-  (`<xcode>-<cucina_version>` = the OCI tag = the pool generation's image version); `push.sh` adds the same as OCI labels.
+* **Xcode 27.0 (27A266a)** is already in the pinned Golden Gate base. The build moves the matching bundle to
+  `/Applications/Xcode.app`, removes other Xcodes and Command Line Tools, accepts the licence and completes first launch.
+  A caller-supplied `XCODE_APP` is the fallback for a base without the pinned build (ADR 0352).
+* Fixed exec-side paths (R-XPLAT-8):
+  * developer directory: `/Applications/Xcode.app/Contents/Developer`;
+  * SDK: `/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`;
+  * the generic SDK alias and `xcrun`'s versioned path must resolve to the same directory. Their spelling may differ.
+  `image.json` also records `xcodeVersionOverride`, e.g. `27.0.0.27A266a`, for bb_runner's Xcode mapping.
+* **Buildbarn** `bb_worker` and `bb_runner` are the unmodified darwin/arm64 release
+  `20260930T173749Z-1a3be95`, checked against both the release `sha256` asset and the repository pins, then checked
+  again in the guest. `cucina-worker-agent` is required and SHA-256 checked. All three live in `/usr/local/cucina/bin`.
+  `LICENSE.md` and `THIRD_PARTY_NOTICES.md` are installed in `/usr/local/cucina`.
+* **Accounts and launchd** (ADR 0350): `builder` (UID 600) is a standard, non-admin account with no sudo, auto-login
+  and a usable login keychain. bb_runner runs in `gui/600`; bb_worker runs as root (`workerUser` in the manifest).
+  Root owns `/var/log/cucina` (0755); worker/runner logs are owned by their respective users (0644), including rotation.
+  The plists live in `/usr/local/cucina/launchd`, **not** `/Library/Launch*`: hostd bootstraps them only after injection.
+  Labels are `ai.sloper.cucina.bb-worker` and `ai.sloper.cucina.bb-runner`; the socket is `/var/run/cucina/runner.sock`.
+* **Storage:** case-sensitive APFS `cucina` at `/Volumes/cucina` (root-owned), with build directories and the native
+  input cache. Persistent **40 GiB L1** and file pool live under `/var/db/cucina` (root 0700), never inside the native
+  input cache that bb_worker wipes at startup. The virtual disk is **250 GB**; hosts must not request a smaller clone.
+* **Boot:** the Tart Guest Agent RPC runs in its root daemon (`--run-daemon --run-rpc`), independent of GUI login.
+  Spotlight and guest Software Update are disabled; no sleep, Screen Sharing or SSH password authentication.
+  Inherited Rosetta payload and supplemental receipts are removed. The Cirrus admin password is rotated after setup.
+* **Version:** `/usr/local/cucina/image.json` (schema 1) and `/etc/cucina/image-version` record the image tag.
+  A new image reference causes a pool generation rollout; pushing adds OCI version labels (not exercised here).
 
-Nothing secret is baked in: `/etc/cucina/pki` is empty in the image.
+No Cucina identity, registry token or controller credential is baked in (`/etc/cucina/pki` is empty). Auto-login
+necessarily retains the local account credential in macOS's reversible `/etc/kcpassword` format, root 0600.
+The shared pkg codec is used **at build time only** to verify the supported GUI-context `sysadminctl` operation.
 
 ## Runners and concurrency
 
-One bb_worker per VM advertises two runner platforms (R-MAC-7, R-XPLAT-3):
-`xcode` = `{OSFamily: macos, ISA: arm-a64, xcode-version: <ver>}` and `generic` = `{OSFamily: macos, ISA: arm-a64}`
-(hermetic-llvm builds and cross-built tests). Each offers **vCPUs slots** and both share the VM's CPUs
-(`platforms/pools.json` default); ADR 0353 explains why this oversubscription-on-mix policy is kept.
+One bb_worker advertises two platforms: `xcode` = `{OSFamily: macos, ISA: arm-a64, xcode-version: <ver>}` and
+`generic` = `{OSFamily: macos, ISA: arm-a64}`. Each offers **vCPU slots**, sharing the same CPUs and runner process
+(ADR 0353; unchanged `platforms/pools.json` policy). Mixed workloads can oversubscribe CPUs/memory; lower factors for
+memory-heavy pools. The image supplies layout and tools, not runtime endpoint/credential configurations.
+
+`cucina-render` accepts WorkerSettings protojson on stdin, derives the current machine document, reads the injected
+CA bundle and calls `cucina-worker-agent render --settings FILE --machine FILE --out DIR`. It creates the returned
+plan's directories and writes `worker.json`, `runner.json`, and `env`; hostd normally performs rendering on the host.

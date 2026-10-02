@@ -15,7 +15,7 @@ set -euo pipefail
 : "${XCODE_VERSION:?XCODE_VERSION is required (e.g. 27.0)}"
 : "${XCODE_BUILD:?XCODE_BUILD is required (e.g. 27A266a)}"
 XCODE_SRC="${XCODE_SRC:-}"
-FACTS_DIR="${CUCINA_STAGE:-/private/tmp/cucina-stage}/facts"
+FACTS_DIR="${CUCINA_STAGE:-/private/var/tmp/cucina-stage}/facts"
 TARGET=/Applications/Xcode.app
 DEVELOPER_DIR_FIXED="$TARGET/Contents/Developer"
 SDK_FIXED="$DEVELOPER_DIR_FIXED/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
@@ -94,7 +94,10 @@ got_version="$(printf '%s\n' "$ver_out" | awk '/^Xcode/ {print $2}')"
 case "$got_version" in "$XCODE_VERSION" | "$XCODE_VERSION".*) ;; *) die "xcodebuild reports $got_version, want $XCODE_VERSION" ;; esac
 [ "$(xcode-select -p)" = "$DEVELOPER_DIR_FIXED" ] || die "xcode-select points at $(xcode-select -p)"
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
-[ "$sdk" = "$SDK_FIXED" ] || die "SDK path is $sdk, want $SDK_FIXED"
+# Apple ships both symlink layouts: MacOSX.sdk -> MacOSX<version>.sdk and the reverse.
+# R-XPLAT-8 requires the fixed alias to resolve to the selected SDK, not identical spelling from xcrun.
+[ -d "$SDK_FIXED" ] && [ "$(cd "$sdk" && pwd -P)" = "$(cd "$SDK_FIXED" && pwd -P)" ] ||
+  die "selected SDK $sdk does not resolve to the fixed SDK $SDK_FIXED"
 sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
 clang_version="$(xcrun clang --version | head -n 1)"
 remaining=$(find /Applications -maxdepth 1 -name 'Xcode*.app' | wc -l | tr -d ' ')

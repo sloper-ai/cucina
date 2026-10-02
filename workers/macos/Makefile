@@ -38,7 +38,8 @@ BB_DIR := $(WORK)/buildbarn/$(BB_RELEASE)
 WORKER_AGENT ?= $(WORK)/bin/cucina-worker-agent
 # The local Xcode.app (symlinks resolved) when its build is the one versions.json wants; shared read-only into the
 # build VM and copied only if the base image's Xcode differs (docs/adr/0352-*).
-XCODE_APP ?= $(shell app="$$(cd /Applications/Xcode.app 2>/dev/null && pwd -P)"; [ -n "$$app" ] && \
+XCODE_APP ?= $(shell [ "$$(jq -r --arg x '$(XCODE)' '.xcode[$$x].source' $(VERSIONS))" != cirrus ] && \
+  app="$$(cd /Applications/Xcode.app 2>/dev/null && pwd -P)" && [ -n "$$app" ] && \
   [ "$$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$$app/Contents/version.plist" 2>/dev/null)" = "$(XCODE_BUILD)" ] && echo "$$app")
 STAMP := $(shell date -u +%Y%m%dT%H%M%SZ)
 LOG ?= $(DEV_STORAGE)/logs/macimage-packer-$(XCODE)-$(STAMP).log
@@ -54,7 +55,17 @@ PACKER_VARS = -var-file=$(HERE)/packer/xcode-$(XCODE).pkrvars.hcl \
 help:
 	@sed -n '3,15p' $(HERE)/Makefile | sed 's/^# \{0,1\}//'
 
-image-macos: build smoke report
+image-macos: build
+	@$(MAKE) --no-print-directory -C $(HERE) smoke REPORT='$(REPORT)'
+	@$(MAKE) --no-print-directory -C $(HERE) remote-smoke
+	@$(MAKE) --no-print-directory -C $(HERE) report
+
+.PHONY: remote-smoke
+SMOKE_BUILD_DIRECTORY ?= nfsv4
+remote-smoke:
+	@CUCINA_DEV_STORAGE='$(DEV_STORAGE)' $(HERE)/scripts/fetch-buildbarn.sh '$(DEV_STORAGE)/bb-release' --smoke-servers
+	@CUCINA_DEV_STORAGE='$(DEV_STORAGE)' RUNS=1 UNITS=2 HEADERS=16 \
+	  $(HERE)/bench/bench-build-dir.sh '$(IMAGE)' '$(SMOKE_BUILD_DIRECTORY)'
 
 check-xcode:
 	@[ -n "$(XCODE_BUILD)" ] || { echo "Xcode $(XCODE) has no entry in versions.json" >&2; exit 1; }
@@ -69,10 +80,10 @@ agent:
 	elif compgen -G "$(ROOT)/cmd/cucina-worker-agent/*.go" >/dev/null; then \
 	  mkdir -p $(WORK)/bin; \
 	  cd $(ROOT) && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags '-X main.version=$(CUCINA_VERSION)' \
-	    -o $(WORKER_AGENT) ./cmd/cucina-worker-agent; \
+	    -o $(WORKER_AGENT) ./cmd/cucina-worker-agent || exit $$?; \
 	  echo "built $(WORKER_AGENT)"; \
 	else \
-	  rm -f $(WORKER_AGENT); echo "WARNING: cmd/cucina-worker-agent is not in the tree yet; the image will lack the in-VM render call site"; \
+	  echo "cmd/cucina-worker-agent is required; set WORKER_AGENT to a built darwin/arm64 binary" >&2; exit 1; \
 	fi
 
 init:
@@ -113,5 +124,16 @@ report:
 push:
 	@$(HERE)/scripts/push.sh '$(IMAGE)'
 
+# Cleanup is explicit: never enumerate/delete another run's throwaway VMs merely by prefix.
+export VMS
 clean-test-vms:
-	@tart list --source local --quiet | grep '^cucina-imgtest-' | while read -r vm; do tart stop "$$vm" --timeout 10 >/dev/null 2>&1 || true; tart delete "$$vm" && echo "deleted $$vm"; done || true
+	@set -eu; [ -n "$${VMS:-}" ] || { echo 'Set VMS to the exact cucina-imgtest-* names you created' >&2; exit 2; }; \
+	for vm in $$VMS; do \
+	  [[ "$$vm" =~ ^cucina-imgtest-[A-Za-z0-9_-]+$$ ]] || { echo "refusing non-test VM $$vm" >&2; exit 2; }; \
+	done; \
+	for vm in $$VMS; do \
+	  if tart list --source local --format json | jq -e --arg n "$$vm" 'any(.[]; .Name == $$n and .Running)' >/dev/null; then \
+	    tart stop "$$vm" --timeout 30; \
+	  fi; \
+	  tart delete "$$vm"; echo "deleted $$vm"; \
+	done

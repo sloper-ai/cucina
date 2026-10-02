@@ -20,7 +20,12 @@ hardened variant (B), and installs the Buildbarn launchd jobs itself at every st
   auto-login user and the `buildUser` of `image.json`; the Guest Agent RPC moves into the root LaunchDaemon
   (`tart-guest-agent --run-daemon --run-rpc`) and the per-user agent is removed, so `tart exec` runs as root (hostd's
   `sudo -n` needs no sudoers entry) and answers before the GUI login. `builder`'s password is random, generated in the
-  guest and never printed; it exists only for `/etc/kcpassword` (auto-login).
+  guest and never printed; it exists only for local login and the root-0600 `/etc/kcpassword` representation.
+  Golden Gate's `sysadminctl` exits zero while reporting `SACSetAutoLoginPassword error:22` in system/SSH bootstrap
+  context. A real A/B check showed `launchctl asuser 0` leaving the stale base credential while `asuser 501` (the
+  active base administrator GUI) updated it. Provisioning uses that GUI context and verifies the encoded password
+  plus NUL against the pkg's shared codec, ignoring padding (ADR 0755). It precreates the builder's login keychain
+  with the same password; smoke tests noninteractive add/delete, not just console ownership or process names.
 * **bb_worker runs as root** (`image.json` `workerUser: "root"`, which hostd's contract supports; the plist has no
   `UserName`), bb_runner and therefore every action as `builder`. Root keeps the worker key, the L1 blocks, the file
   pool and bb_worker itself (signals, debugger attach) out of the actions' reach, and macOS only lets root mount the
@@ -42,8 +47,17 @@ hardened variant (B), and installs the Buildbarn launchd jobs itself at every st
   no Bonjour advertisements; no Cucina daemon runs in the guest besides the two Buildbarn jobs (hostd enforces the
   dead-man switch from outside, hostd §1.6). One reboot during the build performs `builder`'s first login so a VM's
   first start from the image is an ordinary boot.
-* **Rosetta** ships in the Cirrus base under SIP-protected paths and cannot be removed without disabling SIP; no x86_64
-  runner is advertised (macOS x86_64 is out of scope), so nothing routes x86_64 work to these VMs.
+* **Rosetta** is inherited from the Cirrus base, whose SIP is already disabled (verified in the guest). Provisioning
+  disables `com.apple.oahd`, removes only Rosetta's installed payload/cache and receipt, and smoke requires its runtime
+  and receipt to be absent. macOS x86_64 is not advertised. This does not change SIP on the development Mac.
+* **Guest logs**: `/var/log/cucina` is root:wheel 0755; the worker log belongs to `workerUser`, the runner log to the
+  build user (both 0644), including after newsyslog rotation. Red-first image smoke reproduced the old builder-owned
+  directory vulnerability: an action could replace the root worker's log path. The strengthened smoke checks actual
+  permissions as `builder`, rejects passwordless sudo, and verifies protected service/config/state directories.
+* **Boot ordering**: staging is `/private/var/tmp/cucina-stage`, not `/private/tmp` (the latter was cleared during the
+  provisioning reboot). Finalization waits for the build user's GUI session before closing build-time access.
+  Golden Gate deletes legacy Software Update preferences at boot; disable/unload the guest's update daemon, and
+  smoke-test that enforced state rather than assuming a persistent preference value.
 
 ## Consequences
 * Two users share the native build directory; hostd writes the PKI files owned by `workerUser` (root) and creates

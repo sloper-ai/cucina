@@ -47,6 +47,7 @@ else
   "pkiDir": "$pki",
   "caBundleFile": "$pki/ca.crt",
   "storageIsHostL2": true,
+  "storageServerName": "cucina-host-l2",
   "buildUser": { "uid": $(id -u "$build_user"), "gid": $(id -g "$build_user") },
   "xcodeDeveloperDirectories": {
     "$(jget xcode.xcodeVersionOverride)": "$developer_dir",

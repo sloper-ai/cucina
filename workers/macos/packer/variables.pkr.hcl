@@ -36,6 +36,16 @@ variable "base_image" {
   description = "Override of the base Tart image reference; empty = versions.json (digest-pinned when a digest is recorded)."
 }
 
+variable "vm_name_override" {
+  type        = string
+  default     = ""
+  description = "Diagnostic builds only: an owned throwaway name for -on-error=abort. Normal builds use cucina-worker-macos:<xcode>-<cucina_version>."
+  validation {
+    condition     = var.vm_name_override == "" || can(regex("^cucina-imgtest-[A-Za-z0-9_-]+$", var.vm_name_override))
+    error_message = "Diagnostic VM names must start with cucina-imgtest-."
+  }
+}
+
 variable "xcode_app_source" {
   type        = string
   default     = ""
@@ -50,7 +60,7 @@ variable "buildbarn_dir" {
 variable "worker_agent_path" {
   type        = string
   default     = ""
-  description = "darwin/arm64 cucina-worker-agent binary (go build ./cmd/cucina-worker-agent). Empty = image without the in-VM render call site."
+  description = "darwin/arm64 cucina-worker-agent binary (go build ./cmd/cucina-worker-agent). Required for a successful image build; the Makefile supplies it."
 }
 
 variable "worker_agent_sha256" {

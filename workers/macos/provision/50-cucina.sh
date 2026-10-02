@@ -33,14 +33,11 @@ check_sha "$stage/bin/bb_worker.darwin_arm64" "$BB_WORKER_SHA256"
 check_sha "$stage/bin/bb_runner.darwin_arm64" "$BB_RUNNER_SHA256"
 install -o root -g wheel -m 0755 "$stage/bin/bb_worker.darwin_arm64" "$prefix/bin/bb_worker"
 install -o root -g wheel -m 0755 "$stage/bin/bb_runner.darwin_arm64" "$prefix/bin/bb_runner"
-agent_state="absent"
-if [ -f "$stage/bin/cucina-worker-agent" ]; then
-  [ -z "$WORKER_AGENT_SHA256" ] || check_sha "$stage/bin/cucina-worker-agent" "$WORKER_AGENT_SHA256"
-  install -o root -g wheel -m 0755 "$stage/bin/cucina-worker-agent" "$prefix/bin/cucina-worker-agent"
-  agent_state="present"
-else
-  log "warning: cucina-worker-agent not provided; the in-VM render call site is unavailable in this image"
-fi
+[ -f "$stage/bin/cucina-worker-agent" ] || die "cucina-worker-agent is required (R-MAC-7)"
+[ -n "$WORKER_AGENT_SHA256" ] || die "worker agent SHA-256 is required"
+check_sha "$stage/bin/cucina-worker-agent" "$WORKER_AGENT_SHA256"
+install -o root -g wheel -m 0755 "$stage/bin/cucina-worker-agent" "$prefix/bin/cucina-worker-agent"
+agent_state="present"
 xattr -c "$prefix"/bin/* 2>/dev/null || true
 
 for plist in ai.sloper.cucina.bb-worker.plist ai.sloper.cucina.bb-runner.plist; do
@@ -56,6 +53,9 @@ elif [ "$WORKER_USER" != "$BUILD_USER" ]; then
 fi
 install -o root -g wheel -m 0755 "$stage/files/cucina-smoke" "$prefix/libexec/cucina-smoke"
 install -o root -g wheel -m 0755 "$stage/files/cucina-render" "$prefix/libexec/cucina-render"
+for notice in LICENSE.md THIRD_PARTY_NOTICES.md; do
+  install -o root -g wheel -m 0644 "$stage/files/$notice" "$prefix/$notice"
+done
 
 # Config, PKI and log directories (hostd writes their contents at every start).
 install -d -o root -g wheel -m 0755 /private/etc/cucina /private/etc/cucina/bb
@@ -64,11 +64,14 @@ if [ "$WORKER_USER" = root ]; then
 else
   install -d -o "$WORKER_USER" -g staff -m 0700 /private/etc/cucina/pki
 fi
-install -d -o "$BUILD_USER" -g staff -m 0755 /private/var/log/cucina
-for f in bb_worker.log bb_runner.log; do
-  install -o "$BUILD_USER" -g staff -m 0644 /dev/null "/private/var/log/cucina/$f"
-done
-sed "s/@BUILD_USER@/$BUILD_USER/g" "$stage/files/newsyslog-cucina.conf" >/private/etc/newsyslog.d/cucina.conf
+# R-SEC-5: a builder-writable directory would let an action replace the root daemon's log with a symlink.
+install -d -o root -g wheel -m 0755 /private/var/log/cucina
+worker_group=staff
+[ "$WORKER_USER" != root ] || worker_group=wheel
+install -o "$WORKER_USER" -g "$worker_group" -m 0644 /dev/null /private/var/log/cucina/bb_worker.log
+install -o "$BUILD_USER" -g staff -m 0644 /dev/null /private/var/log/cucina/bb_runner.log
+sed -e "s/@BUILD_USER@/$BUILD_USER/g" -e "s/@WORKER_USER@/$WORKER_USER/g" -e "s/@WORKER_GROUP@/$worker_group/g" \
+  "$stage/files/newsyslog-cucina.conf" >/private/etc/newsyslog.d/cucina.conf
 chmod 0644 /private/etc/newsyslog.d/cucina.conf
 
 # Version label and machine facts. hostd reads image.json (schema 1; unknown fields are ignored).
@@ -115,7 +118,7 @@ cat >"$prefix/image.json" <<EOF
     "build": "$mount/build",
     "cache": "$mount/cache",
     "tmp": "$mount/tmp",
-    "state": "$mount/state"
+    "state": "/var/db/cucina"
   },
   "launchd": {
     "worker": { "label": "ai.sloper.cucina.bb-worker", "domain": "system", "plist": "$prefix/launchd/ai.sloper.cucina.bb-worker.plist" },

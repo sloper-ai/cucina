@@ -72,7 +72,9 @@ else
 fi
 if [ ! -e /Library/Developer/CommandLineTools ]; then ok "no Command Line Tools"; else fail "no Command Line Tools" "/Library/Developer/CommandLineTools exists"; fi
 if [ "$(xcode-select -p)" = "$developer_dir" ]; then ok "xcode-select -p = $developer_dir"; else fail "xcode-select" "$(xcode-select -p)"; fi
-if [ "$(xcrun --sdk macosx --show-sdk-path 2>&1)" = "$sdk_path" ] && [ -d "$sdk_path/usr/include" ]; then
+selected_sdk="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+if [ -d "$sdk_path/usr/include" ] && [ -d "$selected_sdk" ] &&
+  [ "$(cd "$selected_sdk" && pwd -P)" = "$(cd "$sdk_path" && pwd -P)" ]; then
   ok "SDK $sdk_path ($(xcrun --sdk macosx --show-sdk-version))"
 else
   fail "SDK path" "$(xcrun --sdk macosx --show-sdk-path 2>&1)"
@@ -100,7 +102,7 @@ done
 if [ "$(jget workerAgent)" = "present" ]; then
   check "cucina-worker-agent runnable" /usr/local/cucina/bin/cucina-worker-agent version
 else
-  warn "cucina-worker-agent" "not in this image (image.json workerAgent=absent): no in-VM render call site"
+  fail "cucina-worker-agent" "required binary is absent; no in-VM render call site"
 fi
 
 # --- Case-sensitive data volume.
@@ -117,9 +119,9 @@ else
 fi
 worker_user="$(jget workerUser)"
 worker_user="${worker_user:-$build_user}"
-for d in build:"$build_user" tmp:"$build_user" cache:"$worker_user" state:"$worker_user"; do
+for d in "$volume_mount/build:$worker_user" "$volume_mount/tmp:$build_user" "$volume_mount/cache:$worker_user" "$(jget paths.state):$worker_user" "$volume_mount:root"; do
   dir="${d%%:*}" owner="${d#*:}"
-  if [ "$(stat -f '%Su' "$volume_mount/$dir" 2>/dev/null)" = "$owner" ]; then ok "$volume_mount/$dir owned by $owner"; else fail "$volume_mount/$dir" "missing or not owned by $owner"; fi
+  if [ "$(stat -f '%Su' "$dir" 2>/dev/null)" = "$owner" ]; then ok "$dir owned by $owner"; else fail "$dir" "missing or not owned by $owner"; fi
 done
 wplist_user="$(/usr/libexec/PlistBuddy -c 'Print :UserName' /usr/local/cucina/launchd/ai.sloper.cucina.bb-worker.plist 2>/dev/null || echo root)"
 if [ "$wplist_user" = "$worker_user" ]; then ok "bb_worker runs as $worker_user (image.json workerUser)"; else fail "worker user" "plist UserName $wplist_user != workerUser $worker_user"; fi
@@ -141,6 +143,35 @@ done
 # --- Build user and its auto-login GUI session.
 if id "$build_user" >/dev/null 2>&1 && [ "$(id -u "$build_user")" = "$build_uid" ]; then ok "build user $build_user ($build_uid)"; else fail "build user" "$build_user/$build_uid missing"; fi
 if dseditgroup -o checkmember -m "$build_user" admin >/dev/null 2>&1; then fail "build user unprivileged" "$build_user is an administrator"; else ok "build user is not an administrator"; fi
+# Guards R-SEC-5: actions must not gain root via sudo or replace root-owned service/config/log paths.
+if sudo -n -u "$build_user" -- sudo -n /usr/bin/true >/dev/null 2>&1; then
+  fail "build user sudo" "$build_user can run a root command without authentication"
+else
+  ok "build user cannot sudo to root"
+fi
+for protected in /var/log/cucina /etc/cucina/bb /usr/local/cucina/bin /usr/local/cucina/launchd; do
+  if [ "$(stat -f %u "$protected" 2>/dev/null)" = 0 ] &&
+    ! sudo -n -u "$build_user" -- /bin/test -w "$protected"; then
+    ok "root-owned, action-unwritable $protected"
+  else
+    fail "protected directory" "$protected is not root-owned or is writable by $build_user"
+  fi
+done
+if [ "$(stat -f %Su /var/log/cucina/bb_worker.log)" = "$worker_user" ] &&
+  [ "$(stat -f %Su /var/log/cucina/bb_runner.log)" = "$build_user" ]; then
+  ok "log files owned by their respective service users"
+else
+  fail "log owners" "worker/runner log ownership does not match the manifest"
+fi
+if [ "$worker_user" = root ]; then
+  if ! sudo -n -u "$build_user" -- /bin/test -w /var/log/cucina/bb_worker.log &&
+    ! sudo -n -u "$build_user" -- /bin/test -x /etc/cucina/pki &&
+    ! sudo -n -u "$build_user" -- /bin/test -x "$(jget paths.state)"; then
+    ok "actions cannot write worker log or traverse worker PKI/state"
+  else
+    fail "worker isolation" "builder has access to root worker log, PKI or state"
+  fi
+fi
 if [ "$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null)" = "$build_user" ]; then ok "auto-login user $build_user"; else fail "auto-login" "not $build_user"; fi
 deadline=$(($(date +%s) + wait_session))
 while :; do
@@ -150,6 +181,29 @@ while :; do
   sleep 1
 done
 if [ "$console" = "$build_user" ]; then ok "GUI session of $build_user is up (gui/$build_uid)"; else fail "GUI session" "console owner is $console"; fi
+# Guards a usable noninteractive GUI session, not the lifetime of Apple's Setup Assistant process.
+# Add/delete only our unique, throwaway generic-password item; nothing authenticates with this value.
+keychain="/Users/$build_user/Library/Keychains/login.keychain-db"
+service="ai.sloper.cucina.image-smoke.$(openssl rand -hex 8)"
+probe_secret="$(openssl rand -hex 16)"
+user_security() {
+  /usr/bin/perl -e 'alarm shift @ARGV; exec @ARGV or die $!' 15 \
+    /bin/launchctl asuser "$build_uid" /usr/bin/sudo -H -u "$build_user" -- /usr/bin/security "$@"
+}
+if user_security add-generic-password -a image-smoke -s "$service" -w "$probe_secret" "$keychain" >/dev/null 2>&1; then
+  if user_security delete-generic-password -a image-smoke -s "$service" "$keychain" >/dev/null 2>&1; then
+    ok "GUI login keychain supports noninteractive add/delete"
+  else
+    fail "login keychain" "could not delete the smoke probe item"
+  fi
+else
+  user_security delete-generic-password -a image-smoke -s "$service" "$keychain" >/dev/null 2>&1 || true
+  fail "login keychain" "noninteractive write failed or timed out (keychain may be locked)"
+fi
+unset probe_secret
+for notice in LICENSE.md THIRD_PARTY_NOTICES.md; do
+  if [ -s "/usr/local/cucina/$notice" ]; then ok "bundled $notice"; else fail "license notice" "$notice is missing or empty"; fi
+done
 
 # --- Tart Guest Agent: this script runs through it; RPC must live in the root daemon.
 gad="$(launchctl print system/org.cirruslabs.tart-guest-daemon 2>/dev/null)"
@@ -179,7 +233,22 @@ fi
 # --- Hardening and background activity.
 if launchctl print-disabled system 2>/dev/null | grep -q '"com.apple.screensharing" => disabled'; then ok "Screen Sharing disabled"; else fail "Screen Sharing" "not disabled"; fi
 if sshd -T 2>/dev/null | grep -qi '^passwordauthentication no'; then ok "sshd: password authentication off"; else fail "sshd" "password authentication not disabled"; fi
-if [ "$(defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled 2>/dev/null)" = "0" ]; then ok "Software Update automatic checks off"; else fail "Software Update" "automatic checks on"; fi
+# Golden Gate can remove legacy AutomaticCheckEnabled at reboot; the immutable-image policy is enforced by launchd.
+if launchctl print-disabled system 2>/dev/null | grep -q '"com.apple.softwareupdated" => disabled' &&
+  ! launchctl print system/com.apple.softwareupdated >/dev/null 2>&1; then
+  ok "Software Update daemon disabled and unloaded"
+else
+  fail "Software Update" "updater is not disabled or remains loaded"
+fi
+rosetta_runtime=absent
+rosetta_receipt=absent
+[ ! -e /Library/Apple/usr/libexec/oah/runtime ] || rosetta_runtime=present
+if pkgutil --pkg-info com.apple.pkg.RosettaUpdateAuto >/dev/null 2>&1; then rosetta_receipt=present; fi
+if [ "$rosetta_runtime" = absent ] && [ "$rosetta_receipt" = absent ]; then
+  ok "no Rosetta runtime or receipt"
+else
+  fail "Rosetta" "runtime=$rosetta_runtime, receipt=$rosetta_receipt"
+fi
 # hostd scrapes bb_worker's metrics port on the VM address: the application firewall must not block it.
 if /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null | grep -qi 'disabled'; then ok "application firewall off (vmnet NAT is host-only)"; else warn "application firewall" "enabled: hostd's metrics scrape needs bb_worker allowed"; fi
 

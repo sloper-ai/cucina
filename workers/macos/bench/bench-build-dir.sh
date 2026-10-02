@@ -3,7 +3,7 @@
 #
 # R-CACHE-3 measurement: NFSv4 virtual build directory vs native build directory inside a Tart guest.
 #   bench-build-dir.sh <image> [mode ...]   modes: native, nfsv4 (bb_worker as the image's workerUser),
-#                                           <mode>-builder (bb_worker as the build user); default: native nfsv4 nfsv4-builder
+#                                           <mode>-builder (diagnostic only); default: native nfsv4
 # * Clones <image> to a throwaway VM (cucina-imgtest-bdx-*; deleted at exit), sized like hostd would on this host,
 #   boots it with hostd's flags and configures bb_worker/bb_runner exactly like hostd's activation (docs/dev/hostd.md
 #   §1.2: files under /etc/cucina, launchd bootstrap of the image's plists, bb_worker as the build user).
@@ -21,7 +21,7 @@ die() { printf 'bench: %s\n' "$*" >&2; exit 1; }
 image="$1"
 shift
 modes=("$@")
-[ ${#modes[@]} -gt 0 ] || modes=(native nfsv4 nfsv4-builder)
+[ ${#modes[@]} -gt 0 ] || modes=(native nfsv4)
 here="$(cd "$(dirname "$0")" && pwd)"
 tmpl="$here/templates"
 : "${CUCINA_DEV_STORAGE:?source .work/env.sh first}"
@@ -63,33 +63,48 @@ trap cleanup EXIT
 
 # --- Workload.
 ws="$WORK/ws-${UNITS:-200}-${HEADERS:-2000}"
-[ -f "$ws/BUILD.bazel" ] || "$here/gen-workspace.sh" "$ws" "${UNITS:-200}" "${HEADERS:-2000}" >/dev/null
+"$here/gen-workspace.sh" "$ws" "${UNITS:-200}" "${HEADERS:-2000}" >/dev/null
 
 # --- Worker VM.
 cores="$(sysctl -n hw.ncpu)"
 mem_gib=$(($(sysctl -n hw.memsize) / 1073741824))
-vcpus=$(((cores - 2) / SLOTS))
-mem_mb=$((((mem_gib - 8) / SLOTS) * 1024))
+vcpus=${VCPUS:-$(((cores - 2) / SLOTS))}
+mem_mb=${MEMORY_MIB:-$((((mem_gib - 8) / SLOTS) * 1024))}
+[ "$(tart list --format json | jq '[.[] | select(.Running)] | length')" -lt 2 ] || die "both VM slots are occupied"
 tart clone "$image" "$vm"
 tart set "$vm" --cpu "$vcpus" --memory "$mem_mb"
 t_boot="$(now)"
 tart run "$vm" --no-graphics --root-disk-opts=caching=cached,sync=none >"$logs/tart-run.log" 2>&1 &
 run_pid=$!
+ready_deadline=$((SECONDS + 180))
 until with_timeout 10 tart exec "$vm" /usr/bin/true >/dev/null 2>&1; do
   kill -0 "$run_pid" 2>/dev/null || die "tart run exited"
+  [ "$SECONDS" -lt "$ready_deadline" ] || die "guest agent was not ready within 180s"
   sleep 0.25
 done
 t_agent="$(now)"
-build_user="$(with_timeout 10 tart exec "$vm" /usr/bin/plutil -extract buildUser raw -o - /usr/local/cucina/image.json)"
-until [ "$(with_timeout 10 tart exec "$vm" /usr/bin/stat -f %Su /dev/console 2>/dev/null)" = "$build_user" ]; do sleep 0.25; done
+until manifest="$(with_timeout 30 tart exec "$vm" /bin/cat /usr/local/cucina/image.json 2>/dev/null)" &&
+  build_user="$(printf '%s' "$manifest" | jq -er 'select(.schema == 1) | .buildUser' 2>/dev/null)"; do
+  [ "$SECONDS" -lt "$ready_deadline" ] || die "image manifest was not readable within 180s"
+  sleep 0.25
+done
+until console="$(with_timeout 30 tart exec "$vm" /usr/bin/stat -f '%Su %u %g' /dev/console 2>/dev/null)" &&
+  [ "${console%% *}" = "$build_user" ]; do
+  [ "$SECONDS" -lt "$ready_deadline" ] || die "build user's GUI session was not ready within 180s"
+  sleep 0.25
+done
 t_session="$(now)"
-uid="$(with_timeout 10 tart exec "$vm" /usr/bin/id -u "$build_user")"
-gid="$(with_timeout 10 tart exec "$vm" /usr/bin/id -g "$build_user")"
-xcode_version="$(with_timeout 10 tart exec "$vm" /usr/bin/plutil -extract xcode.version raw -o - /usr/local/cucina/image.json)"
-xcode_override="$(with_timeout 10 tart exec "$vm" /usr/bin/plutil -extract xcode.xcodeVersionOverride raw -o - /usr/local/cucina/image.json)"
-vm_ip="$(tart ip "$vm")"
+read -r _ uid gid <<<"$console"
+xcode_version="$(printf '%s' "$manifest" | jq -r .xcode.version)"
+xcode_override="$(printf '%s' "$manifest" | jq -r .xcode.xcodeVersionOverride)"
+vm_ip="$(tart ip "$vm" --wait 30)"
 iface="$(route -n get "$vm_ip" | awk '/interface:/ {print $2}')"
-gw="$(ipconfig getifaddr "$iface")"
+# vmnet's bridge has no ipconfig network-service record. Its actual address is the guest's default gateway.
+gw="$(vexec /sbin/route -n get default | awk '$1 == "gateway:" {print $2}')"
+if [ -z "$gw" ]; then die "guest has no default IPv4 gateway"; fi
+if ! /sbin/ifconfig "$iface" | awk -v gw="$gw" '$1 == "inet" && $2 == gw {found=1} END {exit !found}'; then
+  die "guest default gateway is not an address on host interface $iface"
+fi
 echo "VM $vm ($vcpus vCPUs, $((mem_mb / 1024)) GiB) at $vm_ip via $iface/$gw: agent $(since "$t_boot" "$t_agent")s, session $(since "$t_boot" "$t_session")s"
 
 # --- Host storage + scheduler (plaintext, loopback + vmnet gateway only).
@@ -132,7 +147,7 @@ render() { # build kind (native|nfsv4), out dir -> bb/worker.json, bb/runner.jso
     + (if $mode == "nfsv4" then {prefetching: {fileSystemAccessCache: {grpc: {client: {address: $sp}}},
         bloomFilterBitsPerPath: 14, bloomFilterMaximumSizeBytes: 65536}}
        else {global: ($c[0].global + {setUmask: {umask: 0}})} end)' |
-    sed -e "s|@STORAGE@|$gw:$sp|g" -e "s|@SCHEDULER@|$gw:$wp|g" -e "s|@STATE@|/Volumes/cucina/state|g" \
+    sed -e "s|@STORAGE@|$gw:$sp|g" -e "s|@SCHEDULER@|$gw:$wp|g" -e "s|@STATE@|/var/db/cucina|g" \
       -e "s|@BUILD@|/Volumes/cucina/build|g" -e "s|@NATIVE_CACHE@|/Volumes/cucina/cache|g" \
       -e "s|@RUNNER_SOCKET@|/var/run/cucina/runner.sock|g" >"$out/bb/worker.json"
   sed -e "s|@BUILD@|/Volumes/cucina/build|g" -e "s|@RUNNER_SOCKET@|/var/run/cucina/runner.sock|g" \
@@ -152,9 +167,12 @@ activate() { # out dir, worker user (image|builder): hostd §1.2 steps 5-6 + the
   fi
   vexec /bin/sh -c "set -eu
     chmod 0644 /etc/cucina/bb/worker.json /etc/cucina/bb/runner.json
-    install -d -o $uid -g $gid -m 0755 /var/run/cucina /var/log/cucina
-    rm -rf /Volumes/cucina/state/l1 /Volumes/cucina/state/filepool /Volumes/cucina/state/nfsv4.sock
-    for d in /Volumes/cucina/state /Volumes/cucina/state/l1 /Volumes/cucina/state/l1/state /Volumes/cucina/state/filepool /Volumes/cucina/cache; do
+    install -d -o $uid -g $gid -m 0700 /var/run/cucina
+    install -d -o root -g wheel -m 0755 /var/log/cucina
+    chown $owner /var/log/cucina/bb_worker.log
+    chown $uid:$gid /var/log/cucina/bb_runner.log
+    rm -rf /var/db/cucina/l1 /var/db/cucina/filepool /var/db/cucina/nfsv4.sock
+    for d in /var/db/cucina /var/db/cucina/l1 /var/db/cucina/l1/state /var/db/cucina/filepool /Volumes/cucina/cache; do
       mkdir -p \$d && chown $owner \$d && chmod 0700 \$d
     done
     : > /var/log/cucina/bb_worker.log; : > /var/log/cucina/bb_runner.log
@@ -162,7 +180,9 @@ activate() { # out dir, worker user (image|builder): hostd §1.2 steps 5-6 + the
     launchctl bootout system/ai.sloper.cucina.bb-worker 2>/dev/null || true
     for i in 1 2 3 4 5 6 7 8 9 10; do launchctl bootstrap gui/$uid /usr/local/cucina/launchd/ai.sloper.cucina.bb-runner.plist 2>/dev/null && break; sleep 0.5; done
     for i in 1 2 3 4 5 6 7 8 9 10; do launchctl bootstrap system $worker_plist 2>/dev/null && break; sleep 0.5; done
-    launchctl print system/ai.sloper.cucina.bb-worker | grep -q 'state = running'"
+    # Bootstrap is asynchronous. Loaded jobs are sufficient here; the uncached remote action below proves readiness.
+    launchctl print system/ai.sloper.cucina.bb-worker >/dev/null
+    launchctl print gui/$uid/ai.sloper.cucina.bb-runner >/dev/null"
 }
 
 deactivate() {
@@ -177,6 +197,8 @@ for mode in "${modes[@]}"; do
   [ -f "$tmpl/build-$kind.json" ] || die "unknown mode $mode"
   echo "=== $mode"
   render "$kind" "$logs/$mode"
+  # Invalidate Bazel's local incremental result too: --noremote_accept_cached alone would not rerun //:smoke.
+  (cd "$ws" && "$BAZEL" "${bazel_startup[@]}" clean >"$logs/$mode-clean.log" 2>&1)
   t_act="$(now)"
   if ! activate "$logs/$mode" "$user"; then
     echo "  activation FAILED ($mode): $(vexec /usr/bin/tail -n 5 /var/log/cucina/bb_worker.log 2>&1 | tr '\n' ' ' | cut -c1-400)"
@@ -192,6 +214,17 @@ for mode in "${modes[@]}"; do
     echo "first action FAILED ($mode): $(tail -n 5 "$logs/$mode-smoke.log")"
   fi
   echo "  worker start -> first action done: ${first_action}s"
+  xcode_smoke=false
+  if [ "$first_action" != null ]; then
+    (cd "$ws" && "$BAZEL" "${bazel_startup[@]}" clean >/dev/null 2>&1)
+    if (cd "$ws" && with_timeout 180 "$BAZEL" "${bazel_startup[@]}" build "${bazel_flags[@]}" \
+      --remote_default_exec_properties="xcode-version=$xcode_version" //:smoke >"$logs/$mode-xcode-smoke.log" 2>&1); then
+      xcode_smoke=true
+      echo "  Xcode runner: remote unprivileged action passed"
+    else
+      echo "  Xcode runner: FAILED (see $logs/$mode-xcode-smoke.log)"
+    fi
+  fi
   for r in $(seq 1 "$RUNS"); do
     if [ "$first_action" = null ]; then failed_runs=$((failed_runs + 1)); continue; fi # worker never served an action
     (cd "$ws" && "$BAZEL" "${bazel_startup[@]}" clean >/dev/null 2>&1) || true
@@ -215,10 +248,10 @@ for mode in "${modes[@]}"; do
   deactivate
   run_times="$(printf '%s\n' "${times[@]:-}" | jq -R 'select(length > 0) | tonumber' | jq -s .)"
   results="$(jq -n --argjson acc "$results" --arg mode "$mode" --argjson first "$first_action" --argjson runs "$run_times" \
-    --argjson ok "$ok_runs" --argjson failed "$failed_runs" --argjson fetch "$(stage FetchingInputs)" \
+    --argjson ok "$ok_runs" --argjson failed "$failed_runs" --argjson xcode "$xcode_smoke" --argjson fetch "$(stage FetchingInputs)" \
     --argjson running "$(stage Running)" --argjson upload "$(stage UploadingOutputs)" --argjson files "$files_read" \
-    '$acc + [{mode: $mode, firstActionSeconds: $first, runSeconds: $runs, okRuns: $ok, failedRuns: $failed,
-      coldRunSeconds: ($runs[0] // null), warmMedianSeconds: (($runs[1:] | sort) as $w | if ($w | length) > 0 then $w[(($w | length) - 1) / 2 | floor] else null end),
+    '$acc + [{mode: $mode, firstActionSeconds: $first, xcodeRunnerPassed: $xcode, runSeconds: $runs, okRuns: $ok, failedRuns: $failed,
+      coldRunSeconds: ($runs[0] // null), warmMedianSeconds: (($runs[1:] | sort) as $w | if ($w | length) > 0 then ($w[(($w | length) - 1) / 2 | floor] + $w[($w | length) / 2 | floor]) / 2 else null end),
       perActionSeconds: {fetchingInputs: $fetch, running: $running, uploadingOutputs: $upload}, inputRootFilesReadPerAction: $files}]')"
 done
 
@@ -229,3 +262,5 @@ jq -n --arg image "$image" --arg vm "$vm" --argjson vcpus "$vcpus" --argjson mem
     workload: {compileUnits: ($units | tonumber), headersPerInputRoot: ($headers | tonumber)}, results: $results}' >"$out"
 echo "results: $out (logs: $logs)"
 jq -c '.results[] | {mode, firstActionSeconds, coldRunSeconds, warmMedianSeconds, okRuns, failedRuns, perActionSeconds}' "$out"
+# Also used by make remote-smoke: never return success for a failed remote build or runner.
+jq -e '.results | all(.okRuns > 0 and .failedRuns == 0 and .xcodeRunnerPassed == true)' "$out" >/dev/null

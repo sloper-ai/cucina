@@ -13,6 +13,15 @@ set -euo pipefail
 : "${CUCINA_STAGE:?}" "${BUILD_USER:?}"
 log() { printf '[60-finalize] %s\n' "$*"; }
 
+# Finish the new user's first automatic login before rotating the build-time admin credential.
+# SSH/RPC is available earlier than loginwindow. Complete first-login work in the image bake, not a worker cold start.
+uid="$(id -u "$BUILD_USER")"
+deadline=$((SECONDS + 120))
+until [ "$(stat -f %Su /dev/console)" = "$BUILD_USER" ] && launchctl print "gui/$uid" >/dev/null 2>&1; do
+  [ "$SECONDS" -lt "$deadline" ] || { log "build-user GUI login did not complete" >&2; exit 1; }
+  sleep 1
+done
+
 install -o root -g wheel -m 0644 "$CUCINA_STAGE/files/sshd-cucina.conf" /private/etc/ssh/sshd_config.d/000-cucina.conf
 sshd -t
 sshd -T 2>/dev/null | grep -qi '^passwordauthentication no' || { echo "sshd still accepts passwords" >&2; exit 1; }

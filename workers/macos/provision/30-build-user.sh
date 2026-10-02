@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 #
 # The build user (R-MAC-4, R-SEC-5): a dedicated *standard* account (no sudo, not in `admin`) that is logged in
-# automatically to a GUI (Aqua) session. bb_runner runs as a LaunchAgent in that session and bb_worker as a
-# LaunchDaemon with UserName=<build user> (docs/dev/hostd.md §1.3), so every action runs unprivileged.
+# automatically to a GUI (Aqua) session. bb_runner runs as a LaunchAgent in that session; bb_worker is a separate
+# LaunchDaemon (docs/dev/hostd.md §1.3). Every action runs as this unprivileged user.
 # Its password is random, generated here and never printed; it exists only because loginwindow's auto-login needs one
 # (/etc/kcpassword). Runs as root.
 set -euo pipefail
@@ -35,9 +35,33 @@ fi
 DevToolsSecurity -enable >/dev/null 2>&1 || true
 dseditgroup -o edit -a "$BUILD_USER" -t user _developer
 
+# Precreate the login keychain with the login password while the new user is logged out (ADR 0755).
+# Otherwise first-login Setup Assistant may leave the account logged in with no usable unlocked keychain.
+keychain="$home/Library/Keychains/login.keychain-db"
+install -d -o "$BUILD_USER" -g staff -m 0700 "$home/Library/Keychains"
+sudo -H -u "$BUILD_USER" /usr/bin/security create-keychain -p "$pw" "$keychain" >/dev/null
+sudo -H -u "$BUILD_USER" /usr/bin/security default-keychain -d user -s "$keychain" >/dev/null
+sudo -H -u "$BUILD_USER" /usr/bin/security set-keychain-settings "$keychain" >/dev/null
+
 # Auto-login replaces the Cirrus `admin` auto-login.
-sysadminctl -autologin set -userName "$BUILD_USER" -password "$pw" 2>&1 | grep -v -i password || true
-unset pw
+# Golden Gate's SACSetAutoLoginPassword silently fails (error 22, exit 0) in SSH/system bootstrap context.
+# Use the Cirrus admin's already-running GUI context; this is a supported sysadminctl call, not a file rewrite.
+admin_uid="$(id -u "${BUILD_ADMIN:-admin}")"
+deadline=$((SECONDS + 90))
+until launchctl print "gui/$admin_uid" >/dev/null 2>&1; do
+  [ "$SECONDS" -lt "$deadline" ] || die "base administrator GUI session is unavailable"
+  sleep 1
+done
+login_output="$(launchctl asuser "$admin_uid" /usr/sbin/sysadminctl -autologin set -userName "$BUILD_USER" -password "$pw" 2>&1)"
+printf '%s\n' "${login_output//$pw/[redacted]}"
+dscl . -authonly "$BUILD_USER" "$pw" >/dev/null 2>&1 || die "generated build-user password does not authenticate"
+# Compare just the encoded password + NUL (Apple may choose different padding); never print the credential.
+# Reuse the pkg's tested codec, rather than maintaining another obfuscation implementation (ADR 0755).
+encoder="${CUCINA_STAGE:?}/files/cucina-kcpassword"
+length=$((${#pw} + 1))
+cmp -s <(printf %s "$pw" | /usr/bin/perl "$encoder" | head -c "$length") <(head -c "$length" /etc/kcpassword) ||
+  die "automatic login did not persist the new user's credential"
+unset pw login_output
 [ "$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null)" = "$BUILD_USER" ] ||
   die "auto-login was not configured for $BUILD_USER"
 [ -f /etc/kcpassword ] || die "/etc/kcpassword missing after enabling auto-login"

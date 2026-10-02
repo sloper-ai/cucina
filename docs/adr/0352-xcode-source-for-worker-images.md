@@ -23,9 +23,9 @@ an Apple ID (developer.apple.com downloads), which must never be stored by Cucin
    the build, the repository or the image.
 3. The build fails, rather than silently using another build, when neither source has the pinned build.
 
-Rejected: downloading Xcode inside the build VM (`xcodes`/`xcodebuild -downloadPlatform` need Apple ID credentials in the
-build); uploading a `.xip` with Packer's file provisioner and expanding it in the guest (~3x slower than copying the
-expanded bundle over virtiofs, and needs twice the guest disk during the build).
+Rejected: automating the Apple ID login inside the build VM. An operator-supplied, already expanded bundle avoids
+handling Apple credentials and avoids holding both the `.xip` and the expanded Xcode in the guest. Copy-path speed
+has not been benchmarked; the campaign uses the exact matching Xcode already in the Cirrus base.
 
 ## Consequences
 * A copied Xcode rewrites ~10 GB of the guest disk, so the first push/pull of such an image moves that much more than
@@ -34,4 +34,6 @@ expanded bundle over virtiofs, and needs twice the guest disk during the build).
 * Campaign outcome (base `ghcr.io/cirruslabs/macos-golden-gate-xcode:27`): recorded in the campaign notes below.
 
 ## Campaign notes
-* Filled in at build time: the Xcode build(s) found in the base and which source the image used.
+* Base digest `sha256:324ea5656dee8ab9b0a0df70fda2cfed8912051ad0eca3b1b883bf6ddac88fab` was inspected in a disposable Tart clone: macOS 27.0 (`26A428`), exactly one Xcode 27.0 (`27A266a`) at `/Applications/Xcode_27.app`.
+* Keep that matching bundle and move it to `/Applications/Xcode.app`; no host Xcode transfer or shared directory is needed for this build.
+* Red-first image build caught an overly strict SDK-path test: Cirrus' `xcrun` returns `MacOSX27.0.sdk`, with `MacOSX.sdk` resolving to that directory. The fixed toolchain path is unchanged; provisioning and smoke now compare canonical directories and require SDK headers, instead of asserting identical path spelling.

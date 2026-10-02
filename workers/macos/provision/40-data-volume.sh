@@ -37,21 +37,18 @@ touch "$MOUNT/.metadata_never_index"
 install -d -o root -g wheel -m 0700 "$MOUNT/.fseventsd"
 touch "$MOUNT/.fseventsd/no_log"
 
-chown "$BUILD_USER":staff "$MOUNT"
+# Root owns the volume root so actions cannot replace protected subdirectories with symlinks.
+chown root:wheel "$MOUNT"
 chmod 0755 "$MOUNT"
-# build/ tmp/ (build user) and cache/: hostd contract (docs/dev/hostd.md §1.1). state/ (0700): suggested StateRoot (L1
-# blocks + persistent state, file pool, NFSv4 socket) so the persistent L1 never sits under a directory that
-# bb_worker wipes at startup (the native build directory's cache).
-for dir in build tmp; do
-  install -d -o "$BUILD_USER" -g staff -m 0755 "$MOUNT/$dir"
-done
-# cache/ (native input cache, wiped by bb_worker at start) and state/ belong to the user that runs bb_worker; with
-# workerUser=root actions cannot reach the L1, file pool or worker key (ADR 0350).
+install -d -o "$BUILD_USER" -g staff -m 0755 "$MOUNT/tmp"
+# Hostd's StateRoot is /var/db/cucina, outside the native input cache (which bb_worker wipes at startup).
+# Both volumes share the VM disk/APFS container, and persistent L1 state survives shutdown.
 if [ "$WORKER_USER" = root ]; then
-  install -d -o root -g wheel -m 0700 "$MOUNT/cache" "$MOUNT/state"
+  install -d -o root -g wheel -m 0755 "$MOUNT/build"
+  install -d -o root -g wheel -m 0700 "$MOUNT/cache" /var/db/cucina
 else
-  install -d -o "$WORKER_USER" -g staff -m 0755 "$MOUNT/cache"
-  install -d -o "$WORKER_USER" -g staff -m 0700 "$MOUNT/state"
+  install -d -o "$WORKER_USER" -g staff -m 0755 "$MOUNT/build"
+  install -d -o "$WORKER_USER" -g staff -m 0700 "$MOUNT/cache" /var/db/cucina
 fi
 
 # Functional check: two names differing only in case are two files.

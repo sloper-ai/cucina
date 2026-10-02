@@ -20,9 +20,9 @@
       "build": "27A266a",
       "macosRelease": "golden-gate",
       "baseImage": "ghcr.io/cirruslabs/macos-golden-gate-xcode:27",
-      "baseImageDigest": "",
-      "source": "local-xcode-app",
-      "$comment": "source=cirrus: keep the base image's Xcode (its build must equal `build`). source=local-xcode-app: the base ships a different 27.x build, so the Packer build copies the operator's Xcode.app (XCODE_APP) in; see docs/adr/0352-xcode-source-for-worker-images.md."
+      "baseImageDigest": "sha256:324ea5656dee8ab9b0a0df70fda2cfed8912051ad0eca3b1b883bf6ddac88fab",
+      "source": "cirrus",
+      "$comment": "Verified in a throwaway clone: this base contains Xcode 27.0 (27A266a) at /Applications/Xcode_27.app. The build moves it to /Applications/Xcode.app. XCODE_APP remains an explicit fallback for bases with another build (ADR 0352)."
     }
   },
   "buildbarn": {
@@ -37,6 +37,20 @@
         "name": "bb_runner.darwin_arm64",
         "sha256": "0c8ffbf17da304808a1580d430e0eaeea4dba47fd04b5f2434348980ec181105"
       }
+    }
+  },
+  "smokeServers": {
+    "bb_scheduler": {
+      "release": "20260930T173749Z-1a3be95",
+      "releaseUrl": "https://github.com/buildbarn/bb-remote-execution/releases/download/20260930T173749Z-1a3be95",
+      "name": "bb_scheduler.darwin_arm64",
+      "sha256": "6d28e3852ca8ece61c23c7146690ca6313fb01f62b836b2120771bb49812c7ce"
+    },
+    "bb_storage": {
+      "release": "20260930T153215Z-086b011",
+      "releaseUrl": "https://github.com/buildbarn/bb-storage/releases/download/20260930T153215Z-086b011",
+      "name": "bb_storage.darwin_arm64",
+      "sha256": "ca879430c4383cb723144eef3e3069ff8cf58422bd7f0a54c7e4290603139bc3"
     }
   },
   "layout": {

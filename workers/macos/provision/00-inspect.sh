@@ -27,4 +27,4 @@ for item in /Library/LaunchDaemons/*.plist /Library/LaunchAgents/*.plist; do
 done
 log "application firewall: $(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null | tr -d '\n')"
 log "SIP: $(csrutil status 2>/dev/null | tr -d '\n')"
-if [ -d /Library/Apple/usr/libexec/oah ]; then log "Rosetta is installed (SIP-protected; no x86_64 runners are advertised)"; fi
+if [ -d /Library/Apple/usr/libexec/oah ]; then log "Rosetta is inherited from the base; provisioning removes it (no x86_64 runners)"; fi
