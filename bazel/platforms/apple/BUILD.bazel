@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Exec-side Apple SDK (R-XPLAT-8): macOS targets compile and link on macOS workers against the SDK
+# of the worker's VM image; no client ever downloads Apple's SDK. See exec_sdk.bzl and
+# docs/cross-compilation.md ("Apple SDK on the exec machine").
+
+load("@bazel_skylib//rules:common_settings.bzl", "string_flag")
+load(":exec_sdk.bzl", "exec_macos_sdk")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["exec_sdk.bzl"])
+
+# The SDK version of the pool that compiles (its Xcode version, e.g. "27.0"): the worker image's
+# MacOSX<version>.sdk. Remote configurations set it; "" (the default) means Xcode's unversioned
+# MacOSX.sdk, for local builds. `scope = "universal"` keeps exec-configured tools (Rust build
+# scripts, proc macros, hermetic-llvm's helpers) on the same SDK.
+string_flag(
+    name = "sdk_version",
+    build_setting_default = "",
+    scope = "universal",
+)
+
+# Escape hatch for Macs without /Applications/Xcode.app: an absolute SDK path, e.g.
+# /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk. Never set it for remote builds.
+string_flag(
+    name = "sdk_path",
+    build_setting_default = "",
+    scope = "universal",
+)
+
+# The SDK directory that replaces @macos_sdk//sysroot (also usable directly).
+exec_macos_sdk(name = "sdk")

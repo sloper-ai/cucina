@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+"""@cucina_platforms: Bazel platforms for Cucina's runners (R-RE-1, R-XPLAT-2).
+
+* //exec:<pool>-<runner>  compile exec platforms, one per compile-capable pool runner
+* //test:test_on_<P>      test exec platforms ("twins") for every runnable hermetic-llvm target P
+* //apple                 the exec-side Apple SDK (R-XPLAT-8) that replaces hermetic-llvm's @macos_sdk
+* cucina.bazelrc          the :cucina / :cucina-macos --extra_execution_platforms lists
+
+The BUILD files under exec/ and test/, catalog.bzl and cucina.bazelrc are generated from
+platforms/pools.json + platforms/targets.json by //tools/xplat (bazel run //tools/xplat:update).
+Usage: docs/cross-compilation.md.
+"""
+
+module(
+    name = "cucina_platforms",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "llvm", version = "0.8.24")
+bazel_dep(name = "platforms", version = "1.1.0")

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "xplatcheck_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/sloper-ai/cucina/tools/xplat/cmd/xplatcheck",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/xplat"],
+)
+
+# Offline resolution check of the cross matrix (manual; runs `bazel aquery` in a scratch
+# workspace): bazel run //tools/xplat/cmd/xplatcheck -- -workdir /tmp/xplatcheck
+go_binary(
+    name = "xplatcheck",
+    embed = [":xplatcheck_lib"],
+    pure = "on",
+    visibility = ["//visibility:public"],
+)

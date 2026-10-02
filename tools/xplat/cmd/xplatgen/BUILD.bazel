@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "xplatgen_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/sloper-ai/cucina/tools/xplat/cmd/xplatgen",
+    visibility = ["//visibility:private"],
+    deps = ["//tools/xplat"],
+)
+
+go_binary(
+    name = "xplatgen",
+    embed = [":xplatgen_lib"],
+    pure = "on",
+    visibility = ["//tools/xplat:__subpackages__"],
+)

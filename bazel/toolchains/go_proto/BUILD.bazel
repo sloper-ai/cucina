@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Go protobuf compilers for cucina_proto_go (//bazel:proto.bzl).
+load("@rules_go//proto:compiler.bzl", "go_proto_compiler")
+load("@rules_go//proto/wkt:well_known_types.bzl", "WELL_KNOWN_TYPES_APIV2")
+
+# protoc-gen-go-grpc with its DEFAULT options (require_unimplemented_servers=true),
+# exactly as `buf generate` runs it (buf.gen.yaml). rules_go's go_grpc_v2 sets
+# require_unimplemented_servers=false. The plugin version is the go.mod `tool` pin.
+go_proto_compiler(
+    name = "go_grpc",
+    plugin = "@org_golang_google_grpc_cmd_protoc_gen_go_grpc//:protoc-gen-go-grpc",
+    suffix = "_grpc.pb.go",
+    visibility = ["//visibility:public"],
+    deps = WELL_KNOWN_TYPES_APIV2 + [
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+    ],
+)

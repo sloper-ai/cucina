@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cross-compilation matrix: validation, generation of @cucina_platforms (bazel/platforms, a separate
+# module consumed through local_path_override) and its structural test (R-XPLAT-1/-2, R-TEST-6
+# "Cross-platform"). docs/cross-compilation.md.
+
+load("@bazel_lib//lib:write_source_files.bzl", "write_source_files")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+exports_files(["cucina_platforms.MODULE.bazel"])
+
+go_library(
+    name = "xplat",
+    srcs = [
+        "catalog.go",
+        "generate.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/tools/xplat",
+    visibility = ["//visibility:public"],
+)
+
+cucina_go_test(
+    name = "xplat_test",
+    srcs = ["xplat_test.go"],
+    embed = [":xplat"],
+    runfiles_env = {
+        "XPLAT_BAZELRC": "@cucina_platforms//:cucina.bazelrc",
+        "XPLAT_EXEC_BUILD": "@cucina_platforms//exec:BUILD.bazel",
+        "XPLAT_POOLS_JSON": "//platforms:pools.json",
+        "XPLAT_SEGMENT": ":cucina_platforms.MODULE.bazel",
+        "XPLAT_TARGETS_JSON": "//platforms:targets.json",
+        "XPLAT_TEST_BUILD": "@cucina_platforms//test:BUILD.bazel",
+    },
+    tier = "unit",
+    deps = ["@com_github_stretchr_testify//require"],
+)
+
+# The generated files, from platforms/pools.json + platforms/targets.json.
+genrule(
+    name = "generated",
+    srcs = [
+        "//platforms:pools.json",
+        "//platforms:targets.json",
+    ],
+    outs = [
+        "generated/catalog.bzl",
+        "generated/cucina.bazelrc",
+        "generated/cucina_platforms.MODULE.bazel",
+        "generated/exec/BUILD.bazel",
+        "generated/test/BUILD.bazel",
+    ],
+    cmd = "$(execpath //tools/xplat/cmd/xplatgen) " +
+          "-pools $(execpath //platforms:pools.json) " +
+          "-targets $(execpath //platforms:targets.json) " +
+          "-out $(RULEDIR)/generated",
+    tools = ["//tools/xplat/cmd/xplatgen"],
+)
+
+# `bazel run //tools/xplat:update` (also run by //:update_goldens) writes the generated files into
+# bazel/platforms and this package. bazel/platforms is .bazelignore'd here (it is the separate
+# @cucina_platforms module), so its labels below only name destination paths, and freshness is
+# checked by the diff tests against the module's files instead of write_source_files' own tests.
+write_source_files(
+    name = "update",
+    check_that_out_file_exists = False,
+    diff_test = False,
+    files = {
+        "//bazel/platforms:catalog.bzl": ":generated/catalog.bzl",
+        "//bazel/platforms:cucina.bazelrc": ":generated/cucina.bazelrc",
+        "//bazel/platforms/exec:BUILD.bazel": ":generated/exec/BUILD.bazel",
+        "//bazel/platforms/test:BUILD.bazel": ":generated/test/BUILD.bazel",
+        "//tools/xplat:cucina_platforms.MODULE.bazel": ":generated/cucina_platforms.MODULE.bazel",
+    },
+)
+
+[
+    diff_test(
+        name = "fresh_%s_test" % name,
+        failure_message = "@cucina_platforms is stale: run `bazel run //tools/xplat:update`.",
+        file1 = ":generated/" + generated,
+        file2 = checked_in,
+        tags = ["tier-static"],
+    )
+    for name, generated, checked_in in [
+        ("catalog", "catalog.bzl", "@cucina_platforms//:catalog.bzl"),
+        ("bazelrc", "cucina.bazelrc", "@cucina_platforms//:cucina.bazelrc"),
+        ("exec", "exec/BUILD.bazel", "@cucina_platforms//exec:BUILD.bazel"),
+        ("test", "test/BUILD.bazel", "@cucina_platforms//test:BUILD.bazel"),
+        ("segment", "cucina_platforms.MODULE.bazel", ":cucina_platforms.MODULE.bazel"),
+    ]
+]

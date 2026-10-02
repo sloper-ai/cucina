@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Host platforms that need more than @platforms//host (selected from .bazelrc).
+# Exec/target platforms for Cucina's runners live in bazel/platforms (cross agent).
+
+# Windows hosts build with the MSVC ABI so rules_rs picks the MSVC Rust
+# toolchain (rules_rs README, "Paved Path").
+platform(
+    name = "windows_msvc",
+    constraint_values = ["@llvm//constraints/windows/abi:msvc"],
+    parents = ["@platforms//host"],
+    visibility = ["//visibility:public"],
+)

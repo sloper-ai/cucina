@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# @cucina_platforms (R-RE-1, R-XPLAT-2): //exec compile exec platforms, //test test exec platforms,
+# //apple the exec-side macOS SDK (R-XPLAT-8). Generated files: see MODULE.bazel.
+
+exports_files(
+    [
+        "catalog.bzl",
+        "cucina.bazelrc",
+        "defs.bzl",
+    ],
+    visibility = ["//visibility:public"],
+)

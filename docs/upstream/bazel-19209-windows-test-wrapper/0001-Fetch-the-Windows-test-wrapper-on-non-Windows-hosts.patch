@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Contributor <contributor@example.invalid>
+Date: Fri, 2 Oct 2026 00:00:00 +0000
+Subject: [PATCH 1/2] Fetch the Windows test wrapper on non-Windows hosts
+
+Only Windows builds of Bazel embed tools/test/tw.exe and tools/test/xml.exe.
+A test whose execution platform is Windows therefore fails on a Linux or
+macOS host ("missing input file '@@bazel_tools//tools/test:tw.exe'"), e.g.
+with remote execution on Windows workers.
+
+Keep using the embedded binaries on Windows hosts; on other hosts, point the
+test_wrapper and xml_writer filegroups at @remote_windows_test_tools, an
+archive with the two binaries that is fetched lazily (like
+@remote_coverage_tools), i.e. only when a test runs on a Windows execution
+platform.
+
+Fixes #19209 (tw.exe/xml.exe part).
+---
+diff --git a/tools/test/BUILD.tools b/tools/test/BUILD.tools
+index a2c246f..a571e42 100644
+--- a/tools/test/BUILD.tools
++++ b/tools/test/BUILD.tools
+@@ -1,4 +1,5 @@
+ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
++load("//tools:build_defs.bzl", "IS_HOST_WINDOWS")
+ load(":default_test_toolchain.bzl", "bool_flag", "empty_toolchain")
+ 
+ package(default_visibility = ["//visibility:public"])
+@@ -139,8 +140,12 @@ filegroup(
+     # have short limits on Windows.
+     # On other platforms this binary is a no-op.
+     # See https://github.com/bazelbuild/bazel/issues/5508
++    # Only Windows builds of Bazel embed tw.exe; other builds fetch it when a test runs on a
++    # Windows execution platform (https://github.com/bazelbuild/bazel/issues/19209).
+     srcs = select({
+-        "@bazel_tools//src/conditions:windows": ["tw.exe"],
++        "@bazel_tools//src/conditions:windows": [
++            "tw.exe" if IS_HOST_WINDOWS else "@remote_windows_test_tools//:tw.exe",
++        ],
+         "//conditions:default": ["dummy.sh"],
+     }),
+ )
+@@ -151,7 +156,9 @@ filegroup(
+     # paths have short limits on Windows.
+     # On other platforms this binary is a no-op.
+     srcs = select({
+-        "@bazel_tools//src/conditions:windows": ["xml.exe"],
++        "@bazel_tools//src/conditions:windows": [
++            "xml.exe" if IS_HOST_WINDOWS else "@remote_windows_test_tools//:xml.exe",
++        ],
+         "//conditions:default": ["dummy.sh"],
+     }),
+ )
+diff --git a/tools/test/extensions.bzl b/tools/test/extensions.bzl
+index f990e86..166b202 100644
+--- a/tools/test/extensions.bzl
++++ b/tools/test/extensions.bzl
+@@ -11,8 +11,8 @@
+ # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+-"""A module extension to bring in the remote coverage tools under
+-@remote_coverage_tools."""
++"""Module extensions that bring in the remote coverage tools under
++@remote_coverage_tools and the Windows test tools under @remote_windows_test_tools."""
+ 
+ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+ 
+@@ -33,3 +33,27 @@ def _remote_coverage_tools_extension_impl(ctx):
+ remote_coverage_tools_extension = module_extension(
+     implementation = _remote_coverage_tools_extension_impl,
+ )
++
++# The Windows test wrapper (tw.exe) and test XML writer (xml.exe) for tests whose execution
++# platform is Windows while Bazel runs on Linux or macOS, e.g. with remote execution
++# (https://github.com/bazelbuild/bazel/issues/19209). Windows builds of Bazel embed both binaries;
++# other builds fetch this archive only when such a test is built.
++# To publish a new version:
++# 1. On Windows, run tools/test/windows/build_and_upload_test_tools.sh (builds //tools/test:tw and
++#    //tools/test:xml and zips tw.exe and xml.exe at the archive root).
++# 2. Copy the archive to https://mirror.bazel.build/bazel_windows_test_tools/releases.
++# 3. Update this file to point to the new release.
++def _remote_windows_test_tools_extension_impl(ctx):
++    http_archive(
++        name = "remote_windows_test_tools",
++        build_file_content = 'exports_files(["tw.exe", "xml.exe"])',
++        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",  # set on upload
++        urls = [
++            "https://mirror.bazel.build/bazel_windows_test_tools/releases/windows_test_tools-v1.0.zip",
++        ],
++    )
++    return ctx.extension_metadata(reproducible = True)
++
++remote_windows_test_tools_extension = module_extension(
++    implementation = _remote_windows_test_tools_extension_impl,
++)
+diff --git a/src/MODULE.tools b/src/MODULE.tools
+index bfd503e..b96cfe0 100644
+--- a/src/MODULE.tools
++++ b/src/MODULE.tools
+@@ -26,6 +26,10 @@ use_repo(
+ remote_coverage_tools_extension = use_extension("//tools/test:extensions.bzl", "remote_coverage_tools_extension")
+ use_repo(remote_coverage_tools_extension, "remote_coverage_tools")
+ 
++# Fetched only when a test runs on a Windows execution platform and Bazel does not run on Windows.
++remote_windows_test_tools_extension = use_extension("//tools/test:extensions.bzl", "remote_windows_test_tools_extension")
++use_repo(remote_windows_test_tools_extension, "remote_windows_test_tools")
++
+ # Used by bazel mod tidy (see BazelModTidyFunction).
+ buildozer_binary = use_extension("@buildozer//:buildozer_binary.bzl", "buildozer_binary")
+ use_repo(buildozer_binary, "buildozer_binary")
+-- 
+2.47.0

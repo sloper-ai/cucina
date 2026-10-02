@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Contributor <contributor@example.invalid>
+Date: Fri, 2 Oct 2026 00:00:00 +0000
+Subject: [PATCH 2/2] launcher: define _CRT_RAND_S before including windows.h
+
+rand_s is declared by <stdlib.h> only if _CRT_RAND_S is defined first.
+MinGW-w64's <windows.h> includes <stdlib.h>, so defining the macro after
+<windows.h> leaves rand_s undeclared and the launcher fails to compile for
+*-windows-gnu targets (e.g. with an LLVM/MinGW cross toolchain on Linux or
+macOS, where Bazel builds launcher.exe from source):
+
+  launcher_util.cc:209:5: error: use of undeclared identifier 'rand_s'
+
+Define it before any system header. No change for MSVC.
+---
+diff --git a/src/tools/launcher/util/launcher_util.cc b/src/tools/launcher/util/launcher_util.cc
+index 70c8923..2f25737 100644
+--- a/src/tools/launcher/util/launcher_util.cc
++++ b/src/tools/launcher/util/launcher_util.cc
+@@ -12,13 +12,15 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++// For rand_s function, https://msdn.microsoft.com/en-us/library/sxtz2fa8.aspx
++// Must precede every system header: MinGW-w64's <windows.h> includes <stdlib.h>.
++#define _CRT_RAND_S
++
+ #ifndef WIN32_LEAN_AND_MEAN
+ #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+ 
+-// For rand_s function, https://msdn.microsoft.com/en-us/library/sxtz2fa8.aspx
+-#define _CRT_RAND_S
+ #include <fcntl.h>
+ #include <io.h>
+ #include <stdarg.h>
+-- 
+2.47.0

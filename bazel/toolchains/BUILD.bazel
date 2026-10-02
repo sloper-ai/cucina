@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Repository-wide toolchain plumbing (owned by the bazel agent).
+
+load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
+
+# An xcode_config with no versions. `.bazelrc` points --xcode_version_config at
+# it so Bazel never runs xcode-locator or reads the local Xcode: C/C++ comes from
+# hermetic-llvm (R-BUILD-2). macOS SDK placement is R-XPLAT-8 (cross agent).
+xcode_config(
+    name = "xcode_disabled",
+    visibility = ["//visibility:public"],
+)

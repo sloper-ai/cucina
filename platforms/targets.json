@@ -1,0 +1,427 @@
+{
+  "$comment": "Cucina cross-compilation targets (R-XPLAT-1): hermetic-llvm target platforms, the exec platforms that compile them and the runners that test them. Read by tools/xplat (generates @cucina_platforms = bazel/platforms), cucinactl bazelrc --cross, the e2e matrix runner and the structural test. Schema: docs/cross-compilation.md#schema. Runner property sets live in platforms/pools.json; this file only references pools and runners by name.",
+  "schemaVersion": 1,
+  "hermeticLlvm": {
+    "module": "llvm",
+    "version": "0.8.24",
+    "llvmVersion": "23.1.2"
+  },
+  "excludedPlatforms": [
+    {
+      "os": "macos",
+      "cpu": "x86_64",
+      "reason": "macOS x86_64 is excluded by the user (PROMPT.md section 13): neither a target nor an exec platform."
+    },
+    {
+      "os": "windows",
+      "cpu": "aarch64",
+      "reason": "Windows arm64 is excluded by the user (PROMPT.md section 13): neither a target nor an exec platform."
+    }
+  ],
+  "execPlatforms": [
+    {
+      "name": "linux-x86-64",
+      "label": "@cucina_platforms//exec:linux-x86-64-native",
+      "pool": "linux-x86-64",
+      "runner": "native",
+      "os": "linux",
+      "cpu": "x86_64",
+      "constraints": ["@llvm//constraints/libc:gnu.2.28"],
+      "flags": []
+    },
+    {
+      "name": "linux-aarch64",
+      "label": "@cucina_platforms//exec:linux-aarch64-native",
+      "pool": "linux-aarch64",
+      "runner": "native",
+      "os": "linux",
+      "cpu": "aarch64",
+      "constraints": ["@llvm//constraints/libc:gnu.2.28"],
+      "flags": []
+    },
+    {
+      "name": "windows-x86-64",
+      "label": "@cucina_platforms//exec:windows-x86-64-native",
+      "pool": "windows-x86-64",
+      "runner": "native",
+      "os": "windows",
+      "cpu": "x86_64",
+      "constraints": ["@llvm//constraints/windows/abi:gnullvm"],
+      "flags": []
+    },
+    {
+      "name": "macos-arm64-xcode27.0",
+      "label": "@cucina_platforms//exec:macos-arm64-xcode27.0-xcode",
+      "pool": "macos-arm64-xcode27.0",
+      "runner": "xcode",
+      "os": "macos",
+      "cpu": "aarch64",
+      "constraints": [],
+      "flags": ["--@cucina_platforms//apple:sdk_version=27.0"]
+    }
+  ],
+  "targets": [
+    {
+      "name": "aarch64-apple-darwin",
+      "aliases": ["macos_aarch64", "macos_arm64"],
+      "platform": "@llvm//platforms:macos_aarch64",
+      "os": "macos",
+      "cpu": "aarch64",
+      "libc": null,
+      "abi": null,
+      "execPlatforms": ["macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_macos_aarch64",
+        "pool": "macos-arm64-xcode27.0",
+        "runner": "xcode",
+        "mode": "native"
+      },
+      "testMode": "native",
+      "testSkip": "incompatible",
+      "coverage": "full",
+      "notes": "Compiles, links and tests on macOS VMs only (user decision); the Apple SDK is the worker image's (R-XPLAT-8, @cucina_platforms//apple). Any client may drive it. Tests run on the Xcode runner: Bazel's default test toolchain picks the first exec platform satisfying the target, which is the macOS compile exec platform (ADR 0903)."
+    },
+    {
+      "name": "x86_64-linux-gnu",
+      "aliases": ["linux_x86_64", "x86_64-unknown-linux-gnu"],
+      "platform": "@llvm//platforms:linux_x86_64_gnu.2.28",
+      "os": "linux",
+      "cpu": "x86_64",
+      "libc": "gnu.2.28",
+      "abi": "gnu",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_x86_64_gnu.2.28",
+        "pool": "linux-x86-64",
+        "runner": "native",
+        "mode": "native"
+      },
+      "testMode": "native",
+      "testSkip": "incompatible",
+      "coverage": "full",
+      "notes": "glibc 2.28 is hermetic-llvm's default (stubs + headers); binaries run on any glibc >= 2.28."
+    },
+    {
+      "name": "x86_64-linux-musl",
+      "aliases": ["linux_x86_64_musl", "x86_64-unknown-linux-musl"],
+      "platform": "@llvm//platforms:linux_x86_64_musl",
+      "os": "linux",
+      "cpu": "x86_64",
+      "libc": "musl",
+      "abi": "musl",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_x86_64_musl",
+        "pool": "linux-x86-64",
+        "runner": "native",
+        "mode": "native"
+      },
+      "testMode": "native",
+      "testSkip": "incompatible",
+      "coverage": "full",
+      "notes": "Fully static musl binaries."
+    },
+    {
+      "name": "aarch64-linux-gnu",
+      "aliases": ["linux_aarch64", "aarch64-unknown-linux-gnu"],
+      "platform": "@llvm//platforms:linux_aarch64_gnu.2.28",
+      "os": "linux",
+      "cpu": "aarch64",
+      "libc": "gnu.2.28",
+      "abi": "gnu",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_aarch64_gnu.2.28",
+        "pool": "linux-aarch64",
+        "runner": "native",
+        "mode": "native"
+      },
+      "testMode": "native",
+      "testSkip": "incompatible",
+      "coverage": "full",
+      "notes": "Tests run natively on Graviton."
+    },
+    {
+      "name": "aarch64-linux-musl",
+      "aliases": ["linux_aarch64_musl", "aarch64-unknown-linux-musl"],
+      "platform": "@llvm//platforms:linux_aarch64_musl",
+      "os": "linux",
+      "cpu": "aarch64",
+      "libc": "musl",
+      "abi": "musl",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_aarch64_musl",
+        "pool": "linux-aarch64",
+        "runner": "native",
+        "mode": "native"
+      },
+      "testMode": "native",
+      "testSkip": "incompatible",
+      "coverage": "full",
+      "notes": "Fully static musl binaries; tests run natively on Graviton."
+    },
+    {
+      "name": "riscv64-linux-gnu",
+      "aliases": ["linux_riscv64", "riscv64gc-unknown-linux-gnu"],
+      "platform": "@llvm//platforms:linux_riscv64_gnu.2.33",
+      "os": "linux",
+      "cpu": "riscv64",
+      "libc": "gnu.2.33",
+      "abi": "gnu",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_riscv64_gnu.2.33",
+        "pool": "linux-x86-64",
+        "runner": "qemu-rv64g",
+        "mode": "qemu-user"
+      },
+      "testMode": "qemu-user",
+      "testSkip": "incompatible",
+      "coverage": "build-full-test-smoke",
+      "testTimeoutScale": 10,
+      "notes": "glibc 2.33 is hermetic-llvm's riscv64 default (compiler-rt needs Linux UAPI headers >= 5.10; 2.28 is not built). rv64gc/lp64d. Tests under qemu-riscv64 on the x86-64 pool; the image provides the riscv64 glibc runtime at its multiarch paths (ADR 0305), so no QEMU_LD_PREFIX."
+    },
+    {
+      "name": "riscv64-linux-musl",
+      "aliases": ["linux_riscv64_musl", "riscv64gc-unknown-linux-musl"],
+      "platform": "@llvm//platforms:linux_riscv64_musl",
+      "os": "linux",
+      "cpu": "riscv64",
+      "libc": "musl",
+      "abi": "musl",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_riscv64_musl",
+        "pool": "linux-x86-64",
+        "runner": "qemu-rv64g",
+        "mode": "qemu-user"
+      },
+      "testMode": "qemu-user",
+      "testSkip": "incompatible",
+      "coverage": "build-full-test-smoke",
+      "testTimeoutScale": 10,
+      "notes": "Static musl; runs under qemu-riscv64 without any runtime on the worker."
+    },
+    {
+      "name": "s390x-linux-gnu",
+      "aliases": ["linux_s390x", "s390x-unknown-linux-gnu"],
+      "platform": "@llvm//platforms:linux_s390x_gnu.2.28",
+      "os": "linux",
+      "cpu": "s390x",
+      "libc": "gnu.2.28",
+      "abi": "gnu",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_s390x_gnu.2.28",
+        "pool": "linux-x86-64",
+        "runner": "qemu-s390x",
+        "mode": "qemu-user"
+      },
+      "testMode": "qemu-user",
+      "testSkip": "incompatible",
+      "coverage": "build-full-test-smoke",
+      "testTimeoutScale": 10,
+      "notes": "Big-endian. ISA property s390x is a documented Cucina extension of the REAPI lexicon (R-RE-1). Tests under qemu-s390x; glibc runtime from the image's multiarch paths (ADR 0305)."
+    },
+    {
+      "name": "s390x-linux-musl",
+      "aliases": ["linux_s390x_musl", "s390x-unknown-linux-musl"],
+      "platform": "@llvm//platforms:linux_s390x_musl",
+      "os": "linux",
+      "cpu": "s390x",
+      "libc": "musl",
+      "abi": "musl",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_s390x_musl",
+        "pool": "linux-x86-64",
+        "runner": "qemu-s390x",
+        "mode": "qemu-user"
+      },
+      "testMode": "qemu-user",
+      "testSkip": "incompatible",
+      "coverage": "build-full-test-smoke",
+      "testTimeoutScale": 10,
+      "notes": "Static musl under qemu-s390x."
+    },
+    {
+      "name": "armv7-linux-gnueabihf",
+      "aliases": ["linux_armv7", "armv7-unknown-linux-gnueabihf"],
+      "platform": "@llvm//platforms:linux_armv7_gnu.2.28",
+      "os": "linux",
+      "cpu": "armv7",
+      "libc": "gnu.2.28",
+      "abi": "gnu",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_armv7_gnu.2.28",
+        "pool": "linux-x86-64",
+        "runner": "qemu-arm-a32",
+        "mode": "qemu-user"
+      },
+      "testMode": "qemu-user",
+      "testSkip": "incompatible",
+      "coverage": "build-full-test-smoke",
+      "testTimeoutScale": 10,
+      "notes": "Hard-float with NEON (hermetic-llvm default). Tests under qemu-arm on the x86-64 pool, not on Graviton (most Graviton cores cannot execute AArch32); armhf glibc runtime from the image (ADR 0305)."
+    },
+    {
+      "name": "armv7-linux-musleabihf",
+      "aliases": ["linux_armv7_musl", "armv7-unknown-linux-musleabihf"],
+      "platform": "@llvm//platforms:linux_armv7_musl",
+      "os": "linux",
+      "cpu": "armv7",
+      "libc": "musl",
+      "abi": "musl",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_linux_armv7_musl",
+        "pool": "linux-x86-64",
+        "runner": "qemu-arm-a32",
+        "mode": "qemu-user"
+      },
+      "testMode": "qemu-user",
+      "testSkip": "incompatible",
+      "coverage": "build-full-test-smoke",
+      "testTimeoutScale": 10,
+      "notes": "Static musl under qemu-arm."
+    },
+    {
+      "name": "x86_64-windows-msvc",
+      "aliases": ["windows_x86_64_msvc", "x86_64-pc-windows-msvc"],
+      "platform": "@llvm//platforms:windows_x86_64_msvc",
+      "os": "windows",
+      "cpu": "x86_64",
+      "libc": null,
+      "abi": "msvc",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_windows_x86_64_msvc",
+        "pool": "windows-x86-64",
+        "runner": "native",
+        "mode": "native"
+      },
+      "testMode": "native",
+      "testSkip": "incompatible",
+      "coverage": "full",
+      "notes": "clang-cl + lld-link + MSVC CRT/Windows SDK (needs the EULA --repo_env flags, accepted 2026-10-01), /MD by default; the worker image ships the VC++ redistributable. Tests from Linux/macOS clients need the Windows test wrapper (R-XPLAT-4, docs/cross-compilation.md)."
+    },
+    {
+      "name": "x86_64-windows-gnu",
+      "aliases": ["windows_x86_64", "x86_64-pc-windows-gnu", "x86_64-w64-windows-gnu"],
+      "platform": "@llvm//platforms:windows_x86_64",
+      "os": "windows",
+      "cpu": "x86_64",
+      "libc": null,
+      "abi": "gnu",
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": {
+        "label": "@cucina_platforms//test:test_on_windows_x86_64",
+        "pool": "windows-x86-64",
+        "runner": "native",
+        "mode": "native"
+      },
+      "testMode": "native",
+      "testSkip": "incompatible",
+      "coverage": "full",
+      "notes": "MinGW-w64 with UCRT (hermetic-llvm default), libc++ linked statically. Tests from Linux/macOS clients need the Windows test wrapper (R-XPLAT-4)."
+    },
+    {
+      "name": "wasm32-unknown-unknown",
+      "aliases": ["none_wasm32", "wasm32"],
+      "platform": "@llvm//platforms:none_wasm32",
+      "os": "none",
+      "cpu": "wasm32",
+      "libc": null,
+      "abi": null,
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": null,
+      "testMode": "none",
+      "testSkip": "not-applicable",
+      "coverage": "build-example",
+      "notes": "Freestanding (no OS, no libc): build only; the test step is reported as not applicable (UC27). The campaign builds a hermetic-llvm e2e example, not Abseil."
+    },
+    {
+      "name": "wasm64-unknown-unknown",
+      "aliases": ["none_wasm64", "wasm64"],
+      "platform": "@llvm//platforms:none_wasm64",
+      "os": "none",
+      "cpu": "wasm64",
+      "libc": null,
+      "abi": null,
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": null,
+      "testMode": "none",
+      "testSkip": "not-applicable",
+      "coverage": "build-example",
+      "notes": "Freestanding (no OS, no libc): build only (UC27)."
+    },
+    {
+      "name": "bpfeb",
+      "aliases": ["none_bpfeb", "bpfeb-unknown-none"],
+      "platform": "@llvm//platforms:none_bpfeb",
+      "os": "none",
+      "cpu": "bpfeb",
+      "libc": null,
+      "abi": null,
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": null,
+      "testMode": "none",
+      "testSkip": "not-applicable",
+      "coverage": "build-example",
+      "notes": "Big-endian BPF object files: build only (UC27)."
+    },
+    {
+      "name": "bpfel",
+      "aliases": ["none_bpfel", "bpfel-unknown-none"],
+      "platform": "@llvm//platforms:none_bpfel",
+      "os": "none",
+      "cpu": "bpfel",
+      "libc": null,
+      "abi": null,
+      "execPlatforms": ["linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0"],
+      "test": null,
+      "testMode": "none",
+      "testSkip": "not-applicable",
+      "coverage": "build-example",
+      "notes": "Little-endian BPF object files: build only (UC27)."
+    },
+    {
+      "name": "x86_64-apple-darwin",
+      "aliases": ["macos_x86_64"],
+      "platform": "@llvm//platforms:macos_x86_64",
+      "os": "macos",
+      "cpu": "x86_64",
+      "excluded": true,
+      "reason": "macOS x86_64 is excluded by the user (PROMPT.md section 13).",
+      "execPlatforms": [],
+      "test": null,
+      "testMode": "none"
+    },
+    {
+      "name": "aarch64-windows-gnu",
+      "aliases": ["windows_aarch64"],
+      "platform": "@llvm//platforms:windows_aarch64",
+      "os": "windows",
+      "cpu": "aarch64",
+      "excluded": true,
+      "reason": "Windows arm64 is excluded by the user (PROMPT.md section 13).",
+      "execPlatforms": [],
+      "test": null,
+      "testMode": "none"
+    },
+    {
+      "name": "aarch64-windows-msvc",
+      "aliases": ["windows_aarch64_msvc"],
+      "platform": "@llvm//platforms:windows_aarch64_msvc",
+      "os": "windows",
+      "cpu": "aarch64",
+      "excluded": true,
+      "reason": "Windows arm64 is excluded by the user (PROMPT.md section 13).",
+      "execPlatforms": [],
+      "test": null,
+      "testMode": "none"
+    }
+  ]
+}
