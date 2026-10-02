@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
+
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library")
 load("//bazel:tiers.bzl", "cucina_go_test")
+load("//bazel/release:stamp.bzl", "go_version_x_defs")
 
 # Worker OS/arch targets of the agent (pure Go, CGO_ENABLED=0): EC2 Linux x86_64 and
 # Graviton, EC2 Windows, and macOS Tart VMs (`render` through `tart exec`).
@@ -32,6 +34,7 @@ go_binary(
     name = "cucina-worker-agent",
     embed = [":cucina-worker-agent_lib"],
     visibility = ["//visibility:public"],
+    x_defs = go_version_x_defs("main.version"),
 )
 
 cucina_go_test(

@@ -103,6 +103,14 @@ use_repo(
 # ---------------------------------------------------------------------------
 bazel_dep(name = "llvm", version = "0.8.24")
 
+# Break the native Windows SDK-overlay bootstrap cycle in the pinned LLVM.
+# Only construction tools omit their own overlay; target builds retain it.
+single_version_override(
+    module_name = "llvm",
+    patch_strip = 1,
+    patches = ["//third_party/llvm:windows-host-tools.patch"],
+)
+
 # ---------------------------------------------------------------------------
 # Rust: rules_rs (patched rules_rust facade) with rustc 1.98.1. Cargo.toml and
 # Cargo.lock are the source of truth; BUILD files are hand-written with
@@ -111,6 +119,12 @@ bazel_dep(name = "llvm", version = "0.8.24")
 bazel_dep(name = "rules_rs", version = "0.0.112")
 
 rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
+
+# Rust's MSVC backend speaks link.exe; hermetic-llvm's C++ driver is clang-cl.
+rules_rust.patch(
+    patches = ["//third_party/rust:msvc-lld-link.patch"],
+    strip = 1,
+)
 use_repo(rules_rust, "rules_rust")
 
 toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
@@ -188,6 +202,9 @@ use_repo(
     "protoc_gen_connect_rust",
     "tflint",
 )
+
+# Inputs of the unsigned macOS host package (//release:host_pkg, ADR 0151).
+include("//macos/pkg:deps.MODULE.bazel")
 
 # ---------------------------------------------------------------------------
 # Toolchains. Root registrations win over those of dependencies.

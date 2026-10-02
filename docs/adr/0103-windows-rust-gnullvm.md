@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 # 0103 — Windows `cucinactl` targets x86_64-pc-windows-gnullvm (MSVC fallback)
 
-* Status: accepted (2026-10-02) — fallback allowed by R-BUILD-3; revisit when rules_rs links Rust
-  for MSVC targets
+* Status: accepted (2026-10-02) — release fallback allowed by R-BUILD-3. The temporary Windows
+  CI exclusion is superseded by [ADR 0107](0107-windows-native-toolchain-compatibility.md).
 
 ## Context
 R-BUILD-3 asks for `cucinactl` for Windows x86_64 MSVC, built on Linux/macOS exec through hermetic

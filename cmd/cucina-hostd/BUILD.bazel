@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//bazel/release:stamp.bzl", "go_version_x_defs")
 
 go_library(
     name = "cucina-hostd_lib",
@@ -27,4 +28,5 @@ go_binary(
     name = "cucina-hostd",
     embed = [":cucina-hostd_lib"],
     visibility = ["//visibility:public"],
+    x_defs = go_version_x_defs("main.version"),
 )

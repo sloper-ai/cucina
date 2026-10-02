@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# LLVM 0.8.24: Windows bootstrap helpers cannot consume the VFS overlay they
+# themselves generate. stage1_hosted builds these C helpers on the exec host;
+# native Windows SDK lookup is already case-insensitive. Cross MSVC actions
+# and complete toolchains still use both generated overlays.
+diff --git a/toolchain/args/windows/msvc/BUILD.bazel b/toolchain/args/windows/msvc/BUILD.bazel
+--- a/toolchain/args/windows/msvc/BUILD.bazel
++++ b/toolchain/args/windows/msvc/BUILD.bazel
+@@ -195,34 +195,58 @@
+ cc_args(
+-    name = "sdk_library_search_paths",
++    name = "sdk_library_case_overlay",
+     actions = [
+         "@rules_cc//cc/toolchains/actions:link_actions",
+     ],
+     args = [
+         "/clang:-Xlinker",
+         "/clang:/vfsoverlay:{sdk_library_case_overlay}",
++    ],
++    data = ["//runtimes/msvc:msvc_sdk_library_case_overlay"],
++    format = {
++        "sdk_library_case_overlay": "//runtimes/msvc:msvc_sdk_library_case_overlay",
++    },
++)
++
++cc_args(
++    name = "sdk_library_paths",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:link_actions",
++    ],
++    args = [
+         "/clang:-Xlinker",
+         "/clang:/LIBPATH:{winsdk_ucrt_lib}",
+         "/clang:-Xlinker",
+         "/clang:/LIBPATH:{winsdk_um_lib}",
+     ],
+     data = [
+-        "//runtimes/msvc:msvc_sdk_library_case_overlay",
+         "//runtimes/msvc:winsdk_ucrt_lib",
+         "//runtimes/msvc:winsdk_um_lib",
+     ],
+     format = {
+-        "sdk_library_case_overlay": "//runtimes/msvc:msvc_sdk_library_case_overlay",
+         "winsdk_ucrt_lib": "//runtimes/msvc:winsdk_ucrt_lib",
+         "winsdk_um_lib": "//runtimes/msvc:winsdk_um_lib",
+     },
+ )
+
++cc_args_list(
++    name = "sdk_library_search_paths",
++    args = select({
++        "//toolchain:runtimes_none": [],
++        "//toolchain:runtimes_stage1_hosted": [],
++        "//conditions:default": ["sdk_library_case_overlay"],
++    }) + ["sdk_library_paths"],
++)
++
+ cc_args_list(
+     name = "normalized_sdk_compile_args",
+     args = [
+         "windows_sdk_compile_defines",
+-        "sdk_header_case_overlay",
++    ] + select({
++        "//toolchain:runtimes_none": [],
++        "//toolchain:runtimes_stage1_hosted": [],
++        "//conditions:default": ["sdk_header_case_overlay"],
++    }) + [
+         "sdk_includes",
+     ],
+     visibility = ["//visibility:public"],
+ )
+diff --git a/runtimes/msvc/BUILD.bazel b/runtimes/msvc/BUILD.bazel
+--- a/runtimes/msvc/BUILD.bazel
++++ b/runtimes/msvc/BUILD.bazel
+@@ -6,6 +6,7 @@
+
+ _MSVC_DYNAMIC_RUNTIME_LIBRARIES = [
+     "iso_stdio_wide_specifiers.lib",
++    "legacy_stdio_definitions.lib",
+     "msvcprt.lib",
+     "msvcrt.lib",
+     "oldnames.lib",
+@@ -15,6 +16,7 @@
+ _MSVC_STATIC_RUNTIME_LIBRARIES = [
+     "iso_stdio_wide_specifiers.lib",
++    "legacy_stdio_definitions.lib",
+     "libcmt.lib",
+     "libcpmt.lib",
+     "libvcruntime.lib",
+     "oldnames.lib",

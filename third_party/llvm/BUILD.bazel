@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+exports_files(["windows-host-tools.patch"])

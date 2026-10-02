@@ -29,6 +29,9 @@ exports_files(
         "Cargo.lock",
         ".gitleaks.toml",
         "deny.toml",
+        # Licence documents distributed by //release (ADR 0151).
+        "LICENSE.md",
+        "THIRD_PARTY_NOTICES.md",
         "rustfmt.toml",
     ],
     visibility = ["//visibility:public"],

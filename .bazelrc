@@ -20,6 +20,10 @@ common --xcode_version_config=//bazel/toolchains:xcode_disabled
 # C/C++ comes only from hermetic-llvm: never autodetect host toolchains.
 common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+# No Android targets: don't discover a runner's SDK (which CI removes to free
+# disk). rules_android's transitive registration otherwise fails during C++
+# toolchain resolution when ANDROID_HOME names a deleted or incomplete SDK.
+common --repo_env=ANDROID_HOME=
 # Prebuilt protoc through proto toolchain resolution (on by default in Bazel 9).
 common --@protobuf//bazel/toolchains:prefer_prebuilt_protoc
 # Keep .proto comments in descriptor sets so generated code carries them (and

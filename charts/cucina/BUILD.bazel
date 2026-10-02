@@ -8,5 +8,8 @@ filegroup(
         ["**"],
         exclude = ["BUILD.bazel"],
     ),
-    visibility = ["//charts/cucina:__subpackages__"],
+    visibility = [
+        "//charts/cucina:__subpackages__",
+        "//release:__pkg__",  # Packaging without making the chart a global API.
+    ],
 )

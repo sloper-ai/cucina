@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Rust's MSVC linker protocol is link.exe, not clang-cl. Use the lld-link
+# already declared as clang-cl toolchain data, preserving path mapping and
+# hermetic SDK/CRT paths while unwrapping clang-cl's forwarded linker options.
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -414,6 +414,7 @@
+     "is_direct_driver",
++    "msvc_linker",
+     "rpaths",
+     "rust_linker",
+     "target_arch",
+     "variables",
+ ])
+@@ -456,6 +457,20 @@
+             action_name = action_name,
+         )
+
++    # hermetic-llvm links C++ through clang-cl, but rustc's MSVC backend sends
++    # link.exe arguments. Its sibling lld-link is already a declared tool input.
++    msvc_linker = None
++    if toolchain.target_abi == "msvc" and cc_linker:
++        driver = cc_linker.rsplit("/", 1)[-1]
++        if driver in ("clang-cl", "clang-cl.exe"):
++            linker_path = cc_linker.removesuffix(driver) + driver.replace("clang-cl", "lld-link")
++            for tool in cc_toolchain.all_files.to_list():
++                if tool.path == linker_path:
++                    msvc_linker = tool
++                    break
++            if msvc_linker == None:
++                fail("clang-cl toolchain must declare its sibling lld-link as an input")
++
+     use_bpf_linker = toolchain.target_arch in ("bpfeb", "bpfel") and toolchain.linker
+     use_rust_linker = not cc_linker or toolchain.linker_preference == "rust" or use_bpf_linker
+     if use_rust_linker and not toolchain.linker:
+@@ -468,7 +484,8 @@
+         action_name = action_name,
+         variables = link_variables,
+         rust_linker = toolchain.linker if use_rust_linker else None,
+-        is_direct_driver = use_rust_linker and toolchain.linker_type == "direct",
++        msvc_linker = msvc_linker,
++        is_direct_driver = msvc_linker != None or (use_rust_linker and toolchain.linker_type == "direct"),
+         target_arch = toolchain.target_arch,
+         rpaths = rpaths,
+     )
+@@ -476,6 +493,8 @@
+ def _get_linker_path(linker_config):
++    if linker_config.msvc_linker:
++        return linker_config.msvc_linker.path
+     if linker_config.rust_linker:
+         return linker_config.rust_linker.path
+     return cc_common.get_tool_for_action(
+         feature_configuration = linker_config.feature_configuration,
+         action_name = linker_config.action_name,
+@@ -499,6 +517,24 @@
+             variables = linker_config.variables,
+         ))
+
++    if linker_config.msvc_linker:
++        # Retain direct link options and libraries, not compiler-only options.
++        # In particular /LIBPATH and /vfsoverlay keep the SDK hermetic on a
++        # case-sensitive exec filesystem. Rust provides its own CRT selection.
++        direct_args = []
++        forwarded = False
++        for arg in link_args:
++            if forwarded:
++                direct_args.append(arg.removeprefix("/clang:"))
++                forwarded = False
++            elif arg == "/clang:-Xlinker":
++                forwarded = True
++            elif arg.startswith(("/clang:", "--target=", "-rtlib=", "-resource-dir=")) or arg in ("/MD", "/MT", "/MDd", "/MTd"):
++                continue
++            else:
++                direct_args.append(arg)
++        return direct_args
++
+     if linker_config.rust_linker:
+         # Make sure we include RPATHs for Rust ABI dylibs even when no cc_toolchain.
+         if linker_config.variables == None and linker_config.rpaths:

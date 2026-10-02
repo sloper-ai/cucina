@@ -1,6 +1,9 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("//bazel:oci.bzl", "cucina_go_image")
 load("//bazel:tiers.bzl", "cucina_go_test")
+load("//bazel/release:stamp.bzl", "go_version_x_defs")
 
 go_library(
     name = "cucina-controller_lib",
@@ -28,6 +31,10 @@ go_binary(
     embed = [":cucina-controller_lib"],
     pure = "on",
     visibility = ["//visibility:public"],
+    x_defs = go_version_x_defs(
+        "github.com/sloper-ai/cucina/internal/controller.Version",
+        commit_var = "github.com/sloper-ai/cucina/internal/controller.Commit",
+    ),
 )
 
 # Multi-arch image (linux/amd64 + linux/arm64) on distroless static nonroot (R-BUILD-3). The STS

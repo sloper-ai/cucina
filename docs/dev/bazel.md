@@ -204,7 +204,23 @@ pinned to full commit SHAs. Jobs install Bazelisk and other tools with `jdx/mise
 `actions/cache` (the repo contents cache stays out of the saved cache). `--config=ci` sets
 `--lockfile_mode=error`: after changing `MODULE.bazel`, `go.mod` or `Cargo.lock`, run a build
 (or `bazel mod deps --lockfile_mode=update`, which records every extension) and commit
-`MODULE.bazel.lock`. Windows runs use `--output_user_root=C:/b` and long paths.
+`MODULE.bazel.lock`. Windows runs use `--output_user_root=C:/b` and long paths. All three
+OS lanes build and test `//...`, including the Windows CLI. The pinned LLVM/rules_rust
+compatibility patches are documented in [ADR 0107](../adr/0107-windows-native-toolchain-compatibility.md).
+
+Linux frees unused preinstalled SDKs before building. `.bazelrc` clears repository
+`ANDROID_HOME`: Cucina has no Android targets, and a dangling runner SDK path must not affect
+C/C++ toolchain resolution. Each build/test lane has a four-hour timeout (below the hosted
+six-hour limit). The observed macOS runner in run 37000869610 was `macos-26-arm64`; native builds
+use the runner's unversioned Xcode SDK symlink, not the production pool's Xcode 27 pin. Docker
+is not needed by these lanes.
+
+The RBE lane runs only for trusted pushes/dispatches with `CUCINA_ENDPOINT` set to a TLS
+hostname[:port] (optionally `grpcs://`-prefixed). It first builds `cucinactl` locally and installs
+its credential-helper personality outside the checkout, then scopes that helper to the endpoint
+host. GitHub OIDC is exchanged on demand; tokens are never written into `.bazelrc`. Optional
+`CUCINA_URL` selects a separate HTTPS STS discovery URL. A configured deployment and matching
+GitHub TrustPolicy are still required; a skipped RBE lane is not remote-execution evidence.
 
 ## Several agents on one machine
 
@@ -260,8 +276,9 @@ output base reaches green in ~30 s instead of ~3 min, and costs ~0.5 GB plus one
   there if `bazel build` reports `unknown repo 'rules_go'/'protobuf'/'grpc'` inside `@com_github_...`.
 * gitleaks (`//tools:gitleaks_test`) flags fake tokens/keys in tests too: build them at run time
   (e.g. sign a JWT in the test) instead of committing literals; never allowlist secret-like values.
-* Windows: Rust targets use `x86_64-pc-windows-gnullvm` (ADR 0103); the windows-latest CI lane
-  skips `//cli/...` until Rust links for MSVC.
+* Windows release binaries still use `x86_64-pc-windows-gnullvm` (ADR 0103). Native Windows
+  builds use MSVC and execute the CLI tests, with the narrowly scoped toolchain patches in
+  ADR 0107; do not restore the former CI path exclusions.
 * `bazel/platforms` is its own Bzlmod module (`@cucina_platforms`), listed in `.bazelignore`
   so `//...` doesn't load it as main-repo packages; wire it with `bazel_dep` +
   `local_path_override(path = "bazel/platforms")`.

@@ -36,30 +36,22 @@ jobs:
           fetch-depth: 0
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
-          install_args: go rust golangci-lint gitleaks
+          install_args: go rust golangci-lint gitleaks cargo-deny actionlint shellcheck
       - name: gitleaks (full history, §12)
         run: gitleaks git --no-banner --redact --config .gitleaks.toml --exit-code 1 .
       - name: golangci-lint
         run: golangci-lint run ./...
       - name: cargo-deny
-        run: mise exec cargo-deny@0.20.2 -- cargo-deny --all-features check
+        run: cargo-deny --all-features check
       - name: actionlint
-        run: mise exec actionlint@1.7.12 shellcheck@0.11.0 -- actionlint
+        run: actionlint
 
   test:
     name: bazel test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            targets: //...
-          - os: macos-latest
-            targets: //...
-          # Rust can't link MSVC-flavoured exec tools yet (ADR 0103); Windows Rust
-          # binaries are cross-built (gnullvm) in the Linux job instead.
-          - os: windows-latest
-            targets: //... -//cli/... -//tools/hello/rust/...
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 240
     defaults:
@@ -100,9 +92,9 @@ jobs:
           restore-keys: |
             bazel-${{ runner.os }}-${{ runner.arch }}-
       - name: bazel build
-        run: bazelisk build --config=ci -- ${{ matrix.targets }}
+        run: bazelisk build --config=ci -- //...
       - name: bazel test
-        run: bazelisk test --config=ci -- ${{ matrix.targets }}
+        run: bazelisk test --config=ci -- //...
       - name: cross-build Rust release targets (Linux musl, Windows gnullvm)
         if: runner.os == 'Linux'
         run: |
@@ -142,27 +134,46 @@ jobs:
 
   rbe:
     name: bazel test via Cucina RBE
-    if: vars.CUCINA_ENDPOINT != ''
+    # Only trusted pushes/dispatches receive an OIDC token; never PR or merge-queue code.
+    if: vars.CUCINA_ENDPOINT != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # GitHub OIDC -> Cucina STS (R-AUTH-7)
+    env:
+      # Optional when STS discovery is not at https://<remote-executor-host>.
+      CUCINA_URL: ${{ vars.CUCINA_URL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           install_args: bazelisk
+      - name: build the credential helper locally (no remote bootstrap dependency)
+        run: |
+          bazelisk build --config=ci //cli/cucinactl
+          bin="${RUNNER_TEMP}/cucina-bin"
+          mkdir -p "${bin}"
+          install -m 0755 bazel-bin/cli/cucinactl/cucinactl "${bin}/cucinactl"
+          "${bin}/cucinactl" credential-helper install --dir "${bin}"
       - name: configure Cucina remote execution
         env:
           CUCINA_ENDPOINT: ${{ vars.CUCINA_ENDPOINT }}
-        # TODO(cli agent, R-AUTH-7/R-AUTH-8): build cucinactl, install it as
-        # tools/cucina-credential-helper (argv[0] dispatch) and let
-        # `cucinactl bazelrc --platform linux` write these lines instead.
+        # The helper gets fresh GitHub OIDC credentials from the client environment;
+        # no bearer token, login cache or GitHub token is written into the rc file.
         run: |
+          endpoint="${CUCINA_ENDPOINT#grpcs://}"
+          case "${endpoint}" in
+            ''|*/*|*@*|*\[*|*\]*|*[[:space:]]*)
+              echo 'CUCINA_ENDPOINT must be a TLS hostname[:port], optionally prefixed by grpcs://' >&2
+              exit 1
+              ;;
+          esac
+          host="${endpoint%%:*}"
           {
-            echo "build:cucina --remote_executor=grpcs://${CUCINA_ENDPOINT}"
-            echo "build:cucina --credential_helper=${CUCINA_ENDPOINT}=%workspace%/tools/cucina-credential-helper"
+            echo "build:cucina --remote_executor=grpcs://${endpoint}"
+            echo "build:cucina --credential_helper=${host}=${RUNNER_TEMP}/cucina-bin/cucina-credential-helper"
+            echo 'build:cucina --platforms=@cucina_platforms//exec:linux-x86-64-native'
           } >> user.bazelrc
       - name: bazel test //... (remote)
         run: bazelisk test --config=ci --config=cucina-ci //...
