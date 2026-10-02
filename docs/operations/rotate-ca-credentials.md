@@ -24,7 +24,7 @@ The chart's alerts (`monitoring.prometheusRules`) fire for every role below `thr
 
 ## 1. Rotate the Cucina CA (two-root bundle)
 
-The CA is rotated in three phases. At no point is there a moment when a verifier trusts only one of the two CAs, so no connection breaks. The phases are implemented in `internal/pki` (`RotateCA`) and described with their waiting times in
+The CA is rotated in three phases: distribute trust in both roots before using the new signer, then retire the old root only after its leaves are gone. The phases are implemented in `internal/pki` (`RotateCA`) and described with their waiting times in
 [`docs/security.md`](../security.md#ca-rotation-two-root-bundle--runbook-inputs). A CA managed by cert-manager is rotated with cert-manager instead (introduce the new root into the bundle, then follow the same waiting, restart and verification steps).
 
 > **Planned: no operator trigger yet.** The phase functions exist, but no controller subcommand, chart hook or `cucinactl` command calls them. Until one does, this section is the specification of each phase (what it changes in the `cucina-ca` Secret, what to wait for, how to verify), not a procedure you can run end to end. Starting a rotation by hand-editing the Secret is not supported.
@@ -32,10 +32,15 @@ The CA is rotated in three phases. At no point is there a moment when a verifier
 ### Before you start
 
 ```sh
-kubectl -n cucina get secret cucina-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > ca-bundle.pem
-awk '/BEGIN CERT/{n++} {print > ("ca-" n ".pem")}' ca-bundle.pem
-for f in ca-*.pem; do openssl x509 -in "$f" -noout -subject -enddate -fingerprint -sha256; done     # one certificate now, two during a rotation
+umask 077
+mkdir -p -m 700 "$HOME/.config/cucina"
+PKI_DIR=$(mktemp -d "$HOME/.config/cucina/pki-check.XXXXXX")
+kubectl -n cucina get secret cucina-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > "$PKI_DIR/bundle.pem"
+awk -v dir="$PKI_DIR" '/BEGIN CERT/{n++} n {print > (dir "/ca-" n ".pem")}' "$PKI_DIR/bundle.pem"
+for f in "$PKI_DIR"/ca-[0-9]*.pem; do openssl x509 -in "$f" -noout -subject -enddate -fingerprint -sha256; done
 ```
+
+One certificate before rotation, two after introduce. After introduce, repeat the fetch/split into a fresh `PKI_DIR` and record the fingerprints: the appended `ca-2.pem` is CA2. Keep these files outside the checkout. Issuer names alone do not identify a root (both CAs can have the same subject).
 
 The CA Secret holds `ca.crt` (the trust bundle), `ca.key` (the active issuing key) and, between the first two phases, `next.key`. Make sure nothing else is changing (no image rollout, no chart upgrade) and that every Mac host is Online (`cucinactl hosts list`), because hosts receive the new bundle when they renew.
 
@@ -58,7 +63,8 @@ Wait for the longest of these (about five days unless you make hosts renew earli
 CA2 becomes the signer (`ca.key` = the staged key, `next.key` is removed); both roots stay trusted. The rotator re-issues every server and controller certificate within about ten minutes, and Buildbarn reloads them without a restart. Verify:
 
 ```sh
-openssl s_client -connect <client endpoint>:443 -servername <host> </dev/null 2>/dev/null | openssl x509 -noout -issuer      # issued by CA2
+kubectl -n cucina get secret cucina-controller-client -o jsonpath='{.data.tls\.crt}' | base64 -d > "$PKI_DIR/controller-client.pem"
+openssl verify -CAfile "$PKI_DIR/ca-2.pem" "$PKI_DIR/controller-client.pem"   # verify against CA2, not just its subject name
 cucinactl status                     # components healthy
 helm test cucina -n cucina           # uses the break-glass key unless hooks.test.credentialSecret is set (see section 3)
 ```
@@ -117,9 +123,9 @@ start signing with it, keep the old key published for the maximum token lifetime
 
 * **The break-glass key.** Once OIDC administrators exist, **revoke** it: `cucinactl keys revoke <key id> --reason "OIDC admins in place"`, where the id is the `key-id` entry of the `cucina-break-glass` Secret. Setting `auth.breakGlass.enabled=false` only stops the chart from generating a key: a key that is already registered keeps working (with the built-in all-verbs policy when no break-glass TrustPolicy exists), so disabling it in the values does not end access. A revoked break-glass key stays revoked across upgrades.
 
-  `helm test` authenticates with the break-glass key by default. After revoking it, give the test a service-account key of its own (a Secret with the key in the entry `key`) with `--set hooks.test.credentialSecret=<secret>`, or turn the test off.
+  `helm test` and the controller's five-minute cache canary authenticate with the break-glass key by default. Before revoking it, give both a restricted service-account key of their own (a Secret with the key in entry `key`) and set `hooks.test.credentialSecret` in your values. Disabling the Helm test does not disable the in-process canary.
 * **The registry credential for macOS images** (a read-only package credential held by the controller): create the replacement, update the Secret the chart references, then revoke the old credential at the registry. Hosts receive credentials at pull time; nothing is stored in profiles or images.
-* **The service-key pepper** cannot be rotated in place: rotating it invalidates every service key, so create replacement keys first.
+* **The service-key pepper** has no supported in-place rotation procedure. Changing it invalidates every service key, including replacements created under the old pepper. Preserve it during signing-key rotation. An emergency replacement needs a separately verified OIDC administrator path and reissuance of service keys under the new pepper; do not improvise it by deleting the signing Secret.
 
 ## Verify
 

@@ -14,7 +14,7 @@ bypassed (`--no-verify`, `git commit --amend`, a clone without the hooks), and c
   can run `commit <rev>`.
 * **Two classifiers, both in awk.** `classify-diff.awk` reads `git diff -U0` for Go, Rust, goldens, scenarios and checklists; `classify-build.awk` reads the old and the
   new content of every changed BUILD file, statement by statement, so a test target is compared with its old self (a marker added, a tier changed, a target removed)
-  wherever it sits, list comprehensions included; targets are matched by name over all changed BUILD files, so moving a target or a whole file neither removes it nor hides a marker added on the way. Both are heuristics, listed in `TESTING.md` section 6.2: a test source file deleted (a rename is not a deletion);
+  wherever it sits, list comprehensions included. Compact rules parse the name attribute separately from following attributes. Targets match by package and name first; unmatched, uniquely named targets can match across files as moves, without mixing same-named tests from different packages. Both are heuristics, listed in `TESTING.md` section 6.2: a test source file deleted (a rename is not a deletion);
   a golden or scenario file deleted or with any line removed (appending is fine); a skip marker added to a test that already exists (`t.Skip*` outside `test/e2e`,
   `#[ignore]`, `"manual"`/`"quarantine"`/`@platforms//:incompatible`/`flaky = True` on a test rule); a test target moved to another tier or removed; more test cases removed than
   added; more than ten net lines removed from test sources (`CUCINA_TEST_SHRINK_LINES`); a manual checklist deleted.
@@ -27,8 +27,7 @@ bypassed (`--no-verify`, `git commit --amend`, a clone without the hooks), and c
   Merge commits and `fixup!`/`squash!`/`amend!` commits are not judged: the commits they bring in are, and a fixup is folded into a commit that carries its own message.
 * **CODEOWNERS** puts tests, goldens, scenarios, manual checklists and the policy files themselves (hooks, lint configuration, tier macros) under
   a maintainer's review, so the last line of defence is a human reading the diff.
-* **Every rule is proved load-bearing.** `tools/ci/test-githooks.sh` has one case per pattern; `tools/ci/mutate-hooks.sh` deletes each pattern and condition of the hooks in turn,
-  runs the suites against the mutant and fails if one survives.
+* **Mutation evidence for the listed rules.** `tools/ci/test-githooks.sh` exercises detection patterns; `tools/ci/mutate-hooks.sh` disables its explicitly listed patterns and conditions and fails if one survives. A comment-only control must survive. Stale mutations, empty selections, setup errors and incomplete results fail the sweep rather than count as caught mutants. This finite list does not prove detection of every possible semantic weakening.
 * The pre-push hook is separate and is about hygiene (secrets and environment identifiers), not about tests. It scans the commits no remote-tracking branch has, with
   gitleaks and `hygiene.sh`, and judges each identifier on its own: documentation placeholders (account `123456789012` and the like, the RFC 5737 addresses) are allowed, and one
   does not shield a real identifier on the same line.

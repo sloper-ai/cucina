@@ -59,9 +59,11 @@ classify_text() {
 # spdx_allowed <policy.json> <expression>: every identifier of an " AND " list is allowed.
 # policy.json holds {"allowed": ["Apache-2.0", ...]}; read without jq so that the tests need no tools.
 spdx_allowed() {
-    local policy="$1" expr="$2" id allowed
-    allowed="$(sed -n '/"allowed"/,/\]/p' "$policy")"
+    local policy="$1" expr="$2" id allowed count=0
+    allowed="$(sed -n '/"allowed"/,/\]/p' "$policy")" || return 1
     for id in $(printf '%s' "$expr" | sed 's/ AND / /g'); do
         printf '%s\n' "$allowed" | grep -Fq "\"$id\"" || return 1
+        count=$((count + 1))
     done
+    [ "$count" -gt 0 ]
 }

@@ -12,10 +12,10 @@ path produces a clear message, and that alerts fire. If a game day disagrees wit
 ## Safety
 
 * Use a **staging** deployment in a **non-production AWS account or region**, with a small `max` on the pools under test and a `dailyInstanceHourCap` as a spend ceiling.
-* The faults target only the **controller's IAM role** (the identity that calls `RunInstances`, `CreateFleet`, `DescribeInstances` and `TerminateInstances`: the Pod Identity or IRSA role on EKS, or the node's role on a k3s test cluster). Nothing else in the account is affected.
+* Target the **controller's IAM role** (Pod Identity or IRSA on EKS, the node's role on a k3s test cluster). Faults affect **every caller using that role**, not only the controller process. Use a dedicated role, or verify that a shared test-node role is not used by unrelated workloads before targeting it.
 * Every experiment has a **duration** (at most 15 minutes) and a stop condition. Know how to stop it (below) before you start it.
 * Announce it, and have someone watching the dashboards. Agree beforehand who aborts.
-* FIS bills per action-minute; it is cheap, but check the current pricing.
+* FIS bills per action-minute, separately from any EC2 resources the test launches. Check current pricing and cap both action duration and pool capacity.
 
 ## Preparation
 
@@ -23,7 +23,7 @@ path produces a clear message, and that alerts fire. If a game day disagrees wit
 2. **Find the controller role** and keep its ARN. With IRSA it is the role annotation on the service account (`kubectl -n cucina get sa cucina-controller -o jsonpath='{.metadata.annotations}'`). With EKS Pod Identity there is no annotation: look up the association instead
    (`aws eks list-pod-identity-associations --cluster-name <cluster> --namespace cucina --service-account cucina-controller --region $REGION --query 'associations[].associationId' --output text`, then
    `aws eks describe-pod-identity-association --cluster-name <cluster> --association-id <id> --region $REGION --query association.roleArn --output text`). On a test k3s cluster it is the node's instance-profile role.
-3. **A stop condition (recommended).** A CloudWatch alarm on something that means "too much": the number of instances in the cluster tag, or `cucina_invariant_violations_total` above zero. Use `{"source": "none"}` only for short experiments you are actively watching.
+3. **A stop condition (recommended).** Use a CloudWatch alarm with a verified metric feed, such as a custom count of the test cluster's instances. Cucina's Prometheus metrics are **not automatically CloudWatch metrics**: an invariant-based stop alarm needs an exporter and a tested alarm path first. `{"source": "none"}` provides no automatic alarm stop; use it only for a short, actively supervised experiment.
 4. **Prepare the observation.** Open the Cucina overview dashboard, and in a terminal: `watch -n 10 'cucinactl pools describe <pool>'`.
 
 ## Experiment 1: insufficient capacity

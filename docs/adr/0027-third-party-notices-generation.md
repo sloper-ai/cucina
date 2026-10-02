@@ -16,7 +16,7 @@ release is old, and adding a tool needs justification.
 * A small classifier (`lib.sh`) recognises the licence of each Go module from distinctive sentences. It decides the table entry and the policy check
   (`policy.json`); the full text is always reproduced, so a misclassification cannot drop an attribution. An unknown or disallowed licence, or a module with
   no licence file, fails the run.
-* Apache-2.0 text is reproduced once; NOTICE files are reproduced per module; every other distinct text is reproduced as is.
+* Each distinct full licence text is reproduced, including Apache-2.0 appendices with project-specific copyright notices. Only byte-identical licence texts are deduplicated; NOTICE files are reproduced with their associated modules. Generation fails without replacing the output if any dependency cannot be accounted for.
 * The output has no timestamps. `generate.sh --check` fails when the committed file is stale.
 
 ## Consequences

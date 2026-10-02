@@ -65,9 +65,9 @@ build_sections() {
         esac
         {
             printf '\037OLD\t%s\n' "$file"
-            blob "$old" "$file"
+            blob "$old" "$file" || return 2
             printf '\n\037NEW\t%s\n' "$file"
-            blob "$new" "$file"
+            blob "$new" "$file" || return 2
             printf '\n'
         } >>"$tmp/builds" || return 2
     done <"$tmp/names"

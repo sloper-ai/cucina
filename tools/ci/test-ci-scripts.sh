@@ -327,6 +327,11 @@ expect "a table row without an alert fails" fail "$ar" --rules "$tree/rules.yaml
 mentions "the refusal names the stale row" "CucinaGone"
 expect "a missing rule file is an error" fail "$ar" --rules "$tree/none.yaml" --readme "$tree/README.md"
 
+# R-TEST-5: an empty/broken mutation invocation must never report success.
+mut="$here/mutate-hooks.sh"
+expect "an empty mutation selection fails closed" fail env CUCINA_HOOKS_DIR="$work" "$mut" --only no-such-mutation
+expect "an invalid mutation job count is refused" fail env CUCINA_HOOKS_DIR="$work" "$mut" --jobs invalid --only no-such-mutation
+
 # ----------------------------------------------------------------- adr-index
 
 a="$here/adr-index.sh"

@@ -19,7 +19,7 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# The hooks against throwaway repositories. Three targets keep each under the integration budget.
+# The hooks against throwaway repositories. Split by concern to fit the integration budget.
 # (tools/ci/mutate-hooks.sh, which deletes every rule in turn and runs these suites, takes minutes and is run by hand.)
 [
     cucina_sh_test(
@@ -38,9 +38,14 @@ filegroup(
         tier = "integration",
     )
     for suite in [
-        "commit-msg",  # the Test-Change rules end to end: as a hook, as a history check, failing closed
-        "rules",  # one case per pattern of the classifiers
-        "pre-push",  # the secret and environment-identifier scans
+        "commit-msg-policy",  # Test-Change acceptance/refusal through the real hook
+        "commit-msg-robustness",  # trailer parsing and fail-closed behavior
+        "commit-msg-environment",  # history, user configuration and large renames
+        "rules-sources",  # source paths, goldens, Go/Rust skips
+        "rules-build",  # test target visibility, tiers, removals and moves
+        "rules-cases",  # net case/line removal and manual checklist deletion
+        "pre-push-transport",  # outgoing ranges, gitleaks and scanner integration
+        "pre-push-hygiene",  # identifier shapes, exceptions and fork/history behavior
     ]
 ]
 

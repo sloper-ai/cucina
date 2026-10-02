@@ -4,6 +4,8 @@
 **Use when** you put a new worker image (an AMI) into service, or take a bad one out. The same mechanism serves Linux (x86_64 and arm64) and Windows pools; Tart images follow the same generation logic ([new Xcode, Visual Studio or OS release](new-xcode-vs-os-release.md)).
 **Severity:** Planned (a rollback to a known-good image is a Page when workers are failing). **Time:** the build takes the longest (Windows can take over an hour); the rollout itself is minutes.
 
+Cold-start times below are planning references, not a measured guarantee for these images. Record your actual launch-to-first-action times during the smoke test and compare them with the acceptance targets.
+
 ## How a rollout works
 
 A new image version starts a new **pool generation**. Every AMI carries `cucina:image-version` and `cucina:generation` tags. Once the pool resolves the new image:

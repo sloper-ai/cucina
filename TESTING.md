@@ -46,7 +46,7 @@ scenario IDs (`T0`…`T22`). The macros in [`bazel/tiers.bzl`](bazel/tiers.bzl) 
 | --- | --- | --- | --- | --- |
 | `static` | `small`, `tier-static` | As Bazel tests: compile, `go vet`/nogo, rustfmt, buildifier, `buf` lint, `kubeconform -strict`, `values.schema.json`, type-checked Buildbarn config rendering, drift checks of generated code. Beside Bazel: golangci-lint, cargo-deny, gitleaks (full history) and actionlint in the CI `lint` job; clippy with `bazelisk build --config=clippy`; `tofu validate` and tflint in `deploy/aws-e2e/tests/run.sh`. Planned: `buf` breaking checks, and clippy and the OpenTofu checks as CI jobs | Every change (the Bazel tests and the `lint` job) | `cucina_sh_test(tier = "static")`, or `tags = ["tier-static"]` on third-party test macros |
 | `unit` | `small`, `tier-unit`: under 1 s, no I/O, no sleeps, one process | Pure cores: the autoscaler `Plan`, VM and instance state machines, trust-policy evaluation, token mint and verify, config rendering (goldens), platform and `bazelrc` generation, the cost model, the credential-helper protocol, managed-preferences parsing. Property-based where the input space is large | `bazel test //...` | `cucina_go_test(tier = "unit")`, `cucina_rust_test(tier = "unit")` |
-| `integration` | `medium`, `tier-integration`: under 30 s, localhost only | Real components at our boundaries against **fakes**: envtest reconcilers with fake Compute, VMRuntime and BuildQueue; the STS against `mock-oauth2-server`; the pinned Buildbarn binaries booted with rendered configuration (an action round trip); `cucinactl` against fake management and REAPI servers; hostd against a fake `tart`; network faults; conformance suites against the fakes | `bazel test //...` (cheap on RBE) | `cucina_go_test(tier = "integration", envtest = True)` |
+| `integration` | `medium`, `tier-integration`: under 30 s, localhost only | Real components at our boundaries against **fakes**: envtest reconcilers with fake Compute, VMRuntime and BuildQueue; the STS against the local `internal/auth/oidctest` issuer fixtures; the pinned Buildbarn binaries booted with rendered configuration (an action round trip); `cucinactl` against fake management and REAPI servers; hostd against a fake `tart`; network faults; conformance suites against the fakes | `bazel test //...` (cheap on RBE) | `cucina_go_test(tier = "integration", envtest = True)` |
 | `simulation` | `large`, `manual`, `tier-simulation` | Deterministic simulation of the controller: scenario files, a nightly 1,000-seed sweep, trace replay | Nightly (the CI `nightly` job); planned: also on pull requests that touch scaling or lifecycle code | `cucina_go_test(tier = "simulation")` |
 | `system` | `large`, `manual`, `requires-docker`, `no-remote-exec` | Planned, no target exists yet: kind with Helm install and upgrade from the previous release, RBAC, leader election, `ct install`. The only tier that may use Docker, in its own CI lane, never on RBE | Planned: nightly, and on pull requests that touch the chart or RBAC | `cucina_go_test(tier = "system")` |
 | `acceptance` | `enormous`, `manual`, `no-remote-exec` | The real AWS and Mac campaign (T0–T22) as scenarios in the e2e harness | Campaign, release, on demand | `cucina_scenario(...)` |
@@ -63,7 +63,7 @@ Running them:
 bazelisk test //...                                       # everything that gates a merge
 bazelisk test //... --test_tag_filters=tier-unit,-quarantine   # one tier (tier-static, tier-integration); keep -quarantine, a command-line filter replaces the one in .bazelrc
 bazelisk test --config=nightly <simulation or quarantined targets>   # nightly lane
-bazelisk test --config=e2e //test/e2e:<scenario>          # real environments, never cached, never remote
+bazelisk run //test/e2e:scenario -- --env=<env> --id=<id>    # explicit real-environment run; see §11.7
 ```
 
 ## 3. The admission rule
@@ -97,7 +97,7 @@ Do not write tests for:
 
 | Pattern | Enforced by | State |
 | --- | --- | --- |
-| `time.Sleep` in Go tests | `forbidigo` in [`.golangci.yml`](.golangci.yml) (type-aware, `_test.go` only). Use a fake clock (`fakes.NewClock`) or `testing/synctest` and wait with `<-time.After(d)` | configured and run by the CI `lint` job; the tree still has findings to clear (for example `time.Sleep` inside `synctest` bubbles: wait with `<-time.After` there too) |
+| `time.Sleep` in Go tests | `forbidigo` in [`.golangci.yml`](.golangci.yml) (type-aware, `_test.go` only). Use a fake clock (`fakes.NewClock`) or `testing/synctest` and wait with `<-time.After(d)` | enforced by the CI `lint` job; applies inside `synctest` bubbles too |
 | Sleeps in Rust tests | review. Use `tokio::time::pause` / `#[tokio::test(start_paused = true)]`, which needs tokio's `test-util` feature in the crate's `[dev-dependencies]` (no crate enables it yet) | review |
 | Mock frameworks on owned ports | `depguard` in [`.golangci.yml`](.golangci.yml) bans `gomock` (both import paths), `mockery` and `testify/mock`; [`deny.toml`](deny.toml) bans `mockall` | active |
 | Docker in the unit, integration and simulation tiers | `depguard` bans `testcontainers-go`; only the `system` tier carries `requires-docker` | active |
@@ -147,8 +147,7 @@ in [`.githooks/lib/classify-diff.awk`](.githooks/lib/classify-diff.awk) and [`cl
    running in a plain `bazelisk test //...`).
 8. **Removes a test target** from a BUILD file without adding another (the targets are matched by name over all changed BUILD files, so moving one is fine).
 
-A check that cannot run never passes: an unknown revision, a failing `git` or `awk`, or an unclassifiable diff makes the hook exit 2 and refuse
-the commit, trailer or not. User configuration (`diff.noprefix`, colours, an external diff driver, textconv) does not change what the check sees.
+An unknown revision or a failure while obtaining the diff, reading BUILD blobs or running the classifier makes the hook refuse the commit even with a trailer (exit 2 for these verification failures). The classifiers remain heuristics, not full Go, Rust or Starlark parsers. User configuration (`diff.noprefix`, colours, an external diff driver, textconv) does not change what the check sees.
 
 Write the reason as one sentence that says why this is not a weaker test, in the last paragraph of the message
 (`git commit --trailer "Test-Change: …"` adds it):
@@ -168,13 +167,14 @@ How it is enforced, in layers (each layer is cheap; none is the only one):
 * **CI** repeats the check on every commit of a pull request
   (`.githooks/lib/test-change.sh range origin/main..HEAD`; wiring into the workflow is planned). This also covers `--amend`, which the hook can
   only check against the commit being amended. Merge commits are not judged: the commits they bring in are.
-* **CODEOWNERS** ([`.github/CODEOWNERS`](.github/CODEOWNERS)) routes every change to tests, testdata, goldens, scenarios, manual
-  checklists and the policy files themselves (hooks, lint configuration, tier macros) to a maintainer.
+* **CODEOWNERS** ([`.github/CODEOWNERS`](.github/CODEOWNERS)) routes changes to tests, testdata, goldens, scenarios, manual
+  checklists, BUILD declarations and policy files (hooks, lint configuration, tier macros, workflows) to a maintainer.
+  Repository administrators must require code-owner review in branch protection for this to block merging; the file alone only requests review.
 * The heuristics cannot see a semantic weakening that keeps the line count (loosening an assertion). Review and mutation testing (§8) cover that.
 
 The hooks are tested by [`tools/ci/test-githooks.sh`](tools/ci/test-githooks.sh): the `rules` suite has one case per pattern, and
-[`tools/ci/mutate-hooks.sh`](tools/ci/mutate-hooks.sh) proves that each rule is load-bearing by deleting every pattern and every condition in turn
-(a mutant that survives is a rule without a test; run it when you change the hooks).
+[`tools/ci/mutate-hooks.sh`](tools/ci/mutate-hooks.sh) checks the listed detection patterns and decision conditions with explicit mutants.
+It rejects stale mutations, incomplete runs and setup failures, and a comment-only control must survive. Run it when you change the hooks; this finite sweep is evidence for those mutations, not proof that every possible weakening is detected.
 
 ### 6.3 Public-repository hygiene
 
@@ -344,24 +344,26 @@ uses goroutines and timers, run the test inside `synctest.Test(t, func(t *testin
 
 ### 11.2 A unit test (Rust)
 
+Use the public pure core with an explicit time input rather than waiting for a file-backed cache or a timer:
+
 ```rust
 // SPDX-License-Identifier: FSL-1.1-ALv2
+use cucinactl::auth::token::{CachedToken, RENEW_BEFORE_SECS};
+use cucinactl::config::AuthMethod;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    // Guards: R-AUTH-8 — the helper renews when fewer than five minutes remain.
-    // Paused time needs tokio's `test-util` feature in the crate's [dev-dependencies].
-    #[tokio::test(start_paused = true)]
-    async fn renews_before_expiry() {
-        let mut cache = TokenCache::with_token(token_expiring_in(Duration::from_secs(600)));
-        tokio::time::advance(Duration::from_secs(301)).await;
-        assert!(cache.needs_renewal());
+// Guards: R-AUTH-6/8 — the renewal margin is applied at the five-minute boundary.
+#[test]
+fn cached_token_renewal_boundary() {
+    let token = CachedToken::from_access_token(
+        "synthetic-not-a-jwt".into(), Some(600), 1_000, AuthMethod::Oidc,
+    );
+    for (now, reusable) in [(1_000, true), (1_300, true), (1_301, false)] {
+        assert_eq!(token.valid_for(now, RENEW_BEFORE_SECS), reusable);
     }
 }
 ```
+
+For genuinely asynchronous code, `#[tokio::test(start_paused = true)]` and `tokio::time::advance` require tokio's `test-util` feature in the crate's `[dev-dependencies]`; it is not enabled in the current manifests. Do not add sleeps instead.
 
 ```starlark
 load("//bazel:tiers.bzl", "cucina_rust_test")
@@ -544,8 +546,8 @@ Some behaviour is better guarded at runtime than before merge. Each guard gets *
 | Fail fast on configuration | Parse into types at startup and exit non-zero with a precise message; CRD CEL rules; `values.schema.json`; permission self-checks at startup; a protocol-version handshake between hostd and the controller |
 | Invariants stay on in production | Predicates in [`invariants/`](invariants) (instances never exceed max, at most two macOS VMs per host, never terminate a busy worker, every launched resource is tagged, no duplicate launch for one idempotency token) are called by the controller *and* the simulation. A violation aborts the operation, increments `cucina_invariant_violations_total{invariant}`, logs, alerts, and crashes the component if its state is suspect |
 | Crash-only components | Restarts are the recovery mechanism (level-triggered reconcilers, launchd `KeepAlive`); acceptance scenario T9 proves it once |
-| SLO burn-rate alerts | Rules generated from [`slo/`](slo) (Sloth) and unit-tested with `promtool test rules`: queue time, cold start, scale-in leaks, orphans, egress anomalies, cache-hit drops, retention below the Bazel TTL, host offline, certificate expiry |
-| Canaries | The cache canary (`cucina-controller canary cache`: STS exchange, a CAS and AC round trip; it starts no workers) runs in `helm test` after each install and upgrade. Planned: the same canary every 5 minutes as a CronJob, and the execution canary per pool daily and after each deploy (a tiny uncached action, including scale from zero) |
+| Alerts and SLO budgets | The chart ships threshold alerts for queue time, worker failures, leaks, orphans, egress, cache-hit drops, retention, host offline and certificate expiry, plus Sloth-generated burn-rate rules. See the exact [alert/runbook table](docs/operations/README.md#find-the-runbook-from-an-alert); do not assume every threshold alert is a multi-window SLO burn-rate alert. Keep the generated rules aligned with [`slo/`](slo) and test them with `promtool test rules` |
+| Canaries | The leader runs the cache canary every five minutes in-process (`internal/controller/components_canary.go`); `helm test` runs it on demand. It exchanges a token and checks CAS/AC without starting workers. Both need a usable service key (`hooks.test.credentialSecret` after retiring break-glass). Execution probes exist in `internal/canary`, but daily/per-deploy scheduling and a chart-managed CronJob are still planned; do not claim those cadences are active |
 | Shadow mode | A change of autoscaler policy first decides without acting and is diffed against the current policy |
 | Game days | AWS FIS injects real capacity errors and throttling into the controller's role: [`docs/operations/game-days-fis.md`](docs/operations/game-days-fis.md) |
 

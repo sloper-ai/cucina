@@ -60,6 +60,8 @@ check_policy allowed "permissive licences are allowed" "Apache-2.0 AND MIT"
 check_policy refused "GPL is refused" "GPL"
 check_policy refused "an unknown licence is refused" "UNKNOWN"
 check_policy refused "one refused licence in a list refuses the list" "MIT AND LGPL"
+check_policy refused "an empty expression fails closed" ""
+check_policy refused "whitespace is not a licence expression" "   "
 
 echo
 echo "$passed passed, $failed failed"

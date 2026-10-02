@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: FSL-1.1-ALv2
 #
-# mutate-hooks.sh: prove that every rule of the git hooks is load-bearing
+# mutate-hooks.sh: mutation-check the listed git-hook detection rules
 # (TESTING.md, "Mutation testing"; ADR 0025).
 #
 # For each mutant - one pattern, alternative or condition of the files in
@@ -44,6 +44,10 @@ while [ "$#" -gt 0 ]; do
         ;;
     esac
 done
+
+case "$jobs" in
+'' | *[!0-9]* | 0) printf 'mutate-hooks: --jobs must be a positive integer\n' >&2; exit 2 ;;
+esac
 
 m_file=()
 m_suites=()
@@ -161,8 +165,9 @@ define_mutants() {
     mutant "$b" "$cls" 'sub(/(^|[ \t])#.*$/, "", s)' 'sub(/[ \t]#.*$/, "", s)'
     mutant "$b" "$cls" 'sub(/(^|[ \t])#.*$/, "", s)' 'sub(/(^)#.*$/, "", s)'
     mutant "$b" "$cls" 'if (!is_test_rule(kind)) return' 'if (0) return'
-    mutant "$b" "$cls" 'if (u_marks["new", k] > u_marks["old", k]) {' 'if (0) {'
-    mutant "$b" "$cls" 'if (u_tier["old", k] != u_tier["new", k]) {' 'if (0) {'
+    mutant "$b" "$cls" 'if (marks["new", new] > marks["old", old]) {' 'if (0) {'
+    mutant "$b" "$cls" 'if (tier["old", old] != tier["new", new]) {' 'if (0) {'
+    mutant "$b" "$cls" 'key = attribute_value(rest)' 'key = rest'
     mutant "$b" "$cls" 'if (removed > added) {' 'if (0) {'
 
     # ---- test-change.sh: the trailer and what is skipped.
@@ -249,6 +254,13 @@ run_one() {
         if CUCINA_HOOKS_DIR="$dir" CUCINA_TEST_FAIL_FAST=1 "$here/test-githooks.sh" "$suite" >"$log" 2>&1; then
             rc=0
         else
+            # Only a failed assertion kills a mutant. A missing dependency,
+            # bad shell, or setup crash is broken verification, not evidence.
+            if ! grep -q '^not ok -' "$log"; then
+                echo "BROKEN    $(describe "$i") (suite $suite failed before an assertion)"
+                rm -rf "$dir"
+                return 2
+            fi
             rc=1
             break
         fi
@@ -290,6 +302,8 @@ for ((i = 0; i < n; i++)); do
     fi
 done
 
+[ -n "$indices" ] || { echo "mutate-hooks: no mutants match '$only'" >&2; exit 2; }
+
 work="$(mktemp -d "${TMPDIR:-/tmp}/cucina-mutate.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 export CUCINA_HOOKS_DIR="$hooks"
@@ -300,9 +314,14 @@ printf '%s\n' $indices | xargs -P "$jobs" -I{} "$0" --one {} >"$work/results" 2>
 killed="$(grep -c '^killed' "$work/results" || true)"
 survived="$(grep -c '^SURVIVED' "$work/results" || true)"
 bad="$(grep -c -E '^(STALE|BROKEN)' "$work/results" || true)"
+controls="$(grep -c '^survived ' "$work/results" || true)"
 grep -E '^(SURVIVED|STALE|BROKEN)' "$work/results" | sort || true
 total=0
 for i in $indices; do total=$((total + 1)); done
-echo "mutate-hooks: $killed mutant(s) caught, $survived survived, $bad stale or broken (of $total)"
+echo "mutate-hooks: $killed mutant(s) caught, $survived survived, $bad stale or broken, $controls control(s) survived (of $total)"
+if [ "$((killed + survived + bad + controls))" -ne "$total" ]; then
+    echo "mutate-hooks: incomplete results; a mutation worker failed to report" >&2
+    exit 2
+fi
 if [ "$bad" -gt 0 ]; then exit 2; fi
 [ "$survived" -eq 0 ]

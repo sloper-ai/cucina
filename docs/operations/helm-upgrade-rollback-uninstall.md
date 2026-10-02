@@ -7,7 +7,7 @@
 ## What an upgrade keeps and what it restarts
 
 * **The cache is kept.** Storage PVCs are not touched by an upgrade, and Buildbarn's storage restarts on its persistent state. (A change of storage layout is the exception: see [storage full or retention too short](storage-full-retention.md).)
-* **CRDs are upgraded.** The chart ships them as templates (annotated to survive uninstall), so `helm upgrade` applies CRD changes; Helm's own `crds/` directory would not.
+* **CRDs are upgraded by a hook.** `crds/` supplies the first install; the pre-install/pre-upgrade `crds` hook runs `cucina-controller crds apply`, server-side applies the definitions compiled into the controller image, and waits for Established. If `crds.install=false`, manage them yourself and use `helm install --skip-crds` ([chart guide](chart.md#upgrade)).
 * **Pods roll when their configuration changes**, by checksum. The scheduler restarts only when its configuration changes, which includes adding a platform or size class (the queue set); changes to pool settings that do not alter the queue set (instance types, image, max, timers, cache sizes) apply live through the `WorkerPool` objects and restart nothing
   ([ADR 0002](../adr/0002-queue-declaration-from-values.md)).
 * **A scheduler restart loses its in-memory queue.** Clients retry (Bazel's retry tolerance), workers re-register, and in-flight builds slow down rather than fail. Choose a quiet moment when you add a platform.
@@ -49,8 +49,8 @@ helm history cucina -n cucina
 helm rollback cucina <revision> -n cucina --wait --timeout 15m
 ```
 
-* The chart's hooks run again on rollback (the bootstrap hook is idempotent and never overwrites existing Secrets, keys or certificates).
-* CRDs roll back with the templates. CRD changes are additive; check `kubectl get workerpools,machosts,trustpolicies -n cucina` afterwards, and read [`chart.md`](chart.md) before rolling back across a release that removed or renamed a field.
+* The bootstrap and CRD hooks run on install/upgrade, **not on rollback**. Existing runtime Secrets remain; rollback does not recreate a missing credential.
+* CRDs are **not rolled back**. Changes must remain additive so the older controller can use the newer schema. Check `kubectl get workerpools,machosts,trustpolicies -n cucina` afterwards and read [`chart.md`](chart.md) before crossing a schema change.
 * A rollback does not bring back a cache that an upgrade discarded.
 * A change you made by patching a resource is not in the release; re-apply or put it in the values.
 
@@ -76,7 +76,7 @@ All three must be empty. What an uninstall deliberately leaves, so that a reinst
 | Left behind | Why | Remove with |
 | --- | --- | --- |
 | Storage PVCs | The cache is reconstructible but expensive; PVCs are retained by default | `kubectl -n cucina delete pvc -l app.kubernetes.io/instance=cucina` |
-| CRDs and the custom resources' definitions | They carry a keep policy so uninstall cannot delete your data by accident | `kubectl delete crd workerpools.cucina.sloper.ai machosts.cucina.sloper.ai trustpolicies.cucina.sloper.ai` (after the objects are gone) |
+| CRDs and the custom resources' definitions | Helm does not delete definitions installed through `crds/`, and the apply hook does not delete them | `kubectl delete crd workerpools.cucina.sloper.ai machosts.cucina.sloper.ai trustpolicies.cucina.sloper.ai` (after the objects are gone) |
 | The CA, signing keys, break-glass key and JWKS or deny-list ConfigMaps created by the bootstrap hook | They are not templated, so Helm does not own them; removing them destroys your identities | `kubectl -n cucina delete secret,configmap` on the specific names, deliberately |
 | AMIs, Fast Launch snapshots | They belong to the image lifecycle, not the release | [AMI rollout and rollback](ami-rollout-rollback.md), "Retire an AMI" |
 | Mac hosts' packages, VMs and images | Hosts are separate machines | [Add or remove a Mac host](add-remove-mac-host.md) |

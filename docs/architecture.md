@@ -38,11 +38,11 @@ scheduler's queue and stopped when idle.
 | Component | What it is | Runs where |
 | --- | --- | --- |
 | **frontend** | `bb_storage`, stateless. Client listener (TLS and JWT) and worker listener (mTLS). Shards CAS and AC across storage, routes Execute to the scheduler, advertises zstd, puts existence caching in front of `FindMissingBlobs` and completeness checking around the AC | Deployment: two or more replicas in the `medium` and `large` size profiles, one in `small` |
-| **storage** | `bb_storage` with the persistent `local` backend, N shards, one PVC each, holding CAS, AC and the other small stores. The central cache (L3) | StatefulSet |
+| **storage** | `bb_storage` with the persistent `local` backend, N shards, each with one filesystem PVC in file mode or separate `meta` (filesystem) and `cas` (raw block) PVCs in block mode, holding CAS, AC and the other small stores. The central cache (L3) | StatefulSet |
 | **scheduler** | `bb_scheduler` with predeclared platform queues. In-memory state, one replica, `Recreate` | Deployment |
 | **cucina-controller** | One Go binary: the `WorkerPool` and `MacHost` reconcilers and the autoscaler, plus the servers listed below. Leader elected; two replicas in the `medium` and `large` profiles, one in `small` | Deployment |
 | **STS** | The controller binary in `sts` mode: a stateless token-exchange service, its own two-replica Deployment | Deployment |
-| **worker agent** (`cucina-worker-agent`) | At every boot: enrolls the instance, writes `bb_worker` and `bb_runner` configuration, prepares the L1 volume. Afterwards a supervisor that enforces the dead-man switch | On every EC2 worker and macOS VM |
+| **worker agent** (`cucina-worker-agent`) | EC2 boot enrollment, `bb_worker`/`bb_runner` configuration, L1 preparation and the dead-man supervisor. For Tart VMs, hostd injects configuration and identities and enforces the dead-man policy from outside the guest ([hostd contract](dev/hostd.md#16-dead-man-switch-for-vms-r-pool-7)) | Supervisor on EC2 workers; image/self-test tooling also supports macOS |
 | **host agent** (`cucina-hostd`) | Dials out to the controller, runs `tart` as a dedicated user, runs the host L2 cache, injects configuration and short-lived identities into VMs | Each Mac mini (root LaunchDaemon) |
 | **`cucinactl`** | The CLI and TUI, and the Bazel credential helper. There is no web UI | Developer machines and CI |
 | **Worker images** | Packer-built AMIs (Linux x86_64 and arm64, Windows) and a Tart image (macOS), each carrying a version label that maps to a pool generation | Built per operator |

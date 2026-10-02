@@ -76,7 +76,7 @@
     },
     {
       "name": "WinFsp",
-      "version": "2.1",
+      "version": "2.1.25156",
       "license": "GPL-3.0-only WITH FLOSS exception",
       "url": "https://github.com/winfsp/winfsp",
       "use": "File system proxy behind Buildbarn's virtual build directory on Windows workers. Installed from the official installer into the Windows worker image. Cucina does not link against it and does not redistribute it; worker images are built per operator and must not be published.",

@@ -3,7 +3,7 @@
 #
 # generate.sh: build THIRD_PARTY_NOTICES.md from the dependency set that exists
 # in the repository right now. Re-run it whenever dependencies change and before
-# every release; CI runs it with --check.
+# every release; --check is the read-only mode for a release or CI gate.
 #
 #   tools/notices/generate.sh            write THIRD_PARTY_NOTICES.md
 #   tools/notices/generate.sh --check    fail if the file is stale (no write)
@@ -20,8 +20,8 @@
 #
 # Policy: only licences listed in policy.json may be bundled. An unknown or
 # disallowed licence, or a module without a licence file, makes the script exit 1
-# after writing what it could, so a human decides (add a text under texts/ and a
-# mapping in overrides.json, or drop the dependency).
+# without replacing the notices, so a human decides (add a text under texts/ and
+# a mapping in overrides.json, or drop the dependency).
 #
 # Needs: go, jq, awk, shasum or sha256sum; cargo-about when a Cargo workspace exists.
 # The output is deterministic: no timestamps, sorted everywhere.
@@ -196,12 +196,12 @@ emit_go() {
         fi
         : >"$lic"
         : >"$notice"
-        for f in $(license_files "$dir"); do
+        while IFS= read -r f; do
             case "$(basename "$f" | tr '[:lower:]' '[:upper:]')" in
             NOTICE*) printf '%s\n\n' "$(cat "$f")" >>"$notice" ;;
             *) printf '%s\n\n' "$(cat "$f")" >>"$lic" ;;
             esac
-        done
+        done < <(license_files "$dir")
         if [ ! -s "$lic" ]; then
             override="$(jq -r --arg p "$path" '.modules[$p].license_text // empty' "$here/overrides.json")"
             if [ -n "$override" ] && [ -f "$here/$override" ]; then
@@ -216,14 +216,11 @@ emit_go() {
         if ! spdx_allowed "$here/policy.json" "$spdx"; then
             problem "module $path@$version has licence \"$spdx\", which policy.json does not allow"
         fi
-        # Apache-2.0 files differ only in their appendix; reproduce the canonical text once.
-        if [ "$spdx" = "Apache-2.0" ]; then
-            hash="apache-2.0"
-            [ -f "$g/texts/$hash" ] || cp "$here/texts/Apache-2.0.txt" "$g/texts/$hash"
-        else
-            hash="$(normalize <"$lic" | sha)"
-            [ -f "$g/texts/$hash" ] || cp "$lic" "$g/texts/$hash"
-        fi
+        # Deduplicate identical full texts only. Apache appendices can carry
+        # project-specific copyright notices; replacing them by a canonical
+        # Apache text would silently discard those attributions.
+        hash="$(sha <"$lic")"
+        [ -f "$g/texts/$hash" ] || cp "$lic" "$g/texts/$hash"
         printf '%s@%s\n' "$path" "$version" >>"$g/uses/$hash"
         printf '%s' "$spdx" >"$g/spdx/$hash"
         if [ -s "$notice" ]; then
@@ -331,6 +328,11 @@ generated="$work/THIRD_PARTY_NOTICES.md"
     emit_images
 } >"$generated"
 
+if [ -s "$problems" ]; then
+    echo "generate.sh: $(wc -l <"$problems" | tr -d ' ') problem(s); notices unchanged; see above" >&2
+    exit 1
+fi
+
 case "$mode" in
 stdout) cat "$generated" ;;
 check)
@@ -347,8 +349,3 @@ write)
     echo "generate.sh: wrote $out_file ($(wc -l <"$out_file" | tr -d ' ') lines)"
     ;;
 esac
-
-if [ -s "$problems" ]; then
-    echo "generate.sh: $(wc -l <"$problems" | tr -d ' ') problem(s); see above" >&2
-    exit 1
-fi

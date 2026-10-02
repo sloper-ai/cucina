@@ -70,6 +70,7 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0001](0001-buildbarn-dual-schema-pins.md) | Buildbarn version pins: worker and storage schemas differ | accepted | architecture |
 | [0002](0002-queue-declaration-from-values.md) | Platform queues are declared by the chart, not at runtime | accepted | architecture |
 | [0003](0003-rust-rpc-stack-connect-rust-buffa.md) | Rust RPC and protobuf stack: connect-rust + buffa (not tonic/prost) | accepted — user decision, 2026-10-02 | architecture |
+| [0004](0004-small-functional-test-resources.md) | Use small resources for functional acceptance | accepted | architecture |
 | [0011](0011-workers-are-vms.md) | D1: Workers are VMs running bb_worker and bb_runner natively | accepted | architecture |
 | [0012](0012-custom-controller-queue-driven.md) | D2: One Go controller drives pools from the scheduler's queue state | accepted | architecture |
 | [0013](0013-ec2-launch-on-demand-no-stop.md) | D3: EC2 pools launch on demand and terminate on scale-in | accepted | architecture |
@@ -94,6 +95,10 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0104](0104-tier-guard-aspect.md) | The tier-tag guard is an aspect, not a `bazel query` test | accepted | build (bazel) |
 | [0105](0105-protoc-version-normalisation.md) | Checked-in Go protobuf code is identical from Bazel and `buf generate` | accepted | build (bazel) |
 | [0106](0106-rust-codegen-buffa-connect.md) | Rust protobuf/RPC code generation in Bazel: protoc + buffa/connect-rust plugins | accepted | build (bazel) |
+| [0107](0107-windows-native-toolchain-compatibility.md) | Enable native Windows Rust builds with narrow toolchain patches | accepted | build (bazel) |
+| [0150](0150-release-versioning-and-stamping.md) | One release version, stamped by Bazel from the VERSION file | accepted | build (bazel) |
+| [0151](0151-release-pipeline-and-publishing.md) | Release pipeline: per-runner Bazel builds, one assembly, publish from verified bytes | accepted | build (bazel) |
+| [0152](0152-nightly-and-report-lanes.md) | Nightly, system and mutation lanes outside the gating CI | accepted | build (bazel) |
 | [0200](0200-e2e-vpc-raw-resources.md) | The e2e VPC is built from raw resources, not `terraform-aws-modules/vpc` | accepted | aws (infra) |
 | [0201](0201-e2e-ipv6-egress-and-ssm.md) | Private-subnet workers reach SSM over IPv6 only with dual-stack endpoints enabled | accepted | aws (infra) |
 | [0202](0202-e2e-iam-least-privilege.md) | Least-privilege IAM for the e2e environment: tag-gated controller, protected nodes, confined SSM | accepted | aws (infra) |
@@ -103,8 +108,9 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0304](0304-visual-studio-build-tools-pinning.md) | Pinning Visual Studio 2026 Build Tools | accepted | images |
 | [0305](0305-qemu-cross-runtimes.md) | qemu-user and cross glibc runtimes on the x86_64 Linux image | accepted | images |
 | [0306](0306-linux-worker-boot-trims.md) | Linux worker boot trims (no SSH, reduced cloud-init, volatile journal) | accepted | images |
+| [0307](0307-private-source-image-pins.md) | Private source-image pins and build attestations | accepted | images |
 | [0350](0350-macos-worker-image.md) | macOS worker image: Cirrus base, unprivileged auto-login build user, hostd-started services | accepted | images |
-| [0351](0351-macos-build-directory.md) | macOS VMs: build directory mode (NFSv4 virtual vs native) | proposed — measurement pending | images |
+| [0351](0351-macos-build-directory.md) | macOS VMs use NFSv4 virtual build directories | accepted | images |
 | [0352](0352-xcode-source-for-worker-images.md) | Where a worker image's Xcode comes from | accepted | images |
 | [0353](0353-macos-runner-concurrency.md) | macOS VMs: Xcode and generic runners each offer vCPU slots | accepted | images |
 | [0400](0400-buildbarn-config-rendering.md) | Buildbarn configuration: Helm-rendered protojson, `importstr` for CA bundles, startup self-checks | accepted | chart and buildbarn |
@@ -113,6 +119,7 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0403](0403-tls-certificates.md) | TLS: per-component server certificates in a public and an internal group | accepted | chart and buildbarn |
 | [0404](0404-exposure-services.md) | Exposure: one Service per endpoint and backend; management goes to the leader | accepted | chart and buildbarn |
 | [0405](0405-size-profiles-and-storage-sizing.md) | Size profiles as chart data; storage layout derived from one size per store | accepted | chart and buildbarn |
+| [0406](0406-crds-directory-and-apply-hook.md) | CRDs in crds/, upgraded by a `crds apply` hook | accepted | chart and buildbarn |
 | [0410](0410-one-bb-runner-per-worker.md) | One bb_runner per worker; per-runner settings live in bb_worker | accepted | chart and buildbarn |
 | [0411](0411-l1-placement-and-block-sizing.md) | Worker L1: placement order and block sizing | accepted | chart and buildbarn |
 | [0412](0412-config-boot-tests-on-the-dev-mac.md) | Booting every rendered profile with darwin binaries | accepted | chart and buildbarn |
@@ -151,20 +158,32 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0703](0703-hostd-in-vm-configuration.md) | hostd configures each VM at every boot and starts its Buildbarn jobs; dead-man from outside | accepted | macOS, hostd, pkg |
 | [0750](0750-host-pkg-layout-and-build.md) | Host package layout, setup helper and AppleDouble-free payloads | accepted | macOS, hostd, pkg |
 | [0751](0751-autologin-by-postinstall.md) | Auto-login of the `cucina` user is set up by the package by default | accepted | macOS, hostd, pkg |
-| [0752](0752-private-signing-certificate-profile.md) | Private signing certificate: codeSigning EKU, keychain approval and CI keychains | accepted | macOS, hostd, pkg |
+| [0752](0752-private-signing-certificate-profile.md) | Separate private application and installer signing identities | accepted | macOS, hostd, pkg |
 | [0753](0753-pkg-publishing-github-releases.md) | Publishing the host package as immutable GitHub Release assets | accepted | macOS, hostd, pkg |
 | [0754](0754-install-settings-domain.md) | Separate preference domain for the package's install settings | accepted | macOS, hostd, pkg |
+| [0755](0755-headless-autologin-credential.md) | Prepare auto-login credentials and the login keychain without a GUI | accepted | macOS, hostd, pkg |
+| [0756](0756-mdm-schema-precedence.md) | Prefer Apple's published MDM schema to outdated key names | accepted | macOS, hostd, pkg |
 | [0801](0801-cli-token-cache-locking-and-dependencies.md) | cucinactl: token-cache locking and the few dependencies beyond R-LIB-3 | accepted | cli |
 | [0802](0802-cli-bazelrc-platforms-and-targets-schema.md) | `cucinactl bazelrc`: flag scope, platform labels and the targets schema | accepted | cli |
 | [0803](0803-cli-action-inspection-of-uncached-results.md) | `action inspect`: uncached results through `HistoricalExecuteResponse` | accepted | cli |
 | [0804](0804-cli-json-output-contract.md) | `--output json` is a hand-written, schema-checked contract | accepted | cli |
 | [0805](0805-cli-credential-helper-and-login-details.md) | Credential helper and login details | accepted | cli |
 | [0806](0806-cli-macos-browser-without-appkit.md) | cucinactl opens the browser with `open -u` on macOS (no AppKit) | accepted | cli |
+| [0807](0807-cli-bazelrc-build-lines-and-platform-targets.md) | `cucinactl bazelrc` emits `build` lines and reads `platforms/targets.json` | accepted | cli |
+| [0808](0808-cli-private-ca-and-http-proxies.md) | Private CA bundles and HTTP proxies for every cucinactl connection | accepted | cli |
+| [0850](0850-tui-architecture.md) | `cucinactl tui`: reducer architecture, data refresh and safety rules | accepted | cli |
+| [0851](0851-tui-vhs-goldens.md) | TUI flows as VHS goldens: deterministic demo data, manual tier | accepted | cli |
+| [0900](0900-cucina-platforms-generated-module.md) | `@cucina_platforms`: a generated module, `targets.json` schema v1, labels and configs | accepted | cross-platform |
+| [0901](0901-apple-sdk-on-the-exec-machine.md) | The Apple SDK is resolved on the macOS exec machine (R-XPLAT-8) | accepted | cross-platform |
+| [0902](0902-supported-hermetic-llvm-toolchain-pairs.md) | Register only the supported hermetic-llvm toolchain pairs (macOS targets on macOS exec) | accepted | cross-platform |
+| [0903](0903-test-placement-and-macos-test-runner.md) | Where test actions land; macOS-target tests use the Xcode runner | accepted | cross-platform |
+| [0904](0904-windows-tests-bazel-tools-overlay.md) | Windows tests from Linux/macOS clients: a `@bazel_tools` overlay (no patched Bazel) | accepted | cross-platform |
 | [1001](1001-vendored-trimmed-bazel-protos.md) | e2e collectors decode Bazel's BEP and compact execution log with vendored protos | accepted | testing and e2e |
 | [1002](1002-e2e-remote-plumbing-ssm.md) | e2e remote plumbing: SSM Run Command scripts, background jobs, port-forward transfers | accepted | testing and e2e |
 | [1003](1003-mock-idp-topology.md) | T10 runs navikt/mock-oauth2-server in-cluster over HTTPS, reached from the dev Mac by port-forward | accepted | testing and e2e |
 | [1004](1004-canary-result-export.md) | Canary results reach Prometheus through the controller, not a Pushgateway | accepted | testing and e2e |
 | [1005](1005-nfr-measurement-methods.md) | How the campaign computes the NFRs that need a definition | accepted | testing and e2e |
+| [1006](1006-cross-campaign-evidence.md) | Cross-campaign setup and incomplete evidence | Accepted | testing and e2e |
 <!-- END ADR INDEX -->
 
 ## The baseline decisions

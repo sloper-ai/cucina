@@ -27,6 +27,9 @@
 /AGENTS.md                     @jrandolf
 /CLAUDE.md                     @jrandolf
 /.github/CODEOWNERS            @jrandolf
+/.github/workflows/**          @jrandolf
+**/BUILD.bazel                @jrandolf
+**/BUILD                      @jrandolf
 /.githooks/**                  @jrandolf
 /tools/ci/**                   @jrandolf
 /.golangci.yml                 @jrandolf

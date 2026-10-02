@@ -11,7 +11,7 @@ Install [mise](https://mise.jdx.dev) and let it install the pinned developer too
 mise install            # bazelisk, go, rust, helm, kubectl, packer, opentofu, golangci-lint, gitleaks, buf, kubeconform, tflint, cargo-deny
 ```
 
-Optional tools that some checks use: `shellcheck` (the scripts under `.githooks/`, `tools/` and `macos/` are shellcheck-clean), `cargo-about` (`tools/notices/generate.sh`), `actionlint` (workflow files), and `gremlins` and `cargo-mutants` for mutation testing ([`TESTING.md`](../../TESTING.md) section 8).
+The mise file also pins `shellcheck` for shell scripts and `actionlint` for workflows. Notices use cargo-about 0.9.2 (`mise exec cargo-about@0.9.2 -- tools/notices/generate.sh`); mutation testing uses `gremlins` and `cargo-mutants` ([`TESTING.md`](../../TESTING.md) section 8). Run the checks rather than assuming a checked-in script is lint-clean.
 
 Bazel runs through **Bazelisk**, which reads the version from [`.bazelversion`](../../.bazelversion) (9.2.0). Use `bazelisk`; if you prefer `bazel`, alias it. Go is 1.27.1 and Rust is the stable 1.98 toolchain pinned by `rust-toolchain.toml`. You do not need a system C or C++ compiler or a Docker daemon:
 the toolchains are hermetic, and images are built without Docker.
@@ -74,6 +74,33 @@ Generated code is checked in next to its source, and a test fails when it drifts
 helm lint --strict charts/cucina
 bazelisk test //charts/cucina/...        # schema checks, kubeconform, helm-unittest, and the config-render check that boots the pinned Buildbarn binaries
 ```
+
+### Local controller image for kind (pre-release)
+
+Until a release image is published, kind needs an operator-built image loaded into its nodes. This is the local smoke-test path; the canonical release build remains `bazelisk build //cmd/cucina-controller:image`. It needs Docker and kind in addition to the tools above. Use a **dedicated local cluster**, not a production kubeconfig.
+
+```sh
+# Run from the repository root; the kind nodes and image use the host architecture.
+IMAGE_DIR=$(mktemp -d)
+IMAGE_ARCH=$(go env GOARCH)
+GOOS=linux GOARCH="$IMAGE_ARCH" CGO_ENABLED=0 go build -o "$IMAGE_DIR/cucina-controller" ./cmd/cucina-controller
+cp THIRD_PARTY_NOTICES.md "$IMAGE_DIR/"
+docker build --platform "linux/$IMAGE_ARCH" -t cucina-controller:dev -f - "$IMAGE_DIR" <<'DOCKERFILE'
+# SPDX-License-Identifier: FSL-1.1-ALv2
+FROM gcr.io/distroless/static-debian13@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+COPY --chmod=0555 cucina-controller /usr/local/bin/cucina-controller
+COPY THIRD_PARTY_NOTICES.md /usr/share/doc/cucina/THIRD_PARTY_NOTICES.md
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/cucina-controller"]
+DOCKERFILE
+mise exec kind@0.30.0 -- kind create cluster --name cucina-dev
+mise exec kind@0.30.0 -- kind load docker-image cucina-controller:dev --name cucina-dev
+rm -rf "$IMAGE_DIR"
+cargo build --locked -p cucinactl --bin cucinactl
+export PATH="${CARGO_TARGET_DIR:-$PWD/target}/debug:$PATH"
+```
+
+The distroless digest is the one pinned in `MODULE.bazel`; keep them together when updating it. The [README quickstart](../../README.md#quickstart) supplies the matching chart values and local port-forwards. For k3s or EKS, make the canonical image available through your own registry (or your runtime's local OCI import) and set `images.controller.repository`, `tag` or `digest` accordingly; the default pre-release GHCR tag is not available yet.
 
 ### Infrastructure and images
 

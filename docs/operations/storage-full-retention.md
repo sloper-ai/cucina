@@ -6,7 +6,7 @@
 
 ## Background
 
-Cucina's central cache (L3) is Buildbarn's `local` storage: a ring of blocks on a volume. When it is "full" the oldest blocks are discarded to make room for new data, so a full volume is the normal state.
+Cucina's central cache (L3) is Buildbarn's `local` storage: a ring of blocks on a volume. A full **configured store** evicts its oldest blocks normally. That is different from exhausting the backing filesystem/PVC: it still needs headroom for metadata and state, and filesystem exhaustion can make `bb_storage` fail.
 What matters is **retention**: how old the oldest data is. Retention must stay above two things: the longest build, and Bazel's remote-cache TTL (`--experimental_remote_cache_ttl`, three hours by default). If retention drops below the TTL, a client may be told that a blob exists
 (from its own knowledge) when the cluster has already evicted it; Bazel then retries (`--experimental_remote_cache_eviction_retries`) or rewinds the build. The action cache is wrapped in `completenessChecking`, so an AC entry whose outputs were evicted is reported as missing rather than
 returned broken.
@@ -62,12 +62,12 @@ returned broken.
 
   Only results produced by workers are hidden: results that clients uploaded themselves, without execution metadata (`--remote_upload_local_results`), are not affected. To drop those too, empty the action cache by changing `storage.stores.ac.size` (a cold AC).
 
-  Pick the time just after the last known-good moment. Clients re-execute the affected actions (CAS content is untouched, so uploads of unchanged outputs are free). The `--set` is only for this one command: put the same value into your version-controlled values file (see [Helm upgrade, rollback and uninstall](helm-upgrade-rollback-uninstall.md)), or the next `helm upgrade -f values.yaml` drops it and the purge is undone. Leaving it set is harmless. Existence caching never exceeds retention, and
+  First stop the source of bad results (fix or drain the affected toolchain/workers), then choose a cutoff **after the last potentially bad result was produced**. A cutoff before the bad interval would leave those results visible. Clients re-execute affected actions; existing CAS blobs can be reused without uploading them again. The `--set` is only for this one command: put the same value into your version-controlled values file (see [Helm upgrade, rollback and uninstall](helm-upgrade-rollback-uninstall.md)), or the next `helm upgrade -f values.yaml` drops it and the purge is undone. Leaving it set is harmless. Existence caching never exceeds retention, and
   its TTL is a minute, so there is nothing else to flush.
 
 ## Roll back
 
-A purge is undone by clearing `actionCachePurgeBefore`, but purged results are simply re-created by re-execution, so there is nothing to restore. A capacity change is undone with `helm rollback`, which does not bring a discarded cache back.
+Clearing or moving `actionCachePurgeBefore` backwards can expose old, poisoned entries again: it is a read filter, not deletion. Keep the cutoff until those entries have expired or the AC has been emptied; do not undo it merely to improve the hit rate. A capacity change is undone with `helm rollback`, which does not bring a discarded cache back.
 
 ## Verify
 

@@ -169,7 +169,9 @@ base_repo() {
     build_file plain | put BUILD.bazel
     printf '# MT-001\n' | put docs/testing/manual/MT-001.md
     git add -A
-    git commit -q -m "base: tests, golden and BUILD file"
+    # Fixture setup, not the change being judged. Root-commit behavior has its
+    # own explicit case below; avoid running both hooks for every fixture.
+    git -c core.hooksPath=/dev/null commit -q -m "base: tests, golden and BUILD file"
 }
 
 # try_commit <message> [<second paragraph>]: stage everything, commit through the hook.
@@ -286,6 +288,12 @@ leaky="ghp_${fixture_tail}"
 account_digits='345678901234'
 
 suite_commit_msg() {
+    suite_commit_msg_policy
+    suite_commit_msg_robustness
+    suite_commit_msg_environment
+}
+
+suite_commit_msg_policy() {
     # ---------------------------------------------------------------- commit-msg
 
     base_repo c1
@@ -383,6 +391,9 @@ suite_commit_msg() {
     expect_status "the commit check does not judge a merge commit either" 0 "$hooks/lib/test-change.sh" commit HEAD
     git reset -q --hard main
 
+}
+
+suite_commit_msg_robustness() {
     # ------------------------------------------------------- the trailer itself
 
     base_repo c2
@@ -422,6 +433,31 @@ suite_commit_msg() {
     expect_message "the refusal says the change could not be classified" "could not classify"
     git reset -q --hard HEAD
 
+    # R-TEST-5: a failed BUILD blob read must not become an empty file and pass
+    # even with a valid trailer. Exercise the public hook with a failing git I/O.
+    export CUCINA_REAL_GIT
+    CUCINA_REAL_GIT="$(command -v git)"
+    mkdir -p "$work/failing-git"
+    cat >"$work/failing-git/git" <<'EOF'
+#!/bin/sh
+if [ "$1" = show ]; then exit 43; fi
+exec "$CUCINA_REAL_GIT" "$@"
+EOF
+    chmod +x "$work/failing-git/git"
+    build_file manual-test | put BUILD.bazel
+    git add -A
+    printf 'change BUILD\n\nTest-Change: this fixture deliberately changes a target\n' >"$work/message.txt"
+    # Invoke commit-msg directly: git commit prepends its own exec path to PATH.
+    if PATH="$work/failing-git:$PATH" "$hooks/commit-msg" "$work/message.txt" >"$out" 2>&1; then
+        fail "a failed BUILD blob read refuses the commit, trailer or not"
+    else
+        pass "a failed BUILD blob read refuses the commit, trailer or not"
+    fi
+    expect_message "a blob-read failure explains that classification failed" "could not classify"
+    git reset -q --hard HEAD
+}
+
+suite_commit_msg_environment() {
     # ------------------------------ user configuration does not change what is seen
 
     for setting in diff.noprefix=true diff.mnemonicPrefix=true color.diff=always color.ui=always diff.external=true diff.renames=false; do
@@ -525,8 +561,15 @@ suite_commit_msg() {
 # a mutant that deletes any single pattern fails one of these cases
 # (tools/ci/mutate-hooks.sh runs every such mutant).
 suite_rules() {
-    base_repo r1
-    local n f call attr kind
+    suite_rules_sources
+    suite_rules_build
+    suite_rules_cases
+}
+
+# Independently runnable groups keep each Bazel target within the integration budget.
+suite_rules_sources() {
+    base_repo rsources
+    local n f call
 
     # ---- Deleting a test source: one case per pattern of is_test_source.
     for f in rs/a_test.rs sh/a_test.sh py/a_test.py cc/a_test.cc cpp/a_test.cpp c/a_test.c ts/a_test.ts js/a_test.js \
@@ -599,6 +642,11 @@ suite_rules() {
     rule "an ignored test added by the same change is fine" ok rs3/a.rs $'#[test]\nfn a() {}' $'#[test]\nfn a() {}\n\n#[test]\n#[ignore]\nfn b() {}'
     rule "a comment mentioning #[ignore] is fine" ok rs4/a.rs $'#[test]\nfn a() {}' $'#[test]\n// #[ignore]\nfn a() {}'
 
+}
+
+suite_rules_build() {
+    base_repo rbuild
+    local n attr kind
     # ---- Hiding a test in a BUILD file: one case per marker and per kind of test rule.
     n=0
     for attr in 'tags = ["manual"],' 'tags = ["quarantine"],' 'target_compatible_with = ["@platforms//:incompatible"],' \
@@ -632,6 +680,26 @@ suite_rules() {
         $'[\n    cucina_go_test(\n        name = "t_%s" % s,\n        srcs = ["t.go"],\n        tier = "unit",\n    )\n    for s in ["a", "b"]\n]' \
         $'[\n    cucina_go_test(\n        name = "t_%s" % s,\n        srcs = ["t.go"],\n        tags = ["quarantine"],\n        tier = "unit",\n    )\n    for s in ["a", "b"]\n]' skip-added
 
+    # R-TEST-5 regression: a compact declaration must not treat the following
+    # attributes as part of its name and silently classify a changed target as new.
+    rule "hiding a one-line BUILD target is refused" fail bz38/BUILD.bazel \
+        'cucina_go_test(name = "t", tier = "unit")' \
+        'cucina_go_test(name = "t", tags = ["manual"], tier = "unit")' skip-added
+    rule "changing the tier of a one-line BUILD target is refused" fail bz39/BUILD.bazel \
+        'cucina_go_test(name = "t", tier = "unit")' \
+        'cucina_go_test(name = "t", tier = "simulation")' tier-changed
+
+    # R-TEST-5 regression: two packages may both name their test "t". Changes to
+    # the second one must not hide a tier change in the first.
+    printf '%s\n' "$(bt cucina_go_test t)" | put same1/BUILD.bazel
+    printf '%s\n' "$(bt cucina_go_test t)" | put same2/BUILD.bazel
+    git add -A
+    git -c core.hooksPath=/dev/null commit -q -m "fixture: same target name in two packages"
+    printf '%s\n' "$(bt cucina_go_test t | sed 's/"unit"/"simulation"/')" | put same1/BUILD.bazel
+    printf '\n# comment only\n' >>same2/BUILD.bazel
+    expect_staged "same-named targets do not hide a tier change" fail
+    expect_message "the refusal identifies the changed tier" "tier-changed"
+
     # ---- Moving a test to another tier, dropping a test target.
     rule "moving a test to the simulation tier is refused" fail bz40/BUILD.bazel "$(bt cucina_go_test t)" \
         "$(bt cucina_go_test t | sed 's/"unit"/"simulation"/')" tier-changed
@@ -654,6 +722,10 @@ suite_rules() {
     expect_staged "moving a BUILD file and hiding its test on the way is refused" fail "move and hide"
     expect_message "the refusal says skip-added" "skip-added"
 
+}
+
+suite_rules_cases() {
+    base_repo rcases
     # ---- Removing test cases: one case per marker that is counted.
     rule "removing a Go Test function is refused" fail m1/a_test.go $'package a\n\nfunc TestA(t *testing.T) {}\nfunc TestB(t *testing.T) {}' \
         $'package a\n\nfunc TestA(t *testing.T) {}' tests-removed
@@ -705,17 +777,26 @@ suite_rules() {
 }
 
 suite_pre_push() {
+    suite_pre_push_transport
+    suite_pre_push_hygiene
+}
+
+pre_push_repo() {
     # One repository and one bare "remote"; every scenario is a branch.
-    make_remote pp
+    make_remote "$1"
     on_branch() { # on_branch <name>: a fresh branch from main
         git switch -q main
         git switch -q -c "$1"
     }
     commit_line() { # commit_line <message> <line>
         printf '%s\n' "$2" >>internal/plan/plan.go
-        git add -A && git commit -q -m "$1"
+        # This suite exercises pre-push; commit-msg is tested separately.
+        git add -A && git -c core.hooksPath=/dev/null commit -q -m "$1"
     }
+}
 
+suite_pre_push_transport() {
+    pre_push_repo pp
     on_branch ok
     commit_line "ordinary change" "// ordinary change"
     if git push origin ok >"$out" 2>&1; then
@@ -786,36 +867,42 @@ suite_pre_push() {
         fail "deleting a remote branch is not blocked"
     fi
 
+}
+
+suite_pre_push_hygiene() {
+    pre_push_repo ppids
     # Every shape of identifier is refused on its own; a documentation placeholder is not,
     # and a placeholder on the same line does not shield a real identifier. The
     # identifiers are assembled at run time: this file must not trip the scan it tests.
     idn=0
-    expect_push() { # expect_push <name> <ok|fail> <line>
+    expect_hygiene() { # expect_hygiene <name> <ok|fail> <line>
         local name="$1" expected="$2" line="$3" got=ok
         idn=$((idn + 1))
         on_branch "id$idn"
         commit_line "identifier case $idn" "// $line"
-        git push origin HEAD >"$out" 2>&1 || got=fail
-        if [ "$got" = "$expected" ]; then pass "$name"; else fail "$name (the push was ${got}ed, expected it to be ${expected}ed)"; fi
+        # Shape table for the public history scanner. The transport suite above
+        # proves pre-push invokes it; no need to rerun gitleaks for every ARN.
+        "$hooks/lib/hygiene.sh" main..HEAD >"$out" 2>&1 || got=fail
+        if [ "$got" = "$expected" ]; then pass "$name"; else fail "$name (scan returned $got, expected $expected)"; fi
         git switch -q main
     }
     ec2_dns() { printf 'ec2-%s.us-west-1.compute.amazonaws.%s' "$1" com; }
     ecr_host() { printf '%s.dkr.ecr.us-west-1.amazonaws.%s' "$1" com; }
     sso_url() { printf 'd-1234567890.awsapps.%s/start' com; }
-    expect_push "an EC2 public DNS name is refused" fail "host $(ec2_dns 54-183-12-7)"
-    expect_push "an EC2 name in the 203.0.113.0/24 documentation range is allowed" ok "host $(ec2_dns 203-0-113-7)"
-    expect_push "an EC2 name in the 198.51.100.0/24 documentation range is allowed" ok "host $(ec2_dns 198-51-100-4)"
-    expect_push "an EC2 name in the 192.0.2.0/24 documentation range is allowed" ok "host $(ec2_dns 192-0-2-9)"
-    expect_push "a real EC2 name beside a documentation one is refused" fail "hosts $(ec2_dns 203-0-113-7) $(ec2_dns 54-183-12-7)"
-    expect_push "an ECR host with a real account ID is refused" fail "image $(ecr_host "$account_digits")/cucina"
-    expect_push "an ECR host with the documentation account is allowed" ok "image $(ecr_host 123456789012)/cucina"
-    expect_push "an IAM Identity Center start URL is refused" fail "login $(sso_url)"
-    expect_push "an ECR FIPS host with a real account ID is refused" fail "image $(printf '%s.dkr.ecr-fips.us-west-1.amazonaws.%s' "$account_digits" com)/cucina"
-    expect_push "a GovCloud ARN with a real account ID is refused" fail "role: arn:aws-us-gov:iam::${account_digits}:role/ci"
+    expect_hygiene "an EC2 public DNS name is refused" fail "host $(ec2_dns 54-183-12-7)"
+    expect_hygiene "an EC2 name in the 203.0.113.0/24 documentation range is allowed" ok "host $(ec2_dns 203-0-113-7)"
+    expect_hygiene "an EC2 name in the 198.51.100.0/24 documentation range is allowed" ok "host $(ec2_dns 198-51-100-4)"
+    expect_hygiene "an EC2 name in the 192.0.2.0/24 documentation range is allowed" ok "host $(ec2_dns 192-0-2-9)"
+    expect_hygiene "a real EC2 name beside a documentation one is refused" fail "hosts $(ec2_dns 203-0-113-7) $(ec2_dns 54-183-12-7)"
+    expect_hygiene "an ECR host with a real account ID is refused" fail "image $(ecr_host "$account_digits")/cucina"
+    expect_hygiene "an ECR host with the documentation account is allowed" ok "image $(ecr_host 123456789012)/cucina"
+    expect_hygiene "an IAM Identity Center start URL is refused" fail "login $(sso_url)"
+    expect_hygiene "an ECR FIPS host with a real account ID is refused" fail "image $(printf '%s.dkr.ecr-fips.us-west-1.amazonaws.%s' "$account_digits" com)/cucina"
+    expect_hygiene "a GovCloud ARN with a real account ID is refused" fail "role: arn:aws-us-gov:iam::${account_digits}:role/ci"
     for acct in 123456789012 111122223333 444455556666 777788889999 000000000000 999999999999 210987654321; do
-        expect_push "the documentation account $acct is allowed in an ARN" ok "role: arn:aws:iam::$acct:role/ci"
+        expect_hygiene "the documentation account $acct is allowed in an ARN" ok "role: arn:aws:iam::$acct:role/ci"
     done
-    expect_push "a real account beside a documentation one on the same line is refused" fail \
+    expect_hygiene "a real account beside a documentation one on the same line is refused" fail \
         "roles: arn:aws:iam::123456789012:role/a arn:aws:iam::${account_digits}:role/b"
 
     on_branch msgid
@@ -858,9 +945,17 @@ suite_pre_push() {
 case "$suite" in
 all) suite_commit_msg; suite_rules; suite_pre_push ;;
 commit-msg) suite_commit_msg ;;
+commit-msg-policy) suite_commit_msg_policy ;;
+commit-msg-robustness) suite_commit_msg_robustness ;;
+commit-msg-environment) suite_commit_msg_environment ;;
 rules) suite_rules ;;
+rules-sources) suite_rules_sources ;;
+rules-build) suite_rules_build ;;
+rules-cases) suite_rules_cases ;;
 pre-push) suite_pre_push ;;
-*) echo "usage: test-githooks.sh [commit-msg | rules | pre-push]" >&2; exit 2 ;;
+pre-push-transport) suite_pre_push_transport ;;
+pre-push-hygiene) suite_pre_push_hygiene ;;
+*) echo "usage: test-githooks.sh [commit-msg[-policy|-robustness|-environment] | rules[-sources|-build|-cases] | pre-push[-transport|-hygiene]]" >&2; exit 2 ;;
 esac
 
 echo
