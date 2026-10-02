@@ -3,6 +3,7 @@
 package workeragent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -85,9 +86,9 @@ func (e *BootError) Unwrap() error { return e.Err }
 
 func fail(reason string, err error) error { return &BootError{Reason: reason, Err: err} }
 
-// ReasonNotAWorker marks an instance launched without any user data: not a
-// controller launch (an image build, an EC2 Fast Launch pre-provisioning
-// instance, a manual debug launch). Bootstrap fails without powering off so
+// ReasonNotAWorker marks an instance launched without any user data (IMDS 404,
+// or an empty body as on Packer builders): not a controller launch (an image
+// build, an EC2 Fast Launch pre-provisioning instance, a manual debug launch). Bootstrap fails without powering off so
 // those pipelines keep working; the images' dead-man timer still bounds cost.
 const ReasonNotAWorker = "not-a-worker"
 
@@ -320,7 +321,9 @@ func (b *Bootstrap) loadBootData(ctx context.Context, log *slog.Logger, deadline
 	} else if err := b.retry(ctx, log, deadline, "imds.user-data", func(error) bool { return false }, func(ctx context.Context) error {
 		var err error
 		raw, err = b.IMDS.UserData(ctx)
-		if errors.Is(err, imds.ErrNotFound) {
+		// No user data: IMDS answers 404, or 200 with an empty body (Packer
+		// builders). Either way this is not a controller launch.
+		if errors.Is(err, imds.ErrNotFound) || (err == nil && len(bytes.TrimSpace(raw)) == 0) {
 			return backoff.Permanent(fail(ReasonNotAWorker, errors.New("the instance has no user data (boot data)")))
 		}
 		if err != nil && !imds.IsTransient(err) {

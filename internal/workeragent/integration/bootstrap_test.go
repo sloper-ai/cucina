@@ -201,13 +201,14 @@ func newBootEnv(t *testing.T, enroll *fakeEnrollment, serverCA *agenttest.CA) *b
 func TestBootstrapEnrollmentOutcomes(t *testing.T) {
 	unavailable := status.Error(codes.Unavailable, "controller starting")
 	cases := []struct {
-		name        string
-		enroll      enrollBehaviour
-		rogueTLS    bool // the endpoint presents a certificate from another CA
-		noUserData  bool
-		badUserData bool
-		wantReason  string // "" = success
-		wantCalls   func(int) bool
+		name          string
+		enroll        enrollBehaviour
+		rogueTLS      bool // the endpoint presents a certificate from another CA
+		noUserData    bool
+		emptyUserData bool
+		badUserData   bool
+		wantReason    string // "" = success
+		wantCalls     func(int) bool
 	}{
 		{name: "transient errors then success", enroll: enrollBehaviour{fail: []error{unavailable, status.Error(codes.ResourceExhausted, "rate limited"), unavailable}},
 			wantCalls: func(n int) bool { return n == 4 }},
@@ -225,6 +226,10 @@ func TestBootstrapEnrollmentOutcomes(t *testing.T) {
 			wantReason: "boot-data", wantCalls: func(n int) bool { return n == 0 }},
 		{name: "no user data: not a controller launch (Fast Launch pre-provisioning, image builds)", noUserData: true,
 			wantReason: workeragent.ReasonNotAWorker, wantCalls: func(n int) bool { return n == 0 }},
+		// Bug (images agent, AMI bake): Packer builders' IMDS answers 200 with an
+		// empty body; bootstrap must not power the builder off.
+		{name: "empty user data (Packer builders): not a controller launch", emptyUserData: true,
+			wantReason: workeragent.ReasonNotAWorker, wantCalls: func(n int) bool { return n == 0 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,6 +241,9 @@ func TestBootstrapEnrollmentOutcomes(t *testing.T) {
 			e := newBootEnv(t, enroll, serverCA)
 			if tc.noUserData {
 				e.imds.SetUserData(nil)
+			}
+			if tc.emptyUserData {
+				e.imds.SetUserData([]byte("\n"))
 			}
 			if tc.badUserData {
 				e.imds.SetUserData([]byte("#!/bin/sh\necho not boot data\n"))

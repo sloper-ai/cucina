@@ -72,7 +72,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	root.SetErr(stderr)
 	pf := root.PersistentFlags()
 	pf.StringVar(&g.logLevel, "log-level", "info", "debug | info | warn | error")
-	pf.StringVar(&g.logFile, "log-file", defaultLogFile(), "also append JSON log lines to this file")
+	pf.StringVar(&g.logFile, "log-file", "", "also append JSON log lines to this file (stderr is captured by journald, shawl and cucina-boot.ps1)")
 	pf.StringVar(&g.imdsEndpoint, "imds-endpoint", envOr("CUCINA_IMDS_ENDPOINT", imds.DefaultEndpoint), "instance metadata service endpoint")
 	pf.StringVar(&g.root, "root", "", "re-root every path below this directory (development and tests)")
 	pf.BoolVar(&g.noPoweroff, "no-poweroff", os.Getenv("CUCINA_AGENT_NO_POWEROFF") == "1", "log instead of powering off (debugging)")
@@ -99,13 +99,6 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
-}
-
-func defaultLogFile() string {
-	if runtime.GOOS == "windows" {
-		return `C:\ProgramData\cucina\logs\agent.log`
-	}
-	return "" // journald keeps stderr
 }
 
 // env bundles the production adapters.

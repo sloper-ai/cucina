@@ -13,7 +13,8 @@ and keep it from outliving its purpose. One pure-Go binary (`CGO_ENABLED=0`) for
 | `selftest [--out F] [--build-user bbrunner]` | image smoke tests | JSON report (exit 1 unless all pass): `imds`, `disks`, `time-sync`, `virtual-filesystem`, `buildbarn-binaries`, `build-user` |
 | `version` | humans | `cucina-worker-agent <version> <os>/<arch>` (`-X main.version=…`) |
 
-Global flags: `--log-level`, `--log-file` (Windows default `C:\ProgramData\cucina\logs\agent.log`; Linux logs go to journald),
+Global flags: `--log-level`, `--log-file` (off by default: stderr is captured by journald on Linux and by shawl /
+`cucina-boot.ps1` on Windows),
 `--imds-endpoint` (`CUCINA_IMDS_ENDPOINT`), `--root DIR` (re-roots every path; development), `--no-poweroff`
 (`CUCINA_AGENT_NO_POWEROFF=1`; failures are logged, the instance stays up for SSM debugging; default on macOS).
 
@@ -63,7 +64,8 @@ Global flags: `--log-level`, `--log-file` (Windows default `C:\ProgramData\cucin
 
 Any failure logs `event=bootstrap.failed reason=<boot-data|imds|host|enrollment-refused|enrollment-unreachable|enrollment-invalid|storage|render|write>`,
 powers off (EC2 terminates the instance: `InstanceInitiatedShutdownBehavior=terminate`) and exits 1 — except an instance with
-**no user data at all** (EC2 Fast Launch pre-provisioning, image builds): `event=bootstrap.not_a_worker`, exit 2, no power-off.
+**no user data at all** (IMDS 404 or an empty body: EC2 Fast Launch pre-provisioning, Packer builders):
+`event=bootstrap.not_a_worker`, exit 2, no power-off.
 
 ## L1 placement (ADR 0570)
 
@@ -120,7 +122,8 @@ One JSON object per line (`log/slog`), `component=cucina-worker-agent`, `cmd`, `
 `activity.{unavailable,unobservable}`, `scheduler.{reachable,unreachable}`, `spot.{notice,drained,drain_failed}`,
 `deadman.poweroff`, `cert.expiring`, `key.wiped`, `poweroff.{suppressed,failed}`. Key material, CSRs, signatures, identity
 documents and `settings.env` values are never logged. Read on a worker: `journalctl -u bb-runner -u cucina-worker-agent -o cat`
-(SSM), Windows `C:\ProgramData\cucina\logs\agent.log` and `C:\bb\log\boot.log`.
+(SSM); Windows: `C:\ProgramData\cucina\logs\<unit>.log` (`bb-worker`, `bb-runner`, `agent`) and `boot.log` in the same
+directory.
 
 ## Tests
 
@@ -136,6 +139,6 @@ bazel test //internal/workeragent/... //cmd/cucina-worker-agent/...   # + cross_
 | `//internal/workeragent:workeragent_test` | unit | dead-man decision (table + property), supervisor with fake clock/FS (controller gone, idle, busy, restarts, Spot, certificate), L1 placement, sysfs/Get-Disk discovery, Linux volume reuse/format, paths (Linux + Windows), activity parsing, env rendering, machine-document parity |
 | `//internal/workeragent/bootdata:bootdata_test` | unit | codec round trip (property), size limit, no private keys, versions |
 | `//internal/workeragent/imds:imds_test` | integration | IMDSv2 token flow, user data, identity, tags, Spot notice against `imdsfake` |
-| `//internal/workeragent/integration:integration_test` | integration | bootstrap end to end over TLS: success, transient then success, denied, identity rejected, unreachable for the deadline, rogue server certificate, foreign key, missing boot data; file modes, no key in logs, idempotent second run |
+| `//internal/workeragent/integration:integration_test` | integration | bootstrap end to end over TLS: success, transient then success, denied, identity rejected, unreachable for the deadline, rogue server certificate, foreign key, invalid/missing/empty user data; file modes, no key in logs, idempotent second run |
 | `//internal/workeragent/hostos:hostos_test` | integration | `porttest.RunFS`/`RunClock` conformance of the real adapters |
 | `//cmd/cucina-worker-agent:cucina-worker-agent_test` | integration | `render` CLI contract |
