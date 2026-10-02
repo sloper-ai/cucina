@@ -2,6 +2,7 @@
 # 0100 — Bazel monorepo foundation
 
 * Status: accepted (2026-10-02)
+* Container-builder choice superseded by [ADR 0110](0110-build-oci-images-with-rules-img.md), at the user's explicit direction.
 
 ## Context
 R-BUILD-1..6 require one Bzlmod workspace on Bazel 9.2.0 that builds Go, Rust, C/C++, protobuf,

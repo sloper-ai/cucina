@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,10 +56,11 @@ func runOCIMeta(args []string, _ io.Writer) error {
 	repository := fs.String("repository", "", "repository name below ghcr.io/<owner>/ (for repo tags)")
 	baseName := fs.String("base-name", "", "base image repository")
 	baseLayout := fs.String("base-layout", "", "OCI layout of the base image (its manifest digest)")
-	outLabels := fs.String("out-labels", "", "output: name=value label lines (rules_oci `labels`)")
-	outCreated := fs.String("out-created", "", "output: RFC 3339 creation time (rules_oci `created`)")
+	baseManifest := fs.String("base-manifest", "", "raw platform manifest of the base image (rules_img)")
+	outLabels := fs.String("out-labels", "", "output: name=value image config labels")
+	outCreated := fs.String("out-created", "", "output: RFC 3339 creation time")
 	outTags := fs.String("out-tags", "", "output: remote tags, one per line")
-	outRepoTags := fs.String("out-repo-tags", "", "output: <registry>/<owner>/<repository>:<version> (oci_load)")
+	outRepoTags := fs.String("out-repo-tags", "", "output: <registry>/<owner>/<repository>:<version> for image loading")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -70,10 +72,27 @@ func runOCIMeta(args []string, _ io.Writer) error {
 		return err
 	}
 	baseDigest := ""
+	if *baseLayout != "" && *baseManifest != "" {
+		return fmt.Errorf("--base-layout and --base-manifest are mutually exclusive")
+	}
 	if *baseLayout != "" {
 		if baseDigest, err = layoutManifestDigest(*baseLayout); err != nil {
 			return err
 		}
+	}
+	if *baseManifest != "" {
+		data, err := os.ReadFile(*baseManifest)
+		if err != nil {
+			return err
+		}
+		var manifest ociManifest
+		if err := json.Unmarshal(data, &manifest); err != nil {
+			return fmt.Errorf("base manifest: %w", err)
+		}
+		if manifest.MediaType != mediaTypeManifest || manifest.Config.Digest == "" {
+			return fmt.Errorf("base manifest: expected an OCI image manifest with a config digest")
+		}
+		baseDigest = fmt.Sprintf("sha256:%x", sha256.Sum256(data))
 	}
 	labels := ImageLabels(bi, *title, *description, *baseName, baseDigest)
 	keys := make([]string, 0, len(labels))
@@ -91,7 +110,7 @@ func runOCIMeta(args []string, _ io.Writer) error {
 	if err := os.WriteFile(*outLabels, []byte(b.String()), 0o644); err != nil {
 		return err
 	}
-	// rules_oci reads `created` with jq --rawfile: no trailing newline.
+	// A canonical RFC3339 value with no trailing newline for the image builder.
 	if err := os.WriteFile(*outCreated, []byte(bi.Created().Format(time.RFC3339)), 0o644); err != nil {
 		return err
 	}

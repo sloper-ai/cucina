@@ -161,12 +161,14 @@ include("//third_party/rust:aws-lc-sys.MODULE.bazel")
 include("//third_party/rust:zstd-sys.MODULE.bazel")
 
 # ---------------------------------------------------------------------------
-# Container images (no Docker): rules_oci + tar.bzl, base pinned by digest.
+# Container images (no Docker): rules_img; base pinned by digest (ADR 0110).
 # ---------------------------------------------------------------------------
-bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "rules_img", version = "0.3.22")
+
+# LLVM's prebuilt packaging independently uses tar.bzl. Image layers do not.
 bazel_dep(name = "tar.bzl", version = "0.10.9")
 
-# tar.bzl's existing gawk dependency is configured for MinGW on Windows.
+# Its existing gawk dependency is configured for MinGW on Windows (ADR 0109).
 # Only this standalone build tool changes ABI; project binaries keep MSVC.
 bazel_dep(name = "gawk", version = "5.3.2.bcr.3")
 single_version_override(
@@ -175,26 +177,22 @@ single_version_override(
     patches = ["//third_party/gawk:windows-tool.patch"],
 )
 
-# Source scripts and generated .bat launchers live in different execroot trees.
-single_version_override(
-    module_name = "rules_oci",
-    patch_strip = 1,
-    patches = ["//third_party/oci:windows-launchers.patch"],
-)
+pull_image = use_repo_rule("@rules_img//img:pull.bzl", "pull")
 
-oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
-
-# gcr.io/distroless/static-debian13:nonroot (index digest resolved 2026-10-02).
-oci.pull(
+# gcr.io/distroless/static-debian13:nonroot (same immutable base as before).
+# Eager blobs make exported layouts complete and build actions network-free.
+pull_image(
     name = "distroless_static",
     digest = "sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
-    image = "gcr.io/distroless/static-debian13",
+    layer_handling = "eager",
     platforms = [
         "linux/amd64",
         "linux/arm64/v8",
     ],
+    registry = "gcr.io",
+    repository = "distroless/static-debian13",
+    tag = "nonroot",
 )
-use_repo(oci, "distroless_static", "distroless_static_linux_amd64", "distroless_static_linux_arm64_v8")
 
 # ---------------------------------------------------------------------------
 # Pinned tool binaries (helm, kubeconform, buf, controller-gen, gitleaks,

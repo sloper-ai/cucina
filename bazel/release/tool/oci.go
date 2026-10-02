@@ -9,13 +9,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// OCI image-spec media types used by rules_oci layouts.
+// OCI image-spec media types used by exported image layouts.
 const (
 	mediaTypeIndex    = "application/vnd.oci.image.index.v1+json"
 	mediaTypeManifest = "application/vnd.oci.image.manifest.v1+json"
@@ -36,8 +37,9 @@ type ociPlatform struct {
 }
 
 type ociIndex struct {
-	MediaType string          `json:"mediaType"`
-	Manifests []ociDescriptor `json:"manifests"`
+	SchemaVersion int             `json:"schemaVersion"`
+	MediaType     string          `json:"mediaType"`
+	Manifests     []ociDescriptor `json:"manifests"`
 }
 
 type ociManifest struct {
@@ -55,6 +57,74 @@ type ociConfig struct {
 		Entrypoint []string          `json:"Entrypoint"`
 		Labels     map[string]string `json:"Labels"`
 	} `json:"config"`
+}
+
+// runWrapOCI preserves the single-index envelope consumed by release packaging
+// and offline publication tools. The rules_img index and all payload blobs remain
+// byte-identical; only the OCI layout's entry-point index.json is replaced.
+func runWrapOCI(args []string, _ io.Writer) error {
+	fs := newFlags("wrap-oci")
+	source := fs.String("layout", "", "complete rules_img OCI layout with a flat index")
+	out := fs.String("out", "", "output OCI layout with a single index descriptor")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := required(fs, "layout", "out"); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(*source, "index.json"))
+	if err != nil {
+		return err
+	}
+	var index ociIndex
+	if err := json.Unmarshal(data, &index); err != nil {
+		return err
+	}
+	if index.SchemaVersion != 2 || index.MediaType != mediaTypeIndex || len(index.Manifests) == 0 {
+		return fmt.Errorf("expected a nonempty OCI image index")
+	}
+	for _, manifest := range index.Manifests {
+		if manifest.MediaType != mediaTypeManifest {
+			return fmt.Errorf("expected platform image manifests, got %q", manifest.MediaType)
+		}
+	}
+	// Sandbox input trees contain symlinks to immutable action outputs. Materialize
+	// their contents; CopyFS would preserve the links and make this export depend
+	// on (or overwrite) the original tree. OCI payloads here are SHA-256 blobs.
+	blobs, err := listFiles(filepath.Join(*source, "blobs", "sha256"))
+	if err != nil {
+		return err
+	}
+	outBlobs := filepath.Join(*out, "blobs", "sha256")
+	if err := os.MkdirAll(outBlobs, 0o755); err != nil {
+		return err
+	}
+	for _, name := range blobs {
+		payload, err := readBlob(*source, "sha256:"+name)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(outBlobs, name), payload, 0o644); err != nil {
+			return err
+		}
+	}
+	if err := copyFile(filepath.Join(*source, "oci-layout"), filepath.Join(*out, "oci-layout"), 0o644); err != nil {
+		return err
+	}
+	hexsum := fmt.Sprintf("%x", sha256.Sum256(data))
+	blobPath := filepath.Join(*out, "blobs", "sha256", hexsum)
+	if err := os.WriteFile(blobPath, data, 0o644); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(*out, "index.json"), ociIndex{
+		SchemaVersion: 2,
+		MediaType:     mediaTypeIndex,
+		Manifests: []ociDescriptor{{
+			MediaType: mediaTypeIndex,
+			Digest:    "sha256:" + hexsum,
+			Size:      int64(len(data)),
+		}},
+	})
 }
 
 // ImagePlatform is one platform image of a multi-arch image read from an OCI layout.

@@ -182,14 +182,24 @@ shell with mise's Go, or wrap it in a `genrule` that puts `@rules_go//go` first 
 
 ## Containers (no Docker)
 
-`cucina_go_image(name, binary, repository)` from `//bazel:oci.bzl` wraps a pure-Go binary at
-`/usr/local/bin/<name>` on `gcr.io/distroless/static-debian13:nonroot` (pinned by digest in
-`MODULE.bazel`) as a linux/amd64 + linux/arm64 `oci_image_index`; `:<name>_push` is an
-`oci_push` (never run by tests). Build output: `bazel-bin/<pkg>/<name>/` is an OCI image layout
-(`oci-layout`, `index.json`, `blobs/sha256/…`). Both architectures include `LICENSE.md` and
-`THIRD_PARTY_NOTICES.md` under `/usr/share/doc/cucina` (R-ARTIFACT). The rules_oci 2.3.0
-Windows launcher correction is in `third_party/oci/windows-launchers.patch`; it resolves source
-scripts relative to their generated batch launchers and shares one descriptor launcher per image.
+`cucina_go_image(name, binary, repository)` from `//bazel:oci.bzl` uses **rules_img 0.3.22**
+(ADR 0110): native layers, platform manifests and an index for linux/amd64 + linux/arm64.
+The digest-pinned `gcr.io/distroless/static-debian13:nonroot` base is pulled eagerly, so build
+and export actions require no registry access. The executable is `/usr/local/bin/<binary name>`;
+the image user is `65532`. Both architectures contain exact `LICENSE.md` and
+`THIRD_PARTY_NOTICES.md` bytes under `/usr/share/doc/cucina`.
+
+The public target and path stay `:<name>` and `bazel-bin/<pkg>/<name>/`. The official exporter
+materializes all blobs; the small native `wrap-oci` adapter retains the single-index envelope
+used by chart/release tooling, without changing the rules_img index or any payload digest.
+The result has no external symlinks and contains `oci-layout`, `index.json` and `blobs/sha256/…`.
+Flattening that envelope for a Crane index upload still publishes the exact nested index bytes.
+
+`:<name>_push` is an explicit rules_img push target with build-time publication disabled.
+Release `:<name>_load` retains its `tarball` output group for kind; building it does not load
+or publish an image. Native gzip layers have fixed timestamps, ownership and file modes.
+The former rules_oci dependency and compatibility patches are removed. `tar.bzl` and the gawk
+adapter remain only because hermetic-llvm independently uses them in its prebuilt packaging.
 
 ## Remote execution configs
 

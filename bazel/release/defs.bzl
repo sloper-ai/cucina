@@ -8,9 +8,8 @@ back to DEV_VERSION otherwise. The heavy lifting is done by //bazel/release/tool
 """
 
 load("@bazel_lib//lib:stamping.bzl", "STAMP_ATTRS", "maybe_stamp")
-load("@bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index", "oci_load")
-load("@tar.bzl", "mutate", "tar")
+load("@rules_img//img:providers.bzl", "ImageIndexInfo", "ImageManifestInfo")
+load("//bazel:oci.bzl", "cucina_go_image")
 
 CucinaBuildInfo = provider(
     doc = "The release version information of a build.",
@@ -156,9 +155,18 @@ def _oci_meta_impl(ctx):
     args.add("--repository", ctx.attr.repository)
     inputs = [bi.json]
     if ctx.attr.base:
+        base = ctx.attr.base
+        if ImageManifestInfo in base:
+            manifest = base[ImageManifestInfo]
+        else:
+            architecture = "arm64" if ctx.target_platform_has_constraint(ctx.attr._aarch64[platform_common.ConstraintValueInfo]) else "amd64"
+            matches = [m for m in base[ImageIndexInfo].manifests if m.os == "linux" and m.architecture == architecture]
+            if len(matches) != 1:
+                fail("release base must contain one linux/%s manifest" % architecture)
+            manifest = matches[0]
         args.add("--base-name", ctx.attr.base_name)
-        args.add("--base-layout", ctx.files.base[0].path)
-        inputs.extend(ctx.files.base)
+        args.add("--base-manifest", manifest.manifest.path)
+        inputs.append(manifest.manifest)
     args.add("--out-labels", ctx.outputs.labels_out)
     args.add("--out-created", ctx.outputs.created_out)
     args.add("--out-tags", ctx.outputs.tags_out)
@@ -179,8 +187,12 @@ cucina_oci_meta = rule(
         "title": attr.string(mandatory = True),
         "description": attr.string(mandatory = True),
         "repository": attr.string(mandatory = True, doc = "Repository name below ghcr.io/<owner>/."),
-        "base": attr.label(doc = "The base image (its manifest digest becomes base.digest)."),
+        "base": attr.label(
+            doc = "The base image (its platform manifest digest becomes base.digest).",
+            providers = [[ImageManifestInfo], [ImageIndexInfo]],
+        ),
         "base_name": attr.string(),
+        "_aarch64": attr.label(default = Label("@platforms//cpu:aarch64")),
         "labels_out": attr.output(mandatory = True),
         "created_out": attr.output(mandatory = True),
         "tags_out": attr.output(mandatory = True),
@@ -209,7 +221,7 @@ def cucina_release_image(
     args), the licence documents are in /usr/share/doc/cucina (R-ARTIFACT), and the config
     carries org.opencontainers.image.* labels and the commit time as `created`.
 
-    Targets: <name> (oci_image_index, an OCI layout directory), <name>_load (the linux/amd64
+    Targets: <name> (rules_img index exported as one OCI layout directory), <name>_load (the linux/amd64
     image as a docker tarball for kind: build it with --output_groups=+tarball).
 
     Args:
@@ -224,32 +236,6 @@ def cucina_release_image(
       tags: tags for all targets (release targets are `manual`).
       visibility: visibility of the index.
     """
-    label = native.package_relative_label(binary)
-    tar(
-        name = name + "_bin_layer",
-        srcs = [binary],
-        include_runfiles = False,
-        # rules_go places the executable at <package>/<name>_/<name>.
-        mutate = mutate(
-            strip_prefix = "%s/%s_" % (label.package, label.name) if label.package else "%s_" % label.name,
-            package_dir = "usr/local/bin",
-            owner = "0",
-            ownername = "root",
-            tags = tags,  # the macro does not pass its tags to the mutate target
-        ),
-        tags = tags,
-    )
-    tar(
-        name = name + "_doc_layer",
-        srcs = docs,
-        mutate = mutate(
-            package_dir = "usr/share/doc/cucina",
-            owner = "0",
-            ownername = "root",
-            tags = tags,
-        ),
-        tags = tags,
-    )
     cucina_oci_meta(
         name = name + "_meta",
         title = title,
@@ -263,36 +249,17 @@ def cucina_release_image(
         repo_tags_out = name + ".repo_tags.txt",
         tags = tags,
     )
-    oci_image(
-        name = name + "_image",
-        base = base,
-        entrypoint = ["/usr/local/bin/" + label.name],
-        tars = [
-            ":" + name + "_bin_layer",
-            ":" + name + "_doc_layer",
-        ],
-        labels = ":" + name + ".labels.txt",
-        created = ":" + name + ".created.txt",
-        tags = tags,
-    )
-    oci_image_index(
+    cucina_go_image(
         name = name,
-        images = [":" + name + "_image"],
+        binary = binary,
+        base = base,
+        docs = docs,
+        label_files = [":" + name + ".labels.txt"],
+        created = ":" + name + ".created.txt",
+        load_tags_file = ":" + name + ".repo_tags.txt",
         platforms = platforms,
         tags = tags,
         visibility = visibility,
-    )
-    platform_transition_filegroup(
-        name = name + "_first_platform",
-        srcs = [":" + name + "_image"],
-        target_platform = platforms[0],
-        tags = tags,
-    )
-    oci_load(
-        name = name + "_load",
-        image = ":" + name + "_first_platform",
-        repo_tags = ":" + name + ".repo_tags.txt",
-        tags = tags,
     )
 
 # --- cucina_chart_package -----------------------------------------------------------------

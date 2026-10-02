@@ -8,6 +8,7 @@
 //	buildinfo  [--stable-status F] --out-json F [--out-env F]
 //	oci-meta   --buildinfo F --title T --description D [--base-name N --base-layout DIR]
 //	           --out-labels F --out-created F --out-tags F
+//	wrap-oci   --layout DIR --out DIR (preserve the release OCI index envelope)
 //	archive    --buildinfo F --format tar.gz|zip --top TEMPLATE --exe NAME=PATH
 //	           [--link NAME]... [--doc NAME=PATH]... --out F
 //	chart      --buildinfo F --helm PATH --chart-root DIR [--image-layout DIR] --out F FILE...
@@ -44,6 +45,7 @@ type command struct {
 var commands = map[string]command{
 	"buildinfo": {"resolve the release version from Bazel's workspace status", runBuildInfo},
 	"oci-meta":  {"write OCI image labels, creation time and tags", runOCIMeta},
+	"wrap-oci":  {"preserve the release OCI index envelope without changing image blobs", runWrapOCI},
 	"archive":   {"write a deterministic tar.gz or zip of a binary", runArchive},
 	"chart":     {"package the Helm chart for a release", runChart},
 	"dist":      {"stage release assets under their final names", runDist},

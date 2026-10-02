@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,6 +48,83 @@ func TestBuildInfoRecordsDirtySources(t *testing.T) {
 	bi, err := LoadBuildInfo(out)
 	require.NoError(t, err)
 	require.Contains(t, bi.Env(), "DIRTY='true'")
+}
+
+// Guards R-OPS-7 / ADR 0110: base provenance binds the exact manifest bytes,
+// whether the builder supplies a legacy OCI layout or a rules_img manifest file.
+func TestImageMetadataBindsBaseManifest(t *testing.T) {
+	root := t.TempDir()
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`)
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(manifest))
+	manifestFile := filepath.Join(root, "base.json")
+	require.NoError(t, os.WriteFile(manifestFile, manifest, 0o644))
+	layout := filepath.Join(root, "layout")
+	require.NoError(t, os.Mkdir(layout, 0o755))
+	index := fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d}]}`, digest, len(manifest))
+	require.NoError(t, os.WriteFile(filepath.Join(layout, "index.json"), []byte(index), 0o644))
+	buildinfo := filepath.Join(root, "buildinfo.json")
+	require.NoError(t, invokeRelease("buildinfo", "--out-json", buildinfo, "--out-env", filepath.Join(root, "buildinfo.env")))
+	for _, tc := range []struct{ flag, path string }{
+		{"--base-layout", layout},
+		{"--base-manifest", manifestFile},
+	} {
+		t.Run(tc.flag, func(t *testing.T) {
+			out := t.TempDir()
+			labels := filepath.Join(out, "labels.txt")
+			require.NoError(t, invokeRelease("oci-meta", "--buildinfo", buildinfo, "--title", "controller",
+				"--description", "Cucina controller", "--base-name", "example.invalid/base", tc.flag, tc.path,
+				"--out-labels", labels, "--out-created", filepath.Join(out, "created.txt"), "--out-tags", filepath.Join(out, "tags.txt")))
+			data, err := os.ReadFile(labels)
+			require.NoError(t, err)
+			require.Contains(t, string(data), "org.opencontainers.image.base.digest="+digest+"\n")
+		})
+	}
+}
+
+// Guards R-BUILD-3 / ADR 0110: the exported directory retains the historical
+// single-index envelope without changing the rules_img index or payload bytes.
+func TestImageLayoutPreservesIndexDigest(t *testing.T) {
+	root := t.TempDir()
+	input := filepath.Join(root, "flat")
+	// Bazel's sandbox presents input tree files as symlinks to read-only outputs.
+	inputFile := func(path string, data []byte) {
+		actual := filepath.Join(root, "source", path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+		require.NoError(t, os.WriteFile(actual, data, 0o444))
+		link := filepath.Join(input, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
+		require.NoError(t, os.Symlink(actual, link))
+	}
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[]}`)
+	manifestHash := fmt.Sprintf("%x", sha256.Sum256(manifest))
+	inputFile(filepath.Join("blobs", "sha256", manifestHash), manifest)
+	index := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:%s","size":%d}]}`, manifestHash, len(manifest)))
+	inputFile("index.json", index)
+	layoutVersion := []byte(`{"imageLayoutVersion":"1.0.0"}`)
+	inputFile("oci-layout", layoutVersion)
+	output := filepath.Join(root, "wrapped")
+	require.NoError(t, invokeRelease("wrap-oci", "--layout", input, "--out", output))
+	got, err := OCIIndexDigest(output)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("sha256:%x", sha256.Sum256(index)), got)
+	for _, tc := range []struct {
+		path string
+		want []byte
+	}{
+		{filepath.Join("blobs", "sha256", strings.TrimPrefix(got, "sha256:")), index},
+		{filepath.Join("blobs", "sha256", manifestHash), manifest},
+		{"oci-layout", layoutVersion},
+	} {
+		data, err := os.ReadFile(filepath.Join(output, tc.path))
+		require.NoError(t, err)
+		require.Equal(t, tc.want, data, tc.path)
+		info, err := os.Lstat(filepath.Join(output, tc.path))
+		require.NoError(t, err)
+		require.Zero(t, info.Mode()&os.ModeSymlink, "export must not depend on the input tree")
+	}
+	original, err := os.ReadFile(filepath.Join(input, "index.json"))
+	require.NoError(t, err)
+	require.Equal(t, index, original, "export must not modify immutable input blobs")
 }
 
 // R-OPS-7 / R-CLI-1: the tap formula built from release/homebrew/cucinactl.rb.tmpl points every
