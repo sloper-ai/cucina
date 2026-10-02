@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Proto import paths are relative to api/proto (as in buf.yaml), e.g.
+# `import "cucina/v1/common.proto";`.
+# gazelle:proto_strip_import_prefix /api/proto

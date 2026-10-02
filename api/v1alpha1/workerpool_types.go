@@ -69,7 +69,7 @@ type WorkerPoolList struct {
 // +kubebuilder:validation:XValidation:rule="self.provider != 'ec2' || !has(self.tart)",message="spec.tart is only valid for provider tart"
 // +kubebuilder:validation:XValidation:rule="self.provider != 'tart' || !has(self.ec2)",message="spec.ec2 is only valid for provider ec2"
 // +kubebuilder:validation:XValidation:rule="self.capacity.minRunning <= self.capacity.max",message="capacity.minRunning must not exceed capacity.max"
-// +kubebuilder:validation:XValidation:rule="self.platform == oldSelf.platform && self.provider == oldSelf.provider && self.sizeClass == oldSelf.sizeClass",message="platform, provider and sizeClass are immutable",optionalOldSelf=true
+// +kubebuilder:validation:XValidation:rule="self.platform == oldSelf.platform && self.provider == oldSelf.provider && self.sizeClass == oldSelf.sizeClass",message="platform, provider and sizeClass are immutable"
 type WorkerPoolSpec struct {
 	// Platform names an entry of platforms/pools.json (shipped in the controller and the
 	// chart), e.g. "linux-x86-64", "linux-aarch64", "windows-x86-64", "macos-arm64-xcode27.0".

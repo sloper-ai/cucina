@@ -106,7 +106,6 @@ spec:
             type: object
             x-kubernetes-validations:
             - message: serial is immutable
-              optionalOldSelf: true
               rule: self.serial == oldSelf.serial
           status:
             description: MacHostStatus is the observed state; written only by the

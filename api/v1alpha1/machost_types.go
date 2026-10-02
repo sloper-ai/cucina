@@ -50,7 +50,7 @@ type MacHostList struct {
 
 // MacHostSpec is the operator-declared intent for a host.
 //
-// +kubebuilder:validation:XValidation:rule="self.serial == oldSelf.serial",message="serial is immutable",optionalOldSelf=true
+// +kubebuilder:validation:XValidation:rule="self.serial == oldSelf.serial",message="serial is immutable"
 type MacHostSpec struct {
 	// Serial is the hardware serial number (the admission key, R-SEC-3).
 	// +kubebuilder:validation:MinLength=6

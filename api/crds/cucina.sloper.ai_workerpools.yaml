@@ -442,7 +442,6 @@ spec:
             - message: capacity.minRunning must not exceed capacity.max
               rule: self.capacity.minRunning <= self.capacity.max
             - message: platform, provider and sizeClass are immutable
-              optionalOldSelf: true
               rule: self.platform == oldSelf.platform && self.provider == oldSelf.provider
                 && self.sizeClass == oldSelf.sizeClass
           status:
