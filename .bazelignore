@@ -1,0 +1,5 @@
+.git
+.work
+target
+# Separate Bzlmod module (@cucina_platforms); consumed via local_path_override.
+bazel/platforms

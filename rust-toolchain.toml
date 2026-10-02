@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cargo-mode development toolchain (IDEs, `cargo test`). Bazel uses the hermetic
+# rules_rs toolchain pinned to the same version in MODULE.bazel.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

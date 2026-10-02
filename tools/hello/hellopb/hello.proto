@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//
+// Build-system smoke-test API: proves the Go (go_proto + go_grpc_v2) and Rust
+// (prost + tonic) code generation paths end to end (R-BUILD-1).
+syntax = "proto3";
+
+package cucina.hello.v1;
+
+option go_package = "github.com/sloper-ai/cucina/tools/hello/hellopb";
+
+// Greeter answers with a greeting.
+service Greeter {
+  // SayHello greets the caller by name ("world" when empty).
+  rpc SayHello(HelloRequest) returns (HelloReply);
+}
+
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloReply {
+  string message = 1;
+}

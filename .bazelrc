@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina Bazel configuration (R-BUILD-4, R-DATA-1, R-TEST-8h). How-to: docs/dev/bazel.md.
+# Machine-local settings (output user root, disk/repository caches) live in the
+# gitignored user.bazelrc written by tools/setup-user-bazelrc.sh (imported last).
+
+# --- Common -----------------------------------------------------------------
+common --enable_platform_specific_config
+# Output directories are named after the target platform instead of the host
+# CPU, so different client hosts produce identical action keys (R-XPLAT-5).
+common --experimental_platform_in_output_dir
+# ...named by a hash of the platform label ("platform-<hash>-fastbuild"): the
+# legacy heuristic names the host platform after the CPU ("darwin_arm64"), which
+# collides with same-named platforms such as @rules_go//go/toolchain:darwin_arm64
+# ("conflicting actions" for hermetic-llvm's runtimes).
+common --noexperimental_use_platforms_in_output_dir_legacy_heuristic
+# hermetic-llvm + rules_rs: cc-rs (Rust build scripts) can't drive llvm-libtool-darwin.
+common --@rules_cc//cc/toolchains/args/archiver_flags:use_libtool_on_macos=False
+# Hermetic builds never consult the local Xcode: an empty xcode_config.
+common --xcode_version_config=//bazel/toolchains:xcode_disabled
+# C/C++ comes only from hermetic-llvm: never autodetect host toolchains.
+common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+# Prebuilt protoc through proto toolchain resolution (on by default in Bazel 9).
+common --@protobuf//bazel/toolchains:prefer_prebuilt_protoc
+# Keep .proto comments in descriptor sets so generated code carries them (and
+# matches `buf generate` byte for byte; ADR 0105).
+common --@protobuf//bazel/flags:experimental_proto_descriptor_sets_include_source_info
+# Pure Go everywhere (rules_go enables cgo whenever a C toolchain resolves);
+# cgo targets (cucina-hostd) opt back in with `pure = "off"` (R-BUILD-2).
+common --@rules_go//go/config:pure
+# Every *_test must carry a tier-* tag (R-TEST-8h; see bazel/tier_check.bzl).
+build --aspects=//bazel:tier_check.bzl%tier_tags_aspect
+build --show_result=20
+
+# --- Rust lint (R-BUILD-1 "Lint") ----------------------------------------------
+# rustfmt_test targets and `cargo fmt` share the root rustfmt.toml.
+common --@rules_rust//rust/settings:rustfmt.toml=//:rustfmt.toml
+# Clippy over Rust targets: bazel build --config=clippy //cli/...
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+build:clippy --@rules_rust//rust/settings:clippy_flags=-Dwarnings
+
+# --- Tests (R-TEST-5, R-TEST-8h) --------------------------------------------
+test --test_tag_filters=-quarantine
+test --flaky_test_attempts=1
+test --test_output=errors
+test --test_verbose_timeout_warnings
+
+# Nightly: quarantined tests run too. Manual tiers (simulation, system) are
+# selected explicitly, e.g.
+#   bazel test --config=nightly $(bazel query 'attr(tags, "\btier-simulation\b", tests(//...))')
+test:nightly --test_tag_filters=
+test:nightly --runs_per_test_detects_flakes
+
+# e2e scenarios (R-TEST-8d): real environments, never cached, never remote.
+#   bazel test --config=e2e //test/e2e:<scenario>
+test:e2e --test_tag_filters=scenario
+test:e2e --cache_test_results=no
+test:e2e --test_output=streamed
+test:e2e --strategy=TestRunner=local
+test:e2e --test_env=CUCINA_E2E_ENV
+test:e2e --test_env=AWS_PROFILE
+test:e2e --test_env=AWS_REGION
+test:e2e --test_env=HOME
+
+# --- CI ---------------------------------------------------------------------
+common:ci --lockfile_mode=error
+common:ci --color=yes
+common:ci --curses=no
+common:ci --show_timestamps
+common:ci --announce_rc
+test:ci --test_summary=terse
+
+# --- Windows targets with the MSVC ABI (R-XPLAT-2d/-6; terms accepted 2026-10-01) ---
+common:msvc --repo_env=BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA=1
+common:msvc --repo_env=BAZEL_WINDOWS_SDK_EULA=1
+
+# --- Platform-specific (selected by --enable_platform_specific_config) -------
+# rules_rs needs the MSVC ABI on Windows hosts to pick the right Rust toolchain.
+common:windows --host_platform=//bazel/host:windows_msvc
+common:windows --config=msvc
+startup:windows --windows_enable_symlinks
+build:windows --enable_runfiles
+
+# --- Cucina remote execution (R-BUILD-4, R-DATA-1) ----------------------------
+# Generic, endpoint-free client defaults. The endpoint, TLS and the host-scoped
+# credential helper are per deployment: `cucinactl bazelrc` emits them into
+# user.bazelrc (TODO(cli agent): R-AUTH-8 helper wiring), e.g.
+#   build:cucina --remote_executor=grpcs://cucina.example.com
+#   build:cucina --credential_helper=cucina.example.com=%workspace%/tools/cucina-credential-helper
+# and the startup option `startup --experimental_remote_repo_contents_cache`
+# (startup options can't live in a --config).
+build:cucina --remote_instance_name=main
+build:cucina --remote_cache_compression
+build:cucina --remote_download_outputs=toplevel
+build:cucina --experimental_remote_cache_eviction_retries=5
+build:cucina --rewind_lost_inputs
+build:cucina --remote_build_event_upload=minimal
+build:cucina --nolegacy_important_outputs
+build:cucina --remote_retries=10
+build:cucina --remote_retry_max_delay=30s
+build:cucina --grpc_keepalive_time=30s
+build:cucina --noremote_local_fallback
+build:cucina --jobs=200
+# Keep --experimental_remote_cache_ttl (default 3h) below storage retention.
+# Never set --experimental_remote_cache_chunking (Buildbarn: Unimplemented).
+# TODO(cross-platform agent): bazel/platforms/cucina.bazelrc provides the full
+# --extra_execution_platforms list (Linux amd64/arm64 incl. musl twin, macOS
+# arm64, Windows amd64, then test twins) for :cucina and :cucina-macos.
+build:cucina-macos --config=cucina
+try-import %workspace%/bazel/platforms/cucina.bazelrc
+# CI: Build without the Bytes, minimal downloads (R-DATA-1 P2).
+build:cucina-ci --config=cucina
+build:cucina-ci --remote_download_outputs=minimal
+# Read-only principals (no ac-write grant; R-AUTH-8).
+build:cucina-readonly --remote_upload_local_results=false
+
+# --- Machine-local overrides (gitignored; tools/setup-user-bazelrc.sh) --------
+try-import %workspace%/user.bazelrc

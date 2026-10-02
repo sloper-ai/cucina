@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# nogo: `go vet`-equivalent analyzers run as part of every Go compile in this
+# repository (R-BUILD-1 "Lint"; static tier). Wired in MODULE.bazel via
+# go_sdk.nogo(); applies to main-repository packages only.
+load("@rules_go//go:def.bzl", "TOOLS_NOGO", "nogo")
+
+# The `go vet` default set (plus nilness). TOOLS_NOGO also carries noisy or
+# demo-only passes (atomicalign, deepequalerrors, findcall, sortslice, ...).
+_VET_ANALYZERS = [
+    "appends",
+    "asmdecl",
+    "assign",
+    "atomic",
+    "bools",
+    "buildtag",
+    "composite",
+    "copylock",
+    "defers",
+    "directive",
+    "errorsas",
+    "framepointer",
+    "httpresponse",
+    "ifaceassert",
+    "loopclosure",
+    "lostcancel",
+    "nilfunc",
+    "nilness",
+    "printf",
+    "shift",
+    "sigchanyzer",
+    "slog",
+    "stdmethods",
+    "stringintconv",
+    "structtag",
+    "testinggoroutine",
+    "tests",
+    "timeformat",
+    "unmarshal",
+    "unreachable",
+    "unsafeptr",
+    "unusedresult",
+]
+
+nogo(
+    name = "nogo",
+    config = "config.json",
+    visibility = ["//visibility:public"],
+    deps = [
+        a
+        for a in TOOLS_NOGO
+        if a.split("/passes/")[-1].split(":")[0] in _VET_ANALYZERS
+    ],
+)

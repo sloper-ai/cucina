@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:proto.bzl", "cucina_proto_go")
+
+proto_library(
+    name = "hellopb_proto",
+    srcs = ["hello.proto"],
+    visibility = ["//visibility:public"],
+)
+
+# Checked-in Go code: `bazel run //tools/hello/hellopb:hellopb_go` regenerates it.
+cucina_proto_go(
+    name = "hellopb_go",
+    grpc = True,
+    importpath = "github.com/sloper-ai/cucina/tools/hello/hellopb",
+    proto = ":hellopb_proto",
+)
+
+go_library(
+    name = "hellopb",
+    srcs = [
+        "hello.pb.go",
+        "hello_grpc.pb.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/tools/hello/hellopb",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+    ],
+)

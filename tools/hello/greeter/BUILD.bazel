@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "greeter",
+    srcs = ["greeter.go"],
+    importpath = "github.com/sloper-ai/cucina/tools/hello/greeter",
+    visibility = ["//visibility:public"],
+    deps = ["//tools/hello/hellopb"],
+)
+
+cucina_go_test(
+    name = "greeter_test",
+    srcs = ["greeter_test.go"],
+    tier = "unit",
+    deps = [
+        ":greeter",
+        "//tools/hello/hellopb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//test/bufconn",
+    ],
+)

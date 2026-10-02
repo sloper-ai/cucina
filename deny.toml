@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# cargo-deny 0.20 (R-LIB-3, R-TEST-5). Runs as a CI step outside Bazel:
+#   cargo deny --all-features check
+[graph]
+targets = [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+]
+
+[advisories]
+version = 2
+ignore = [
+    # rsa 0.9 "Marvin" timing side channel: exploitable only where an attacker can
+    # time RSA *decryption or signing* with a private key. cucinactl never holds an
+    # RSA private key; openidconnect uses rsa only to *verify* ID-token signatures
+    # with the IdP's public keys, so the vulnerable code is unreachable (R-LIB-3).
+    { id = "RUSTSEC-2023-0071", reason = "verify-only use of rsa via openidconnect; no private-key operations (R-LIB-3)" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "OpenSSL",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# Cucina's own crates are unpublished (publish = false) and FSL-1.1-ALv2.
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace path dependencies (cli/*, publish = false) carry no version.
+allow-wildcard-paths = true
+deny = [
+    { crate = "mockall", reason = "interaction mocks are banned (R-TEST-5); use fakes" },
+    { crate = "ring", reason = "single crypto provider: aws-lc-rs everywhere (R-LIB-3)" },
+    { crate = "openssl", reason = "TLS is rustls + aws-lc-rs (R-LIB-3)" },
+    { crate = "openssl-sys", reason = "TLS is rustls + aws-lc-rs (R-LIB-3)" },
+    { crate = "native-tls", reason = "TLS is rustls + aws-lc-rs (R-LIB-3)" },
+    { crate = "rustls-pemfile", reason = "archived (RUSTSEC-2025-0134); use rustls-pki-types PEM parsing" },
+    { crate = "tonic", reason = "RPC is connect-rust (connectrpc) + buffa (ADR 0003)" },
+    { crate = "tonic-prost", reason = "RPC is connect-rust (connectrpc) + buffa (ADR 0003)" },
+    { crate = "prost", reason = "protobuf is buffa (ADR 0003)" },
+    { crate = "serde_yaml", reason = "no YAML in Rust: JSON/TOML only" },
+    { crate = "serde_yml", reason = "no YAML in Rust: JSON/TOML only" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# C/C++ slice of the build-system smoke test (R-BUILD-1). Cross builds:
+#   bazel build //tools/hello/cc:hello --platforms=@llvm//platforms:linux_x86_64_gnu.2.28
+#   bazel build //tools/hello/cc:hello --platforms=@llvm//platforms:linux_aarch64_musl
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+cc_library(
+    name = "greet",
+    srcs = ["greet.cc"],
+    hdrs = ["greet.h"],
+    copts = ["-std=c++20"],
+)
+
+cc_binary(
+    name = "hello",
+    srcs = ["main.cc"],
+    copts = ["-std=c++20"],
+    deps = [":greet"],
+)
+
+cc_test(
+    name = "greet_test",
+    size = "small",
+    srcs = ["greet_test.cc"],
+    copts = ["-std=c++20"],
+    tags = ["tier-unit"],
+    deps = [":greet"],
+)

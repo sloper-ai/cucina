@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# golangci-lint v2 (R-LIB-2: v2.14.0). Runs as a CI step outside Bazel; Bazel's
+# nogo (tools/nogo) covers the `go vet` analyzers on every compile.
+version: "2"
+
+run:
+  go: "1.27"
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - forbidigo
+    - misspell
+    - nolintlint
+    - testifylint
+    - unconvert
+    - usestdlibvars
+  settings:
+    depguard:
+      rules:
+        banned:
+          list-mode: lax
+          deny:
+            # R-TEST-5: no interaction mocks on owned ports; use internal/fakes.
+            - pkg: github.com/golang/mock
+              desc: gomock is banned (R-TEST-5); use the fakes in internal/fakes
+            - pkg: go.uber.org/mock
+              desc: gomock is banned (R-TEST-5); use the fakes in internal/fakes
+            - pkg: github.com/vektra/mockery
+              desc: mockery is banned (R-TEST-5); use the fakes in internal/fakes
+            - pkg: github.com/stretchr/testify/mock
+              desc: interaction mocks are banned (R-TEST-5); use the fakes in internal/fakes
+            # R-BUILD-2: no Docker in the unit/integration/simulation tiers.
+            - pkg: github.com/testcontainers/testcontainers-go
+              desc: testcontainers is banned (R-BUILD-2); boot pinned release binaries instead
+            # Logging is log/slog (+ go-logr bridge for controller-runtime).
+            - pkg: go.uber.org/zap
+              desc: zap is banned; use log/slog
+            - pkg: sigs.k8s.io/controller-runtime/pkg/log/zap
+              desc: zap is banned; use log/slog via logr.FromSlogHandler
+            # Deprecated or superseded packages.
+            - pkg: github.com/golang/protobuf
+              desc: deprecated; use google.golang.org/protobuf
+            - pkg: io/ioutil
+              desc: deprecated; use io and os
+            - pkg: github.com/pkg/errors
+              desc: use errors and fmt.Errorf with %w
+            - pkg: github.com/hashicorp/golang-lru
+              desc: use github.com/maypok86/otter/v2 (R-LIB-2)
+            - pkg: github.com/golang-jwt/jwt
+              desc: use github.com/go-jose/go-jose/v4 (R-LIB-2)
+            - pkg: github.com/lestrrat-go/jwx
+              desc: use github.com/go-jose/go-jose/v4 (R-LIB-2)
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^time\.Sleep$
+          msg: no sleeps in tests (R-TEST-5); use testing/synctest or a fake Clock
+  exclusions:
+    generated: lax
+    paths:
+      - third_party
+    rules:
+      # time.Sleep is banned in tests only.
+      - path-except: _test\.go$
+        linters:
+          - forbidigo
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/sloper-ai/cucina

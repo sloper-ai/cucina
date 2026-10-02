@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# CI on GitHub-hosted runners (§9, R-BUILD-6): lint + secret scan, `bazel test //...`
+# on Linux, macOS and Windows (each OS runs the targets compatible with it via
+# target_compatible_with), and an RBE job through Cucina itself once the repository
+# variable CUCINA_ENDPOINT is set. Nightly: quarantined tests and the simulation tier.
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: lint + secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: go rust golangci-lint gitleaks
+      - name: gitleaks (full history, §12)
+        run: gitleaks git --no-banner --redact --config .gitleaks.toml --exit-code 1 .
+      - name: golangci-lint
+        run: golangci-lint run ./...
+      - name: cargo-deny
+        run: mise exec cargo-deny@0.20.2 -- cargo-deny --all-features check
+      - name: actionlint
+        run: mise exec actionlint@1.7.12 shellcheck@0.11.0 -- actionlint
+
+  test:
+    name: bazel test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            targets: //...
+          - os: macos-latest
+            targets: //...
+          # Rust can't link MSVC-flavoured exec tools yet (ADR 0103); Windows Rust
+          # binaries are cross-built (gnullvm) in the Linux job instead.
+          - os: windows-latest
+            targets: //... -//cli/... -//tools/hello/rust/...
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-${{ matrix.os }}
+          repository-cache: true
+          cache-save: ${{ github.event_name != 'pull_request' }}
+      - name: bazel build
+        run: bazel build --config=ci -- ${{ matrix.targets }}
+      - name: bazel test
+        run: bazel test --config=ci -- ${{ matrix.targets }}
+      - name: cross-build Rust release targets (Linux musl, Windows gnullvm)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          for triple in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnullvm; do
+            bazel build --config=ci --platforms="@rules_rs//rs/platforms:${triple}" //cli/cucinactl //tools/hello/rust:hello_rs
+          done
+
+  nightly:
+    name: nightly (quarantine + simulation)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-nightly
+          repository-cache: true
+      - name: quarantined + simulation-tier tests
+        run: |
+          targets="$(bazel query --noshow_progress \
+            'attr(tags, "\bquarantine\b", tests(//...)) + attr(tags, "\btier-simulation\b", tests(//...))')"
+          if [ -z "${targets}" ]; then
+            echo "no quarantined or simulation tests"
+            exit 0
+          fi
+          # shellcheck disable=SC2086 # one target per word
+          bazel test --config=ci --config=nightly ${targets}
+
+  rbe:
+    name: bazel test via Cucina RBE
+    if: vars.CUCINA_ENDPOINT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC -> Cucina STS (R-AUTH-7)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+      - name: configure Cucina remote execution
+        env:
+          CUCINA_ENDPOINT: ${{ vars.CUCINA_ENDPOINT }}
+        # TODO(cli agent, R-AUTH-7/R-AUTH-8): build cucinactl, install it as
+        # tools/cucina-credential-helper (argv[0] dispatch) and let
+        # `cucinactl bazelrc --platform linux` write these lines instead.
+        run: |
+          {
+            echo "build:cucina --remote_executor=grpcs://${CUCINA_ENDPOINT}"
+            echo "build:cucina --credential_helper=${CUCINA_ENDPOINT}=%workspace%/tools/cucina-credential-helper"
+          } >> user.bazelrc
+      - name: bazel test //... (remote)
+        run: bazel test --config=ci --config=cucina-ci //...

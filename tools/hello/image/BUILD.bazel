@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# OCI slice of the build-system smoke test (R-BUILD-1): a pure-Go binary on
+# distroless/static-debian13:nonroot (by digest) as a linux/amd64+arm64 index.
+# `:hello_push` is push-ready but never run (the repository is a placeholder).
+load("//bazel:oci.bzl", "cucina_go_image")
+
+cucina_go_image(
+    name = "hello",
+    binary = "//tools/hello/cmd/hello",
+    repository = "ghcr.io/sloper-ai/cucina-hello",
+)

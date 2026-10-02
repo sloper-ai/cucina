@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Pinned tool binaries (tools/pinned.bzl), repository-wide static checks and the
+# test-tier guard. Owned by the bazel agent; see docs/dev/bazel.md.
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel:tiers.bzl", "cucina_sh_test")
+load(":tier_tags_test.bzl", "tier_checked", "untiered_rejected_test")
+
+exports_files([
+    "pinned.bzl",
+    "update-goldens.sh",
+])
+
+# --- Short aliases for the pinned binaries (platform-selected) ---------------
+[
+    alias(
+        name = name,
+        actual = actual,
+        visibility = ["//visibility:public"],
+    )
+    for name, actual in {
+        "bb_runner": "@bb_release//:bb_runner",
+        "bb_scheduler": "@bb_release//:bb_scheduler",
+        "bb_storage": "@bb_release//:bb_storage",
+        "bb_worker": "@bb_release//:bb_worker",
+        "buf": "@buf//:buf",
+        "controller-gen": "@controller_gen//:controller-gen",
+        "gitleaks": "@gitleaks//:gitleaks",
+        "helm": "@helm//:helm",
+        "helm_unittest_plugin": "@helm_unittest//:plugin",
+        "helm_unittest_plugin.yaml": "@helm_unittest//:plugin.yaml",
+        "kubeconform": "@kubeconform//:kubeconform",
+        "promtool": "@promtool//:promtool",
+        "tflint": "@tflint//:tflint",
+        "tofu": "@opentofu//:tofu",
+    }.items()
+]
+
+_PINNED = {
+    "bb_runner": "@bb_release//:bb_runner",
+    "bb_scheduler": "@bb_release//:bb_scheduler",
+    "bb_storage": "@bb_release//:bb_storage",
+    "bb_worker": "@bb_release//:bb_worker",
+    "buf": "@buf//:buf",
+    "controller_gen": "@controller_gen//:controller-gen",
+    "etcd": "@envtest//:etcd",
+    "gitleaks": "@gitleaks//:gitleaks",
+    "helm": "@helm//:helm",
+    "kube_apiserver": "@envtest//:kube-apiserver",
+    "kubeconform": "@kubeconform//:kubeconform",
+    "kubectl": "@envtest//:kubectl",
+    "promtool": "@promtool//:promtool",
+    "tflint": "@tflint//:tflint",
+    "tofu": "@opentofu//:tofu",
+}
+
+cucina_sh_test(
+    name = "pinned_tools_test",
+    srcs = ["pinned_tools_test.sh"],
+    args = ["%s=$(rootpath %s)" % (name, label) for name, label in _PINNED.items()] + [
+        "helm_unittest_plugin=$(rootpath @helm_unittest//:plugin.yaml)",
+    ],
+    data = _PINNED.values() + [
+        "@helm_unittest//:plugin",
+        "@helm_unittest//:plugin.yaml",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "static",
+)
+
+# --- Secret scan of the files git would commit (§12) --------------------------
+cucina_sh_test(
+    name = "gitleaks_test",
+    srcs = ["gitleaks_test.sh"],
+    args = [
+        "$(rootpath @gitleaks//:gitleaks)",
+        "$(rootpath //:.gitleaks.toml)",
+    ],
+    data = [
+        "//:.gitleaks.toml",
+        "@gitleaks",
+    ],
+    # Scans the live workspace: unsandboxed, never cached, never remote.
+    tags = [
+        "external",
+        "local",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "static",
+)
+
+# --- buf lint over api/proto (R-BUILD-1 "Protobuf") ---------------------------
+cucina_sh_test(
+    name = "buf_lint_test",
+    srcs = ["buf_lint_test.sh"],
+    args = [
+        "$(rootpath @buf)",
+        "$(rootpath //:buf.yaml)",
+    ],
+    data = [
+        "//:buf.yaml",
+        "@buf",
+    ],
+    tags = [
+        "external",
+        "local",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "static",
+)
+
+# --- Tier policy guard (R-TEST-8h) --------------------------------------------
+# Fixture: a test WITHOUT a tier tag; `manual` keeps it out of `//...`.
+sh_test(
+    name = "untiered_fixture_test",
+    srcs = ["testdata/untiered_test.sh"],
+    tags = ["manual"],
+)
+
+tier_checked(
+    name = "untiered_fixture_checked",
+    tags = ["manual"],
+    target = ":untiered_fixture_test",
+)
+
+untiered_rejected_test(
+    name = "tier_tags_test",
+    tags = ["tier-static"],
+    target_under_test = ":untiered_fixture_checked",
+)

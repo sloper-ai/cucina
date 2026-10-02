@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Vendored Kubernetes v1.36.5 strict JSON schemas for kubeconform (no network in
+# tests); refresh/extend with vendor-schemas.sh.
+filegroup(
+    name = "schemas",
+    srcs = glob(["schemas/**/*.json"]),
+    visibility = ["//visibility:public"],
+)

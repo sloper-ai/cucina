@@ -1,0 +1,198 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+"""Cucina: a managed Buildbarn distribution. Bzlmod workspace (R-BUILD-1).
+
+How-to and conventions: docs/dev/bazel.md. Keep `bazel mod tidy` clean.
+"""
+
+module(name = "cucina")
+
+# ---------------------------------------------------------------------------
+# Core rulesets
+# ---------------------------------------------------------------------------
+bazel_dep(name = "apple_support", version = "2.9.1")  # xcode_config (Xcode detection disabled)
+bazel_dep(name = "bazel_lib", version = "3.7.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "protobuf", version = "36.2")
+bazel_dep(name = "rules_cc", version = "0.2.25")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+
+bazel_dep(name = "buildifier_prebuilt", version = "10.1.0", dev_dependency = True)
+
+# ---------------------------------------------------------------------------
+# Go (rules_go + Gazelle). go.mod is the source of truth for Go dependencies.
+# ---------------------------------------------------------------------------
+bazel_dep(name = "rules_go", version = "0.64.1")
+bazel_dep(name = "gazelle", version = "0.54.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.27.1")
+go_sdk.nogo(nogo = "//tools/nogo")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+use_repo(
+    go_deps,
+    "com_github_aws_aws_sdk_go_v2",
+    "com_github_aws_aws_sdk_go_v2_config",
+    "com_github_aws_aws_sdk_go_v2_service_ec2",
+    "com_github_aws_aws_sdk_go_v2_service_pricing",
+    "com_github_aws_aws_sdk_go_v2_service_ssm",
+    "com_github_aws_smithy_go",
+    "com_github_bazelbuild_remote_apis",
+    "com_github_buildbarn_bb_remote_execution",
+    "com_github_buildbarn_bb_storage",
+    "com_github_cenkalti_backoff_v7",
+    "com_github_coreos_go_oidc_v3",
+    "com_github_fsnotify_fsnotify",
+    "com_github_go_jose_go_jose_v4",
+    "com_github_go_logr_logr",
+    "com_github_jmespath_go_jmespath",
+    "com_github_keybase_go_keychain",
+    "com_github_klauspost_compress",
+    "com_github_maypok86_otter_v2",
+    "com_github_prometheus_client_golang",
+    "com_github_prometheus_client_model",
+    "com_github_prometheus_common",
+    "com_github_spf13_cobra",
+    "com_github_stretchr_testify",
+    "com_google_cloud_go_longrunning",
+    "dev_cel_cel_go",
+    "in_yaml_go_yaml_v3",
+    "io_k8s_api",
+    "io_k8s_apimachinery",
+    "io_k8s_client_go",
+    "io_k8s_klog_v2",
+    "io_k8s_sigs_controller_runtime",
+    "io_k8s_sigs_yaml",
+    "net_howett_plist",
+    "net_pgregory_rapid",
+    "org_golang_google_genproto_googleapis_rpc",
+    "org_golang_google_grpc",
+    "org_golang_google_grpc_cmd_protoc_gen_go_grpc",
+    "org_golang_google_protobuf",
+    "org_golang_x_oauth2",
+    "org_golang_x_sys",
+    "org_golang_x_time",
+)
+
+# Go modules that ship BUILD files for their own Bazel workspaces (referencing
+# @rules_go/@protobuf/@grpc, or go_default_library names) that can't resolve
+# here: regenerate them with Gazelle and compile their checked-in *.pb.go.
+[
+    go_deps.gazelle_override(
+        build_file_generation = "clean",
+        directives = [
+            "gazelle:proto disable",
+            "gazelle:go_naming_convention import",
+        ],
+        path = path,
+    )
+    for path in [
+        "cel.dev/cel-go",
+        "github.com/google/go-jsonnet",
+        "github.com/bazelbuild/remote-apis",
+        "github.com/buildbarn/bb-remote-execution",
+        "github.com/buildbarn/bb-storage",
+    ]
+]
+
+# ---------------------------------------------------------------------------
+# C/C++: hermetic-llvm (LLVM 23.1.2), the only C/C++ toolchain (R-BUILD-2).
+# .bazelrc disables host toolchain detection. Registration is below.
+# ---------------------------------------------------------------------------
+bazel_dep(name = "llvm", version = "0.8.24")
+
+# ---------------------------------------------------------------------------
+# Rust: rules_rs (patched rules_rust facade) with rustc 1.98.1. Cargo.toml and
+# Cargo.lock are the source of truth; BUILD files are hand-written with
+# all_crate_deps()/aliases() from @crates.
+# ---------------------------------------------------------------------------
+bazel_dep(name = "rules_rs", version = "0.0.112")
+
+rules_rust = use_extension("@rules_rs//rs:rules_rust.bzl", "rules_rust")
+use_repo(rules_rust, "rules_rust")
+
+toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
+toolchains.toolchain(
+    edition = "2024",
+    version = "1.98.1",
+)
+use_repo(toolchains, "default_rust_toolchains")
+
+crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    cargo_lock = "//:Cargo.lock",
+    cargo_toml = "//:Cargo.toml",
+    # Every exec and target triple (R-BUILD-1): musl targets also need the GNU
+    # exec triple for build scripts and proc macros; gnullvm is the documented
+    # fallback for Windows (ADR 0103).
+    platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-unknown-linux-musl",
+        "x86_64-pc-windows-gnullvm",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+    ],
+)
+use_repo(crate, "crates")
+
+# Crates with C code build from BCR modules via the rules_rs overlays (copied
+# from rules_rs 0.0.112's 3rd_party/; see ADR 0101 and docs/dev/bazel.md).
+include("//third_party/rust:aws-lc-sys.MODULE.bazel")
+include("//third_party/rust:zstd-sys.MODULE.bazel")
+
+# ---------------------------------------------------------------------------
+# Container images (no Docker): rules_oci + tar.bzl, base pinned by digest.
+# ---------------------------------------------------------------------------
+bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "tar.bzl", version = "0.10.9")
+
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+
+# gcr.io/distroless/static-debian13:nonroot (index digest resolved 2026-10-02).
+oci.pull(
+    name = "distroless_static",
+    digest = "sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3",
+    image = "gcr.io/distroless/static-debian13",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(oci, "distroless_static", "distroless_static_linux_amd64", "distroless_static_linux_arm64_v8")
+
+# ---------------------------------------------------------------------------
+# Pinned tool binaries (helm, kubeconform, buf, controller-gen, gitleaks,
+# promtool, tflint, OpenTofu, envtest, Buildbarn releases, buffa/connect-rust
+# protoc plugins): tools/pinned.bzl.
+# ---------------------------------------------------------------------------
+pinned = use_extension("//tools:pinned.bzl", "pinned")
+use_repo(
+    pinned,
+    "bb_release",
+    "buf",
+    "controller_gen",
+    "envtest",
+    "gitleaks",
+    "helm",
+    "helm_unittest",
+    "kubeconform",
+    "opentofu",
+    "promtool",
+    "protoc_gen_buffa",
+    "protoc_gen_buffa_packaging",
+    "protoc_gen_connect_rust",
+    "tflint",
+)
+
+# ---------------------------------------------------------------------------
+# Toolchains. Root registrations win over those of dependencies.
+# ---------------------------------------------------------------------------
+register_toolchains(
+    "@default_rust_toolchains//...",
+    "@llvm//toolchain:all",
+)

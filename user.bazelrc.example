@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Example machine-local Bazel settings. Copy to user.bazelrc (gitignored) or run
+# tools/setup-user-bazelrc.sh, which writes the cache settings for you.
+# Never commit machine paths, endpoints or credentials.
+
+# Bulk data off the system disk (dev Mac: the Code volume).
+startup --output_user_root=/Volumes/Code/Sources/.dev-storage/cucina/bazel/output_user_root
+common --repository_cache=/Volumes/Code/Sources/.dev-storage/cucina/bazel/repository_cache
+build --disk_cache=/Volumes/Code/Sources/.dev-storage/cucina/bazel/disk_cache
+build --experimental_disk_cache_gc_max_size=100G
+build --experimental_disk_cache_gc_max_age=21d
+
+# Cucina remote execution (emitted by `cucinactl bazelrc --platform macos`):
+# startup --experimental_remote_repo_contents_cache
+# build:cucina --remote_executor=grpcs://cucina.example.com
+# build:cucina --credential_helper=cucina.example.com=%workspace%/tools/cucina-credential-helper
+# build --config=cucina

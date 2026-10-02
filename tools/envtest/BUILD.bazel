@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# envtest assets (etcd, kube-apiserver, kubectl; envtest-v1.36.2) as one
+# directory for KUBEBUILDER_ASSETS. Use via cucina_go_test(envtest = True).
+load("//bazel:envtest.bzl", "cucina_envtest_data")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+cucina_envtest_data(
+    name = "assets",
+    visibility = ["//visibility:public"],
+)
+
+cucina_go_test(
+    name = "envtest_test",
+    srcs = ["envtest_test.go"],
+    envtest = True,
+    tier = "integration",
+    deps = [
+        "@io_k8s_client_go//discovery",
+        "@io_k8s_sigs_controller_runtime//pkg/envtest",
+    ],
+)

@@ -1,0 +1,10 @@
+{
+  "_base": {
+    "exclude_files": {
+      "external/": "third-party code is not ours to lint",
+      "\\.pb\\.go$": "generated protobuf code",
+      "_cgo_|\\.cgo1\\.go$": "cgo-generated code",
+      "zz_generated\\.": "controller-gen output"
+    }
+  }
+}

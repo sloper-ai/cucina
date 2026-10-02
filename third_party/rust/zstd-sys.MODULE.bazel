@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# zstd-sys without its build script: libzstd comes from the BCR `zstd` module.
+# Copied from rules_rs 0.0.112 3rd_party/zstd-sys/include.MODULE.bazel
+# (BCR zstd bumped to 1.5.7.bcr.2).
+bazel_dep(name = "zstd", version = "1.5.7.bcr.2")
+
+crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
+crate.annotation(
+    crate = "zstd-sys",
+    gen_build_script = "off",
+    deps = ["@zstd"],
+)

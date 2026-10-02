@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Shared Starlark macros (owned by the bazel agent; bazel/platforms belongs to
+# the cross-platform agent). See docs/dev/bazel.md.
+
+exports_files(
+    glob(["*.bzl"]),
+    visibility = ["//visibility:public"],
+)
