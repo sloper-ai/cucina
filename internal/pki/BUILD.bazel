@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "pki",
+    srcs = [
+        "buildbarn.go",
+        "ca.go",
+        "csr.go",
+        "doc.go",
+        "expiry.go",
+        "identity.go",
+        "issuer.go",
+        "pin.go",
+        "reload.go",
+        "rotator.go",
+        "secrets.go",
+        "verify.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/pki",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/config",
+        "//internal/ports",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//peer",
+    ],
+)
+
+cucina_go_test(
+    name = "pki_test",
+    srcs = [
+        "buildbarn_test.go",
+        "ca_test.go",
+        "identity_test.go",
+        "issuer_test.go",
+        "reload_test.go",
+        "secrets_test.go",
+        "verify_test.go",
+    ],
+    tier = "integration",  # loopback TLS handshakes, temp-file reloads
+    deps = [
+        ":pki",
+        "//internal/config",
+        "//internal/pki/pkitest",
+        "@com_github_buildbarn_bb_storage//pkg/auth",
+        "@com_github_buildbarn_bb_storage//pkg/clock",
+        "@com_github_buildbarn_bb_storage//pkg/digest",
+        "@com_github_buildbarn_bb_storage//pkg/jmespath",
+        "@com_github_buildbarn_bb_storage//pkg/x509",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//kubernetes/scheme",
+        "@io_k8s_sigs_controller_runtime//pkg/client",
+        "@io_k8s_sigs_controller_runtime//pkg/client/fake",
+        "@net_pgregory_rapid//:rapid",
+    ],
+)

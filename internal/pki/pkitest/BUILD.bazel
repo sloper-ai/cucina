@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "pkitest",
+    srcs = ["pkitest.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/pki/pkitest",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/pki"],
+)
