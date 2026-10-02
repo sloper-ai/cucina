@@ -178,6 +178,12 @@ message SetCordon {
 
 message CollectDiagnostics {
   bool include_vm_logs = 1;
+  // Optional scoping used by StreamWorkerLogs for Tart VMs: one VM, one unit
+  // (bb-worker | bb-runner | agent), the last N lines, and whether to keep following.
+  string vm_name = 2;
+  string unit = 3;
+  uint32 tail_lines = 4;
+  bool follow = 5;
 }
 
 message UpdateHostConfig {

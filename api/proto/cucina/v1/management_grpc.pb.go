@@ -66,7 +66,9 @@ const (
 // (R-CLI-2). It is served on the controller's management port over TLS and
 // authenticated with a Cucina JWT carrying the `admin` verb for mutating calls
 // (R-AUTH-11); read-only calls need any valid Cucina JWT with `execute` or
-// `admin` on at least one instance name. Every mutating call is written to the
+// `admin` on at least one instance name, except the sensitive reads that are
+// admin-only (worker logs, host diagnostics, support bundle, and the listings
+// of service keys, enrollment tokens and revocations; see internal/mgmt, ADR 0580). Every mutating call is written to the
 // audit log (principal, method, request summary, result; never secrets).
 //
 // The controller proxies BuildQueueState and Kubernetes state so the CLI never
@@ -538,7 +540,9 @@ type ManagementService_CollectSupportBundleClient = grpc.ServerStreamingClient[L
 // (R-CLI-2). It is served on the controller's management port over TLS and
 // authenticated with a Cucina JWT carrying the `admin` verb for mutating calls
 // (R-AUTH-11); read-only calls need any valid Cucina JWT with `execute` or
-// `admin` on at least one instance name. Every mutating call is written to the
+// `admin` on at least one instance name, except the sensitive reads that are
+// admin-only (worker logs, host diagnostics, support bundle, and the listings
+// of service keys, enrollment tokens and revocations; see internal/mgmt, ADR 0580). Every mutating call is written to the
 // audit log (principal, method, request summary, result; never secrets).
 //
 // The controller proxies BuildQueueState and Kubernetes state so the CLI never

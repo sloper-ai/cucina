@@ -1470,6 +1470,12 @@ func (x *SetCordon) GetCordoned() bool {
 type CollectDiagnostics struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	IncludeVmLogs bool                   `protobuf:"varint,1,opt,name=include_vm_logs,json=includeVmLogs,proto3" json:"include_vm_logs,omitempty"`
+	// Optional scoping used by StreamWorkerLogs for Tart VMs: one VM, one unit
+	// (bb-worker | bb-runner | agent), the last N lines, and whether to keep following.
+	VmName        string `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
+	Unit          string `protobuf:"bytes,3,opt,name=unit,proto3" json:"unit,omitempty"`
+	TailLines     uint32 `protobuf:"varint,4,opt,name=tail_lines,json=tailLines,proto3" json:"tail_lines,omitempty"`
+	Follow        bool   `protobuf:"varint,5,opt,name=follow,proto3" json:"follow,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1507,6 +1513,34 @@ func (*CollectDiagnostics) Descriptor() ([]byte, []int) {
 func (x *CollectDiagnostics) GetIncludeVmLogs() bool {
 	if x != nil {
 		return x.IncludeVmLogs
+	}
+	return false
+}
+
+func (x *CollectDiagnostics) GetVmName() string {
+	if x != nil {
+		return x.VmName
+	}
+	return ""
+}
+
+func (x *CollectDiagnostics) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+func (x *CollectDiagnostics) GetTailLines() uint32 {
+	if x != nil {
+		return x.TailLines
+	}
+	return 0
+}
+
+func (x *CollectDiagnostics) GetFollow() bool {
+	if x != nil {
+		return x.Follow
 	}
 	return false
 }
@@ -2062,9 +2096,14 @@ const file_cucina_v1_host_proto_rawDesc = "" +
 	"\tPullImage\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\"'\n" +
 	"\tSetCordon\x12\x1a\n" +
-	"\bcordoned\x18\x01 \x01(\bR\bcordoned\"<\n" +
+	"\bcordoned\x18\x01 \x01(\bR\bcordoned\"\xa0\x01\n" +
 	"\x12CollectDiagnostics\x12&\n" +
-	"\x0finclude_vm_logs\x18\x01 \x01(\bR\rincludeVmLogs\"G\n" +
+	"\x0finclude_vm_logs\x18\x01 \x01(\bR\rincludeVmLogs\x12\x17\n" +
+	"\avm_name\x18\x02 \x01(\tR\x06vmName\x12\x12\n" +
+	"\x04unit\x18\x03 \x01(\tR\x04unit\x12\x1d\n" +
+	"\n" +
+	"tail_lines\x18\x04 \x01(\rR\ttailLines\x12\x16\n" +
+	"\x06follow\x18\x05 \x01(\bR\x06follow\"G\n" +
 	"\x10UpdateHostConfig\x123\n" +
 	"\bsettings\x18\x01 \x01(\v2\x17.cucina.v1.HostSettingsR\bsettings\"\x06\n" +
 	"\x04Ping\"2\n" +
