@@ -36,10 +36,17 @@ Per store and shard, from one `size`:
 * PVC (file mode): sum of blocks and maps + 10 % + 1 GiB (filesystem reserve, state files). Block mode: the CAS device
   plus a filesystem PVC for the rest.
 
-**Retention** (R-CP-4): the worst-case CAS retention is roughly `shards × CAS size × 24/38 / write rate` — the age of the
-oldest block when it is evicted. It must stay above Bazel's `--experimental_remote_cache_ttl` (3 h) and the longest build
-with margin; the chart records it as `cucina:cas_retention_seconds` and alerts below 6 h (warning) and 3 h (critical).
+**Retention** (R-CP-4) must stay above Bazel's `--experimental_remote_cache_ttl` (3 h) and the longest build with margin.
+A rough capacity-planning estimate is `shards × CAS size × 24/38 / write rate`; validate it under the actual workload.
 Example: 2 shards × 100 GiB at 50 GB/day of new content ≈ 2.5 days.
+
+The chart's `cucina:cas_retention_seconds` takes the minimum over central-storage targets only
+(`cucina_component="storage", storage_type="cas"`), never ephemeral worker L1 or host L2 caches. The
+[pinned producer](https://github.com/buildbarn/bb-storage/blob/086b011/pkg/blobstore/local/old_current_new_location_blob_map.go)
+initializes its timestamp to current Unix time at map construction/restart, so before eviction the value is map age,
+not infinite retention. On eviction the timestamp is when that block entered the old queue, not its blobs' upload time.
+A missing L3 series stays absent and is not a successful retention observation. The warning remains below 6 h and the
+critical guard below 3 h; startup/restart does not justify lowering either threshold.
 
 ## Memory and CPU drivers
 

@@ -13,9 +13,26 @@ exports_files(
 
 go_library(
     name = "slo",
-    srcs = ["slo.go"],
+    srcs = [
+        "blob_queries.go",
+        "slo.go",
+    ],
     importpath = "github.com/sloper-ai/cucina/slo",
     visibility = ["//visibility:public"],
+)
+
+# Execute the shared PromQL contract with the pinned tool outside the unit tier.
+# gazelle:exclude metrics_contract_test.go
+
+cucina_go_test(
+    name = "metrics_contract_test",  # keep
+    srcs = ["metrics_contract_test.go"],  # keep
+    runfiles_env = {"SLO_PROMTOOL": "//tools:promtool"},
+    tier = "static",
+    deps = [
+        ":slo",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 cucina_go_test(

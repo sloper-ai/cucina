@@ -190,8 +190,22 @@ Canaries (`internal/canary`, `cucina-controller canary cache|exec`): `cucina_can
 `cucina_canary_duration_seconds`, `cucina_canary_step_duration_seconds{step}`, `cucina_canary_exec_queue_seconds{pool}`,
 `cucina_canary_last_run_timestamp_seconds`, `cucina_canary_last_success_timestamp_seconds`. The shared SLO / recording-rule definitions live in
 `slo/` (Go data, exported as `slo/rules.json` and `slo/sloth.json`); scenarios, canaries and the chart's PrometheusRules query the same rules.
-Storage retention: the chart's storage config exposes `buildbarn_blobstore_local_blob_access_oldest_block_age_seconds`-style data; alerts use the
-recording rule `cucina:cas_retention_seconds` defined in `slo/` and `charts/cucina/files/rules`.
+Buildbarn blob bytes: both pinned storage versions (§4) expose
+`buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum` with case-sensitive labels: `storage_type="cas"` (not `CAS`),
+`backend_type="grpc"`, local backends `local_block_device` / `local_in_memory` (not `local`), and operations `Get`, `Put`,
+`GetFromComposite`. `cucina:blob_bytes:rate5m` groups its five-minute rate by `job`, `storage_type`, `backend_type` and `operation`.
+These are logical blob-size observations, not compressed transport/NIC bytes; an all-backend/layer sum can count the same content
+more than once and is diagnostic only. Acceptance queries share the selectors in `slo.CASBytesIncrease` / `slo.CASBytesRate`.
+
+Persistent L3 CAS retention uses
+`buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{cucina_component="storage",storage_type="cas"}`.
+The producer supplies `storage_type`; `cucina_component`, namespace and pod are scrape labels. Worker L1 and host L2 export the same
+native metric but must not control the L3 TTL guard. The location map initializes this gauge to its construction/restart time (not zero);
+restored old blocks also start with that timestamp. On removal of an old block, the gauge becomes that block's old-queue entry time,
+not its eviction time or its blobs' upload time. `cucina:cas_retention_seconds` is `time() - max by (namespace, pod)` of the selected gauge,
+so before removal it reflects finite map age, not infinite retention. The minimum across L3 pods must meet the existing four-hour
+acceptance margin above Bazel's three-hour TTL; chart warning/critical thresholds remain six/three hours. A missing L3 series is
+missing evidence, never a measured zero or a passing guard. Definitions are shared by `slo/` and `charts/cucina/files/rules`.
 
 ## 7. Fakes, conformance suites, simulation (R-TEST-8)
 

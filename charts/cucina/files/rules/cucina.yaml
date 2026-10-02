@@ -8,9 +8,12 @@
 groups:
   - name: cucina-recording-rules
     rules:
-      # Worst-case CAS retention over all shards (R-CP-4): time since the oldest block that
-      # was evicted had been written. Before the first eviction the gauge is 0, so the
-      # retention reads as "since 1970", i.e. unbounded.
+      # Worst-case retention over L3 shards (R-CP-4), excluding worker L1 and host L2.
+      # The pinned producer initializes this gauge to current Unix time at map creation
+      # (including restart); before any eviction it therefore measures map age, not infinity.
+      # On eviction it records when that block entered the old queue, not blob upload time.
+      # Source: bb-storage 086b011, pkg/blobstore/local/old_current_new_location_blob_map.go.
+      # Missing L3 samples stay absent: never synthesize a zero/healthy observation.
       - record: cucina:storage_retention_seconds
         expr: min by (namespace, storage_type) (time() - buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{cucina_component="storage"})
       - record: cucina:cas_retention_seconds
@@ -22,6 +25,9 @@ groups:
         expr: sum by (namespace) (cucina:ac_requests:rate5m{grpc_code="OK"}) / sum by (namespace) (cucina:ac_requests:rate5m{grpc_code=~"OK|NotFound"})
       - record: cucina:ac_hit_ratio:rate1h
         expr: sum by (namespace) (rate(buildbarn_blobstore_blob_access_operations_duration_seconds_count{cucina_component="frontend", storage_type="ac", backend_type="completeness_checking", operation="Get", grpc_code="OK"}[1h])) / sum by (namespace) (rate(buildbarn_blobstore_blob_access_operations_duration_seconds_count{cucina_component="frontend", storage_type="ac", backend_type="completeness_checking", operation="Get", grpc_code=~"OK|NotFound"}[1h]))
+      # Shared byte-rate record consumed by slo/e2e; retain its public grouping labels.
+      - record: cucina:blob_bytes:rate5m
+        expr: sum by (job, storage_type, backend_type, operation) (rate(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum[5m]))
       # Bytes read through the frontend (clients and workers) and over the Mac-site WAN.
       - record: cucina:frontend_cas_read_bytes:rate5m
         expr: sum by (namespace) (rate(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{cucina_component="frontend", storage_type="cas", backend_type="existence_caching", operation="Get"}[5m]))

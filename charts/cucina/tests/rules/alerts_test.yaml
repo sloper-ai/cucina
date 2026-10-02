@@ -63,8 +63,9 @@ tests:
               summary: Pool linux-aarch64 cannot obtain EC2 capacity (ice)
               description: Capacity errors persisted for 15m; queued work is failed after controller.scheduler.queueFailAfter (R-SCALE-4).
 
-  # UC16 / R-CP-4: retention too short. promtool's time() is seconds since the start of
-  # the test, so a block evicted at t=0 means retention == eval time (here 30m).
+  # UC16 / R-CP-4: retention too short. promtool's time() starts at zero; a
+  # gauge initialized at map creation (t=0), or naming an old-queue entry at t=0,
+  # therefore reports retention == eval time (30m). Only L3 lowercase cas counts.
   - interval: 1m
     input_series:
       - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="cucina",cucina_component="storage",storage_type="cas",pod="cucina-storage-0"}'
@@ -73,6 +74,13 @@ tests:
         values: '-100000x40'
       - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="healthy",cucina_component="storage",storage_type="cas",pod="cucina-storage-0"}'
         values: '-100000x40'
+      # Young ephemeral L1/L2 caches must not lower central-cache retention.
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="healthy",cucina_component="worker",storage_type="cas",node="test-worker"}'
+        values: '0x40'
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="healthy",cucina_component="host-l2",storage_type="cas",node="test-host"}'
+        values: '0x40'
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="uppercase",cucina_component="storage",storage_type="CAS",pod="cucina-storage-0"}'
+        values: '0x40'
     promql_expr_test:
       - expr: cucina:cas_retention_seconds
         eval_time: 30m
@@ -97,6 +105,40 @@ tests:
             exp_annotations:
               summary: CAS retention is below Bazel's --experimental_remote_cache_ttl (3h)
               description: Clients may reference blobs that were evicted; builds fall back to eviction retries. Grow the CAS now.
+
+  # R-CP-4 / real T1 regression: missing L3 stays an empty vector, not zero or
+  # "healthy". Worker/L2 samples and differently cased store names cannot fill it.
+  - interval: 1m
+    input_series:
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="cucina",cucina_component="worker",storage_type="cas"}'
+        values: '0x5'
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="cucina",cucina_component="host-l2",storage_type="cas"}'
+        values: '0x5'
+      - series: 'buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{namespace="cucina",cucina_component="storage",storage_type="CAS"}'
+        values: '0x5'
+    promql_expr_test:
+      - expr: cucina:cas_retention_seconds
+        eval_time: 5m
+        exp_samples: []
+
+  # R-DATA-7 / e2e metric contract: the chart must publish the same blob-byte
+  # recording name as slo, aggregating Pods while retaining job/store/backend/op.
+  - interval: 1m
+    input_series:
+      - series: 'buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{job="cucina-frontend",storage_type="cas",backend_type="existence_caching",operation="Get",pod="frontend-a"}'
+        values: '0+60x10'
+      - series: 'buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{job="cucina-frontend",storage_type="cas",backend_type="existence_caching",operation="Get",pod="frontend-b"}'
+        values: '0+120x10'
+      - series: 'buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{job="cucina-frontend",storage_type="ac",backend_type="completeness_checking",operation="Put",pod="frontend-a"}'
+        values: '0+180x10'
+    promql_expr_test:
+      - expr: cucina:blob_bytes:rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'cucina:blob_bytes:rate5m{job="cucina-frontend",storage_type="cas",backend_type="existence_caching",operation="Get"}'
+            value: 3
+          - labels: 'cucina:blob_bytes:rate5m{job="cucina-frontend",storage_type="ac",backend_type="completeness_checking",operation="Put"}'
+            value: 3
 
   # UC16: storage nearly full; key-location map too small.
   - interval: 1m

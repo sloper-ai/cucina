@@ -58,7 +58,7 @@
         },
         {
           "record": "cucina:cas_retention_seconds",
-          "expr": "time() - max by (namespace, pod) (buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{storage_type=\"CAS\"})"
+          "expr": "time() - max by (namespace, pod) (buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{cucina_component=\"storage\",storage_type=\"cas\"})"
         },
         {
           "record": "cucina:pod_rss_bytes",
