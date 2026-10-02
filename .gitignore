@@ -47,3 +47,13 @@ packer_cache/
 .idea/
 .vscode/
 *.swp
+
+# --- Stray binaries from `go build` without -o (use bazel or `go build -o $CUCINA_DEV_STORAGE/...`) ---
+/cucina-controller
+/cucina-hostd
+/cucina-worker-agent
+/cucinactl
+/cucina-credential-helper
+
+# --- Scripts whose names match the secret patterns above are code, not secrets ---
+!deploy/aws-e2e/scripts/kubeconfig.sh
