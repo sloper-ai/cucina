@@ -213,7 +213,7 @@ func (p *Probe) exec(ctx context.Context, rec *recorder, conn *grpc.ClientConn, 
 	n := nonce()
 	args := []string{"/bin/sh", "-c", "echo cucina-canary-" + n}
 	if strings.EqualFold(p.Platform["OSFamily"], "windows") {
-		args = []string{"cmd.exe", "/c", "echo cucina-canary-" + n}
+		args = []string{`C:\Windows\System32\cmd.exe`, "/d", "/c", "echo cucina-canary-" + n}
 	}
 	var props []*repb.Platform_Property
 	keys := make([]string, 0, len(p.Platform))

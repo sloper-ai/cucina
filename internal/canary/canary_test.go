@@ -23,6 +23,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -244,52 +246,83 @@ func TestCanaryFailureIsReported(t *testing.T) {
 	require.InDelta(t, 1.0, testutil.ToFloat64(m.runs.WithLabelValues(KindCache, "", "failure")), 1e-9)
 }
 
-// Guards R-TEST-7's execution canary: a tiny uncached action is routed to the
-// pool's exact runner properties through the real bb_scheduler, executed by a
-// (fake) worker thread of that queue, and verified by its stdout; the queue
-// time and worker id are recorded.
+// Guards R-TEST-7's execution canary: exact runner routing, verified stdout,
+// queue timing and worker identity. The Windows row guards the real preflight
+// failure: REAPI does not inherit PATH, so relative cmd.exe cannot be resolved.
 func TestExecCanaryAgainstBuildbarn(t *testing.T) {
-	props := map[string]string{"OSFamily": "linux", "ISA": "x86-64"}
-	schedClient, schedWorker, schedBQS := bbtest.FreeAddr(t), bbtest.FreeAddr(t), bbtest.FreeAddr(t)
-	storage := bootStorage(t, schedClient)
-	bbtest.BootScheduler(t, bbtest.SchedulerConfig(bbtest.SchedulerOptions{
-		ClientListen: schedClient, WorkerListen: schedWorker, BuildQueueStateListen: schedBQS, StorageAddress: storage,
-		Queues: []bbtest.Queue{{InstanceNamePrefix: "main", Properties: props, SizeClasses: []uint32{0}}},
-	}), bbtest.GRPCReady(schedClient, nil))
+	for _, tc := range []struct {
+		os    string
+		shell string
+	}{
+		{os: "linux", shell: "/bin/sh"},
+		{os: "windows", shell: `C:\Windows\System32\cmd.exe`},
+	} {
+		t.Run(tc.os, func(t *testing.T) {
+			pool := tc.os + "-x86-64"
+			props := map[string]string{"OSFamily": tc.os, "ISA": "x86-64"}
+			schedClient, schedWorker, schedBQS := bbtest.FreeAddr(t), bbtest.FreeAddr(t), bbtest.FreeAddr(t)
+			storage := bootStorage(t, schedClient)
+			bbtest.BootScheduler(t, bbtest.SchedulerConfig(bbtest.SchedulerOptions{
+				ClientListen: schedClient, WorkerListen: schedWorker, BuildQueueStateListen: schedBQS, StorageAddress: storage,
+				Queues: []bbtest.Queue{{InstanceNamePrefix: "main", Properties: props, SizeClasses: []uint32{0}}},
+			}), bbtest.GRPCReady(schedClient, nil))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	wconn, err := bbtest.Dial(schedWorker, nil)
-	require.NoError(t, err)
-	defer func() { _ = wconn.Close() }()
-	sconn, err := bbtest.Dial(storage, nil)
-	require.NoError(t, err)
-	defer func() { _ = sconn.Close() }()
-	worker := bbtest.NewFakeWorker(wconn, map[string]string{"pool": "linux-x86-64", "node": "i-canary", "thread": "0"}, "main", props, 0)
-	require.NoError(t, worker.Register(ctx))
-	go func() {
-		task, err := worker.Take(ctx)
-		if err != nil {
-			return
-		}
-		re := bbtest.NewREClient(sconn, "main")
-		var cmd repb.Command
-		if b, err := re.Read(ctx, task.GetAction().GetCommandDigest()); err == nil {
-			_ = proto.Unmarshal(b, &cmd)
-		}
-		echo := strings.TrimPrefix(cmd.GetArguments()[len(cmd.GetArguments())-1], "echo ")
-		now := time.Now()
-		_ = worker.Complete(ctx, task, &repb.ExecuteResponse{Result: &repb.ActionResult{
-			StdoutRaw: []byte(echo + "\n"),
-			ExecutionMetadata: &repb.ExecutedActionMetadata{Worker: `{"node":"i-canary","pool":"linux-x86-64","thread":"0"}`,
-				QueuedTimestamp: timestamppb.New(now.Add(-1500 * time.Millisecond)), WorkerStartTimestamp: timestamppb.New(now)},
-		}})
-	}()
-	p := &Probe{Kind: KindExec, Pool: "linux-x86-64", Platform: props, Endpoint: Endpoint{Target: "grpc://" + storage, InstanceName: "main"}, Timeout: 25 * time.Second}
-	r := p.Run(ctx)
-	require.True(t, r.Success, r.Error)
-	require.Equal(t, 1500*time.Millisecond, r.QueueTime)
-	require.Contains(t, r.Worker, "i-canary")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			wconn, err := bbtest.Dial(schedWorker, nil)
+			require.NoError(t, err)
+			defer func() { _ = wconn.Close() }()
+			sconn, err := bbtest.Dial(storage, nil)
+			require.NoError(t, err)
+			defer func() { _ = sconn.Close() }()
+			workerID := map[string]string{"pool": pool, "node": "i-canary", "thread": "0"}
+			identity, err := json.Marshal(workerID)
+			require.NoError(t, err)
+			worker := bbtest.NewFakeWorker(wconn, workerID, "main", props, 0)
+			require.NoError(t, worker.Register(ctx))
+			done := make(chan error, 1)
+			go func() {
+				task, err := worker.Take(ctx)
+				if err != nil {
+					done <- err
+					return
+				}
+				re := bbtest.NewREClient(sconn, "main")
+				b, err := re.Read(ctx, task.GetAction().GetCommandDigest())
+				if err != nil {
+					done <- err
+					return
+				}
+				var cmd repb.Command
+				if err := proto.Unmarshal(b, &cmd); err != nil {
+					done <- err
+					return
+				}
+				args := cmd.GetArguments()
+				if len(args) < 3 || args[0] != tc.shell {
+					// The fake executor has only this image's absolute shell path,
+					// and no inherited PATH, just like the real REAPI worker.
+					done <- worker.Complete(ctx, task, &repb.ExecuteResponse{Status: &statuspb.Status{
+						Code: int32(codes.InvalidArgument), Message: "executable unavailable without inherited PATH",
+					}})
+					return
+				}
+				echo := strings.TrimPrefix(args[len(args)-1], "echo ")
+				now := time.Unix(1_790_000_000, 0)
+				done <- worker.Complete(ctx, task, &repb.ExecuteResponse{Result: &repb.ActionResult{
+					StdoutRaw: []byte(echo + "\n"),
+					ExecutionMetadata: &repb.ExecutedActionMetadata{Worker: string(identity),
+						QueuedTimestamp: timestamppb.New(now.Add(-1500 * time.Millisecond)), WorkerStartTimestamp: timestamppb.New(now)},
+				}})
+			}()
+			p := &Probe{Kind: KindExec, Pool: pool, Platform: props, Endpoint: Endpoint{Target: "grpc://" + storage, InstanceName: "main"}, Timeout: 25 * time.Second}
+			r := p.Run(ctx)
+			require.NoError(t, <-done)
+			require.True(t, r.Success, r.Error)
+			require.Equal(t, 1500*time.Millisecond, r.QueueTime)
+			require.Contains(t, r.Worker, "i-canary")
+		})
+	}
 }
 
 // Guards the one-shot path (CronJob, helm test): a pushed result is observed
