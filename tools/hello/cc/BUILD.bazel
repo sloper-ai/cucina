@@ -6,17 +6,23 @@ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
+# Choose the target compiler's spelling, including MSVC cross builds on Unix.
+_CXX20_COPTS = select({
+    "@llvm//constraints/windows/abi:msvc": ["/std:c++20"],
+    "//conditions:default": ["-std=c++20"],
+})
+
 cc_library(
     name = "greet",
     srcs = ["greet.cc"],
     hdrs = ["greet.h"],
-    copts = ["-std=c++20"],
+    copts = _CXX20_COPTS,
 )
 
 cc_binary(
     name = "hello",
     srcs = ["main.cc"],
-    copts = ["-std=c++20"],
+    copts = _CXX20_COPTS,
     deps = [":greet"],
 )
 
@@ -24,7 +30,7 @@ cc_test(
     name = "greet_test",
     size = "small",
     srcs = ["greet_test.cc"],
-    copts = ["-std=c++20"],
+    copts = _CXX20_COPTS,
     tags = ["tier-unit"],
     deps = [":greet"],
 )
