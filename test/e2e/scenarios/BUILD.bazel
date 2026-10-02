@@ -24,6 +24,7 @@ go_library(
     visibility = ["//test/e2e:__subpackages__"],
     deps = [
         "//api/proto/cucina/v1:cucina",
+        "//api/v1alpha1",
         "//internal/canary",
         "//internal/cost",
         "//internal/hostd/sys",
@@ -79,6 +80,7 @@ cucina_go_test(
     tier = "integration",
     deps = [
         "//api/proto/cucina/v1:cucina",
+        "//api/v1alpha1",
         "//internal/fakes",
         "//internal/ports",
         "//internal/providers/tart/faketart",

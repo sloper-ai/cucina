@@ -22,6 +22,7 @@ import (
 	"time"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	"github.com/sloper-ai/cucina/api/v1alpha1"
 	"github.com/sloper-ai/cucina/internal/canary"
 	"github.com/sloper-ai/cucina/internal/hostd/sys"
 	"github.com/sloper-ai/cucina/internal/ports"
@@ -93,12 +94,12 @@ func runT13(c *harness.Context) error {
 	if err := svc.CucinactlJSON(c, &hosts, "hosts", "list"); err != nil {
 		return err
 	}
-	ready := false
+	online := false
 	for _, h := range hosts.Hosts {
-		ready = ready || (h.Serial != "" && strings.EqualFold(h.Phase, "ready"))
+		online = online || (h.Serial != "" && strings.EqualFold(h.Phase, v1alpha1.MacHostOnline))
 	}
-	if !ready {
-		return harness.Fail("no ready Mac host registered (is cucina-hostd running in user mode?)")
+	if !online {
+		return harness.Fail("no online Mac host registered (is cucina-hostd running in user mode?)")
 	}
 	initial, err := describePool(c, svc, pool)
 	if err != nil {
@@ -784,14 +785,14 @@ func runT14(c *harness.Context) error {
 		return err
 	}
 	// 4. Enrollment stays pending until approval.
-	if err := waitHostPhase(c, svc, serial1, "pending", 10*time.Minute); err != nil {
+	if err := waitHostPhase(c, svc, serial1, v1alpha1.MacHostPending, 10*time.Minute); err != nil {
 		return harness.Fail("enrollment not pending before approval: %v", err)
 	}
 	if _, err := svc.Cucinactl(c, "hosts", "approve", serial1); err != nil {
 		return err
 	}
-	if err := waitHostPhase(c, svc, serial1, "ready", 10*time.Minute); err != nil {
-		return harness.Fail("host did not become ready after approval: %v", err)
+	if err := waitHostPhase(c, svc, serial1, v1alpha1.MacHostOnline, 10*time.Minute); err != nil {
+		return harness.Fail("host did not become online after approval: %v", err)
 	}
 	diagFile := filepath.Join(c.Dir(), "host-diagnostics.json")
 	if _, err := svc.Cucinactl(c, "hosts", "diag", serial1, "--file", diagFile); err != nil {
@@ -823,13 +824,13 @@ func runT14(c *harness.Context) error {
 	if serial2 == serial1 {
 		return harness.Fail("fresh VMs have the same hardware serial")
 	}
-	if err := waitHostPhase(c, svc, serial2, "pending", 10*time.Minute); err != nil {
+	if err := waitHostPhase(c, svc, serial2, v1alpha1.MacHostPending, 10*time.Minute); err != nil {
 		return err
 	}
 	if _, err := svc.Cucinactl(c, "hosts", "approve", serial2); err != nil {
 		return err
 	}
-	if err := waitHostPhase(c, svc, serial2, "ready", 10*time.Minute); err != nil {
+	if err := waitHostPhase(c, svc, serial2, v1alpha1.MacHostOnline, 10*time.Minute); err != nil {
 		return err
 	}
 	// Release the second slot before creating the third host. Never three
@@ -983,7 +984,7 @@ func waitHostHeartbeat(c *harness.Context, svc *infra.Services, serial string, a
 			return err
 		}
 		for _, h := range list.Hosts {
-			if h.Serial == serial && strings.EqualFold(h.Phase, "ready") && h.LastHeartbeat != nil && h.LastHeartbeat.After(after) {
+			if h.Serial == serial && strings.EqualFold(h.Phase, v1alpha1.MacHostOnline) && h.LastHeartbeat != nil && h.LastHeartbeat.After(after) {
 				return nil
 			}
 		}

@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,6 +34,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	"github.com/sloper-ai/cucina/api/v1alpha1"
 	"github.com/sloper-ai/cucina/internal/fakes"
 	"github.com/sloper-ai/cucina/internal/ports"
 	"github.com/sloper-ai/cucina/internal/providers/tart/faketart"
@@ -130,27 +132,48 @@ func TestIdentityDenialsRequireExactStatus(t *testing.T) {
 	}
 }
 
-// Guards: T10h/T13/T14 — absent endpoints, hosts, or upgrade artifacts cannot yield acceptance evidence.
+// Guards: T10h/T13/T14 — missing prerequisites never produce acceptance
+// evidence, and T13 uses the MacHost wire phase (Online), not a pod's Ready condition.
 func TestScenarioMissingPrerequisites(t *testing.T) {
 	for _, tc := range []struct {
-		id   string
-		want harness.Status
+		name, id, phase string
+		want            harness.Status
 	}{
-		{"T10h", harness.StatusSkip},
-		{"T13", harness.StatusFail},
-		{"T14", harness.StatusSkip},
+		{name: "T10h", id: "T10h", want: harness.StatusSkip},
+		{name: "T13/no hosts", id: "T13", want: harness.StatusFail},
+		{name: "T13/online host", id: "T13", phase: v1alpha1.MacHostOnline, want: harness.StatusError},
+		{name: "T13/pending host", id: "T13", phase: v1alpha1.MacHostPending, want: harness.StatusFail},
+		{name: "T13/offline host", id: "T13", phase: v1alpha1.MacHostOffline, want: harness.StatusFail},
+		{name: "T13/draining host", id: "T13", phase: v1alpha1.MacHostDraining, want: harness.StatusFail},
+		{name: "T13/cordoned host", id: "T13", phase: v1alpha1.MacHostCordoned, want: harness.StatusFail},
+		{name: "T13/denied host", id: "T13", phase: v1alpha1.MacHostDenied, want: harness.StatusFail},
+		{name: "T13/unsupported Ready", id: "T13", phase: "Ready", want: harness.StatusFail},
+		{name: "T14", id: "T14", want: harness.StatusSkip},
 	} {
-		t.Run(tc.id, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			c, ex := scenarioContext(t, tc.id)
 			c.Env.DevMac = &harness.DevMacEnv{PkgPath: "initial.pkg", MDMKit: "kit"}
+			poolUnavailable := errors.New("pool API unavailable in this readiness fixture")
 			ex.Handle("cucinactl", func(_ context.Context, cmd ports.Command) (ports.ExecResult, error) {
 				if len(cmd.Args) >= 2 && cmd.Args[0] == "hosts" && cmd.Args[1] == "list" {
-					return ports.ExecResult{Stdout: []byte(`{"hosts":[]}`)}, nil
+					if tc.phase == "" {
+						return ports.ExecResult{Stdout: []byte(`{"hosts":[]}`)}, nil
+					}
+					body, err := json.Marshal(map[string]any{"hosts": []map[string]any{{"serial": "contract-host", "phase": tc.phase, "slots": 2, "cordoned": false}}})
+					return ports.ExecResult{Stdout: body}, err
+				}
+				if len(cmd.Args) >= 2 && cmd.Args[0] == "pools" && cmd.Args[1] == "describe" {
+					return ports.ExecResult{}, poolUnavailable
 				}
 				return ports.ExecResult{ExitCode: 2}, nil
 			})
 			err := c.Scenario.Run(c)
 			require.Equal(t, tc.want, harness.Classify(err), "%v", err)
+			if tc.phase == v1alpha1.MacHostOnline {
+				// Accept the healthy host, but preserve the next public boundary's
+				// failure rather than contacting a real Mac or starting a workload.
+				require.ErrorIs(t, err, poolUnavailable)
+			}
 		})
 	}
 }
@@ -351,9 +374,9 @@ func TestPackagingLifecycleContract(t *testing.T) {
 				case "list":
 					var hosts []map[string]any
 					for _, serial := range serials {
-						phase := "pending"
+						phase := v1alpha1.MacHostPending
 						if approved[serial] {
-							phase = "ready"
+							phase = v1alpha1.MacHostOnline
 						}
 						hosts = append(hosts, map[string]any{"serial": serial, "phase": phase, "last_heartbeat": c.Now().Add(time.Second)})
 					}
