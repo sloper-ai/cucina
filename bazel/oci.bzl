@@ -14,6 +14,7 @@ Targets:
                  directory: bazel-bin/<pkg>/<name>/{oci-layout,index.json,blobs/})
   :<name>_image  the single-platform image (built once per index platform)
   :<name>_layer  the binary layer: /usr/local/bin/<binary name>, root:root 0755
+  :<name>_doc_layer  LICENSE.md + THIRD_PARTY_NOTICES.md in /usr/share/doc/cucina
   :<name>_push   oci_push to `repository` (only when `repository` is set; never
                  run from tests; credentials come from the registry's docker config)
 
@@ -64,6 +65,22 @@ def cucina_go_image(
             package_dir = "usr/local/bin",
             owner = "0",
             ownername = "root",
+            tags = tags,
+        ),
+        tags = tags,
+        visibility = ["//visibility:private"],
+    )
+    tar(
+        name = name + "_doc_layer",
+        srcs = [
+            Label("//:LICENSE.md"),
+            Label("//:THIRD_PARTY_NOTICES.md"),
+        ],
+        mutate = mutate(
+            package_dir = "usr/share/doc/cucina",
+            owner = "0",
+            ownername = "root",
+            tags = tags,
         ),
         tags = tags,
         visibility = ["//visibility:private"],
@@ -72,7 +89,7 @@ def cucina_go_image(
         name = name + "_image",
         base = base,
         entrypoint = ["/usr/local/bin/" + label.name],
-        tars = [":" + name + "_layer"],
+        tars = [":" + name + "_layer", ":" + name + "_doc_layer"],
         tags = tags,
         visibility = ["//visibility:private"],
     )

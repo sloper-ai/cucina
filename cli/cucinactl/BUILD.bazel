@@ -36,6 +36,13 @@ rust_binary(
     deps = [":cucinactl_lib"],
 )
 
+# Public JSON output contracts consumed by the e2e CLI checks.
+filegroup(
+    name = "schemas",
+    srcs = glob(["schemas/*.json"]),
+    visibility = ["//test/e2e/scenarios:__pkg__"],
+)
+
 rustfmt_test(
     name = "rustfmt_test",
     tags = ["tier-static"],

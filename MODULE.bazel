@@ -47,6 +47,7 @@ use_repo(
     "com_github_fsnotify_fsnotify",
     "com_github_go_jose_go_jose_v4",
     "com_github_go_logr_logr",
+    "com_github_google_uuid",
     "com_github_jmespath_go_jmespath",
     "com_github_keybase_go_keychain",
     "com_github_klauspost_compress",
@@ -164,6 +165,13 @@ include("//third_party/rust:zstd-sys.MODULE.bazel")
 # ---------------------------------------------------------------------------
 bazel_dep(name = "rules_oci", version = "2.3.0")
 bazel_dep(name = "tar.bzl", version = "0.10.9")
+
+# Source scripts and generated .bat launchers live in different execroot trees.
+single_version_override(
+    module_name = "rules_oci",
+    patch_strip = 1,
+    patches = ["//third_party/oci:windows-launchers.patch"],
+)
 
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 
