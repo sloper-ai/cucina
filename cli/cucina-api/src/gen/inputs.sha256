@@ -3,7 +3,7 @@
 57f8b4d7e2c5411c31cee7ee1fb26f22874dc51bdc538ca9dda8e862b6c61163  api/proto/cucina/v1/common.proto
 3c62506b040a17f2996c029bddfdacffc60469ef091362f1461e810c872bc82c  api/proto/cucina/v1/enrollment.proto
 ae093e5bb77136a9eddb9d6d1289eb65cda4988dbd9720e3f3265a14b1ea4d50  api/proto/cucina/v1/host.proto
-469c6659b9dddcdb214b3e4b22c5b9e350eb01f51e6dfed119bb9589a3bd8627  api/proto/cucina/v1/management.proto
+9fea055fa55a7651a9f7303c1018f5b3d16970adbb64bed5ac4f8398e8f95348  api/proto/cucina/v1/management.proto
 f0b237af779fd1de3a9a3a851915a09de3288538856bc5f5199701e0030cb70d  cli/cucina-api/proto/build/bazel/remote/execution/v2/remote_execution.proto
 22b2af125690142af1c8152ba3a4ca15ffaa1265111dedc6e39b5412989b5be1  cli/cucina-api/proto/build/bazel/semver/semver.proto
 c91450ed2b19bc924e486bdfc689a15042566da22e9750585907cea9e946a433  cli/cucina-api/proto/buildbarn/cas/cas.proto

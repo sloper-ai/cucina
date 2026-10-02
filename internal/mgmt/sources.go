@@ -52,7 +52,7 @@ type FloorOverride struct {
 // PoolEvent is one entry of a pool's scale timeline.
 type PoolEvent struct {
 	Time    time.Time
-	Type    string // launch | register | drain | terminate | fail | ice | scale | rollout
+	Type    string // launch | register | drain-acknowledged | terminate | fail | ice | scale | rollout; legacy drain is intent only
 	Subject string // VM id ("node" label value)
 	Message string
 }

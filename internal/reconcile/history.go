@@ -14,7 +14,7 @@ import (
 type HistoryEvent struct {
 	Time    time.Time
 	Pool    domain.PoolName
-	Type    string // launch | register | drain | terminate | stop | fail | ice
+	Type    string // launch | register | drain-acknowledged | terminate | stop | fail | ice; legacy drain is intent only
 	Subject string // node ID
 	Message string
 }

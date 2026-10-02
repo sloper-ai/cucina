@@ -141,6 +141,106 @@ func TestScenarioScaleFromZeroToZero(t *testing.T) {
 	assert.InDelta(t, today, resumed, 1e-6)
 }
 
+// Guards: T8, R-SCALE-3 — drain history is an acknowledgement, never an
+// attempted AddDrain, including partial queue failure and mixed VM outcomes.
+func TestScenarioDrainAcknowledgements(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		workers int32
+		err     error
+	}{
+		{"failed drain then retry", 1, ports.ErrThrottled},
+		{"mixed successful and failed VMs", 2, ports.ErrThrottled},
+		{"unknown queue is not an acknowledgement", 2, ports.ErrQueueUnknown},
+		{"not found is not an acknowledgement", 2, ports.ErrNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, 29)
+			wp := linuxPool("linux", tc.workers)
+			wp.Spec.Capacity.MinRunning = tc.workers
+			rt := h.addPool(wp)
+			for range 90 {
+				h.step()
+			}
+			snap, ok := h.comps.Fleet.Snapshot(rt.Spec.Name)
+			require.True(t, ok)
+			require.Equal(t, int(tc.workers), snap.Counts["registered"])
+			require.Greater(t, len(rt.Queues), 1, "one failed queue must not be hidden by other successful drains")
+
+			// Retirement requests all drains together; the fake rejects one queue
+			// for one VM, while the other queues and any other VM succeed.
+			retiring := *rt
+			retiring.Spec.Deleting = true
+			h.comps.Fleet.Upsert(&retiring)
+			h.bq.FailNext("AddDrain", tc.err)
+			h.step()
+			attemptAt := h.clock.Now()
+			require.Len(t, h.alive(rt.Spec.Name), int(tc.workers), "drain intent must not itself terminate workers")
+
+			drained := map[string]bool{}
+			for _, vm := range snap.VMs {
+				drained[vm.ID] = true
+			}
+			for _, q := range rt.Queues {
+				workers, err := h.bq.ListWorkers(h.ctx, q)
+				require.NoError(t, err)
+				require.NotEmpty(t, workers)
+				for _, w := range workers {
+					if !w.Drained {
+						drained[w.ID[domain.LabelNode]] = false
+					}
+				}
+			}
+			acks := func() map[string][]reconcile.HistoryEvent {
+				out := map[string][]reconcile.HistoryEvent{}
+				events, _ := h.comps.Fleet.History(rt.Spec.Name, 0)
+				for _, ev := range events {
+					assert.NotEqual(t, "drain", ev.Type, "legacy drain intent cannot certify a successful AddDrain")
+					if ev.Type == "drain-acknowledged" {
+						out[ev.Subject] = append(out[ev.Subject], ev)
+					}
+				}
+				return out
+			}
+			first := acks()
+			failed := 0
+			for vm, complete := range drained {
+				if complete {
+					if assert.Len(t, first[vm], 1, "successful peer %s needs its own acknowledgement", vm) {
+						assert.Equal(t, attemptAt, first[vm][0].Time)
+					}
+				} else {
+					failed++
+					assert.Empty(t, first[vm], "failed AddDrain for %s must not create an acknowledgement", vm)
+				}
+			}
+			require.Equal(t, 1, failed, "the fake rejected one VM's drain, not the whole batch")
+			assert.Len(t, first, int(tc.workers)-1)
+
+			// A successful retry gets exactly one acknowledgement at its real
+			// completion time; already-acknowledged peers are not duplicated.
+			h.step()
+			retryAt := h.clock.Now()
+			for range 60 {
+				h.step()
+			}
+			final := acks()
+			assert.Len(t, final, int(tc.workers))
+			for vm, complete := range drained {
+				if assert.Len(t, final[vm], 1, "one successful drain acknowledgement for %s", vm) {
+					wantAt := attemptAt
+					if !complete {
+						wantAt = retryAt
+					}
+					assert.Equal(t, wantAt, final[vm][0].Time, "failed intent must not backdate the acknowledgement")
+				}
+			}
+			assert.Empty(t, h.alive(rt.Spec.Name), "normal idle-confirmed retirement still completes")
+			h.noViolations()
+		})
+	}
+}
+
 // Guards: NFR-C1, R-SCALE-3/7 — the cost-leak gauge must not flag normal idle
 // time, drain grace or an explicit floor, but must expose overdue live workers
 // even when their drain/termination fails (e2e audit regression).

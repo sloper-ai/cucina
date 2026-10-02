@@ -161,6 +161,14 @@ heartbeat-to-CR path exists. These endpoints are internal, just like `/sd/worker
 `cucinactl` ↔ `ManagementService` over TLS with `Authorization: Bearer <Cucina JWT>`; mutating methods need `admin`. Audit log line per mutating call
 (JSON: time, principal, method, request summary, result). Break-glass: `cucinactl login --key <service-account key>`.
 
+Pool timelines use `PoolEvent.type="drain-acknowledged"` only after every `AddDrain` call for that VM's pool queues succeeds;
+`subject` is the node ID and `time` is the successful action's completion time, never the failed intent's time. A partial queue
+failure (including `ErrQueueUnknown`/`ErrNotFound`) emits no acknowledgement for that VM, without suppressing successful peers;
+a successful retry emits its acknowledgement then. Legacy `type="drain"` history is intent-only and must never certify drain
+acknowledgement. The acknowledgement does not prove worker idleness or provider termination: T8 and other lifecycle checks
+must independently confirm idle workers and terminal provider state, then inventory tagged residual resources. Missing queues
+or drains remain benign when removing drains during cleanup, not when adding them.
+
 ## 6. Metrics contract (names are API: dashboards, alerts, SLOs, scenarios use them)
 
 Controller (`/metrics` on the controller): `cucina_pool_desired{pool}`, `cucina_pool_vms{pool,state}` (state ∈ launching, registered, busy, idle, draining,

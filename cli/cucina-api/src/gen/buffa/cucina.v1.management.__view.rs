@@ -6801,7 +6801,8 @@ pub struct PoolEventView<'a> {
     pub time: ::buffa::MessageFieldView<
         ::buffa_types::google::protobuf::__buffa::view::TimestampView<'a>,
     >,
-    /// launch | register | drain | terminate | fail | ice | scale | rollout
+    /// launch | register | drain-acknowledged | terminate | fail | ice | scale | rollout
+    /// Legacy "drain" entries record intent, not successful scheduler acknowledgement.
     ///
     /// Field 2: `type`
     pub r#type: &'a str,
@@ -7110,7 +7111,8 @@ impl PoolEventOwnedView {
     > {
         &self.0.reborrow().time
     }
-    /// launch | register | drain | terminate | fail | ice | scale | rollout
+    /// launch | register | drain-acknowledged | terminate | fail | ice | scale | rollout
+    /// Legacy "drain" entries record intent, not successful scheduler acknowledgement.
     ///
     /// Field 2: `type`
     #[must_use]

@@ -217,7 +217,9 @@ message GetPoolResponse {
 
 message PoolEvent {
   google.protobuf.Timestamp time = 1;
-  string type = 2;    // launch | register | drain | terminate | fail | ice | scale | rollout
+  // launch | register | drain-acknowledged | terminate | fail | ice | scale | rollout
+  // Legacy "drain" entries record intent, not successful scheduler acknowledgement.
+  string type = 2;
   string subject = 3; // VM id
   string message = 4;
 }

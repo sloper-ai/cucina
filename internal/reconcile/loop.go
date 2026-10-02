@@ -353,11 +353,18 @@ func (l *poolLoop) afterAction(rt *PoolRuntime, a scaling.Action, res scaling.Re
 			ev.PoolEvent(l.name, true, "QueuedWorkFailed", a.Message)
 		}
 	case scaling.ActAddDrain:
+		var acknowledged []string
 		for _, vm := range a.VMs {
-			l.f.hist.event(HistoryEvent{Time: now, Pool: l.name, Type: "drain", Subject: vm, Message: string(a.Reason)})
+			if res.PerVM[vm] != nil {
+				continue
+			}
+			// Every queue accepted this VM's drain. This is not yet an idle
+			// confirmation; legacy "drain" history recorded only the intent.
+			l.f.hist.event(HistoryEvent{Time: now, Pool: l.name, Type: "drain-acknowledged", Subject: vm, Message: string(a.Reason)})
+			acknowledged = append(acknowledged, vm)
 		}
-		if ev != nil && len(a.VMs) > 0 {
-			ev.PoolEvent(l.name, false, "Draining", fmt.Sprintf("draining %s (%s)", strings.Join(a.VMs, ", "), a.Reason))
+		if ev != nil && len(acknowledged) > 0 {
+			ev.PoolEvent(l.name, false, "DrainAcknowledged", fmt.Sprintf("scheduler acknowledged drain for %s (%s)", strings.Join(acknowledged, ", "), a.Reason))
 		}
 	}
 }
@@ -522,7 +529,9 @@ func (l *poolLoop) drains(ctx context.Context, rt *PoolRuntime, nodes []string, 
 			} else {
 				err = l.f.o.BuildQueue.RemoveDrain(ctx, q, pattern)
 			}
-			if err != nil && !errors.Is(err, ports.ErrQueueUnknown) && !errors.Is(err, ports.ErrNotFound) {
+			// Missing drains/queues are benign cleanup, not an AddDrain
+			// acknowledgement. A failed queue keeps the whole VM unacknowledged.
+			if err != nil && (add || (!errors.Is(err, ports.ErrQueueUnknown) && !errors.Is(err, ports.ErrNotFound))) {
 				per[node] = err
 			}
 		}

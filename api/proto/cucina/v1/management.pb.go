@@ -1293,11 +1293,13 @@ func (x *GetPoolResponse) GetStarts() []*StartLatency {
 }
 
 type PoolEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Time          *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=time,proto3" json:"time,omitempty"`
-	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`       // launch | register | drain | terminate | fail | ice | scale | rollout
-	Subject       string                 `protobuf:"bytes,3,opt,name=subject,proto3" json:"subject,omitempty"` // VM id
-	Message       string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Time  *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=time,proto3" json:"time,omitempty"`
+	// launch | register | drain-acknowledged | terminate | fail | ice | scale | rollout
+	// Legacy "drain" entries record intent, not successful scheduler acknowledgement.
+	Type          string `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	Subject       string `protobuf:"bytes,3,opt,name=subject,proto3" json:"subject,omitempty"` // VM id
+	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

@@ -107,6 +107,11 @@ the autoscaler drives hosts through the leader's HostFleet.
   function: eligible hosts only, ≤ 2 VMs per host, `vmsPerHost`, one VM per host before a second, stopped VMs (warm L1)
   first; MacHost objects are authoritative for approval, labels, cordon and slots.
 
+The fleet records `drain-acknowledged` history (and Kubernetes `DrainAcknowledged` events) only for VMs whose drains
+succeeded on every pool queue. A failed VM contributes no acknowledgement, even when other VMs in the batch succeed;
+a successful retry is timestamped when it succeeds. Old `drain` history is intent-only, never acknowledgement evidence.
+Scheduler idle confirmation and tag-filtered provider termination checks remain separate ([timeline contract](../contracts.md#54-management-api)).
+
 Annotations on WorkerPool objects (kept by Helm upgrades): `cucina.sloper.ai/launch-ledger` (launch ledger, R-SCALE-5),
 `cucina.sloper.ai/fast-launch-images`, `cucina.sloper.ai/floor-override` (temporary floor from `cucinactl`).
 

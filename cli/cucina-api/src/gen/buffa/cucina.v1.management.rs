@@ -3997,7 +3997,8 @@ pub struct PoolEvent {
         ::buffa_types::google::protobuf::Timestamp,
         ::buffa::Inline<::buffa_types::google::protobuf::Timestamp>,
     >,
-    /// launch | register | drain | terminate | fail | ice | scale | rollout
+    /// launch | register | drain-acknowledged | terminate | fail | ice | scale | rollout
+    /// Legacy "drain" entries record intent, not successful scheduler acknowledgement.
     ///
     /// Field 2: `type`
     #[serde(
