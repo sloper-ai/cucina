@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# gitleaks 8.30 (§12 public-repo hygiene). Default rules, nothing secret-like is
+# allowlisted: only files made of content hashes (lockfiles, vendored JSON
+# schemas) are skipped.
+title = "cucina"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Content hashes in lockfiles and vendored schemas are not secrets"
+paths = [
+    '''(^|/)go\.sum$''',
+    '''(^|/)Cargo\.lock$''',
+    '''(^|/)MODULE\.bazel\.lock$''',
+    '''(^|/)tools/kubeconform/schemas/''',
+]
+
+[[allowlists]]
+description = "Planted, synthetic secrets in redaction/forgery tests (no real credential; the tests prove these values never reach logs, audit lines or bundles)"
+paths = [
+    '''internal/mgmt/(bundle|e2e|fakes)_test\.go$''',
+    '''internal/hostd/redact/redact_test\.go$''',
+]
