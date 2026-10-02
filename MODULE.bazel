@@ -166,6 +166,15 @@ include("//third_party/rust:zstd-sys.MODULE.bazel")
 bazel_dep(name = "rules_oci", version = "2.3.0")
 bazel_dep(name = "tar.bzl", version = "0.10.9")
 
+# tar.bzl's existing gawk dependency is configured for MinGW on Windows.
+# Only this standalone build tool changes ABI; project binaries keep MSVC.
+bazel_dep(name = "gawk", version = "5.3.2.bcr.3")
+single_version_override(
+    module_name = "gawk",
+    patch_strip = 1,
+    patches = ["//third_party/gawk:windows-tool.patch"],
+)
+
 # Source scripts and generated .bat launchers live in different execroot trees.
 single_version_override(
     module_name = "rules_oci",

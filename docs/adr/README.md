@@ -96,6 +96,8 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0105](0105-protoc-version-normalisation.md) | Checked-in Go protobuf code is identical from Bazel and `buf generate` | accepted | build (bazel) |
 | [0106](0106-rust-codegen-buffa-connect.md) | Rust protobuf/RPC code generation in Bazel: protoc + buffa/connect-rust plugins | accepted | build (bazel) |
 | [0107](0107-windows-native-toolchain-compatibility.md) | Enable native Windows Rust builds with narrow toolchain patches | accepted | build (bazel) |
+| [0108](0108-hosted-macos-envtest-hostname.md) | Give hosted macOS envtest a valid hostname | accepted | build (bazel) |
+| [0109](0109-windows-gawk-gnu-abi.md) | Build the Windows awk tool with its supported GNU ABI | accepted | build (bazel) |
 | [0150](0150-release-versioning-and-stamping.md) | One release version, stamped by Bazel from the VERSION file | accepted | build (bazel) |
 | [0151](0151-release-pipeline-and-publishing.md) | Release pipeline: per-runner Bazel builds, one assembly, publish from verified bytes | accepted | build (bazel) |
 | [0152](0152-nightly-and-report-lanes.md) | Nightly, system and mutation lanes outside the gating CI | accepted | build (bazel) |

@@ -2,6 +2,23 @@
 # Repository-wide toolchain plumbing (owned by the bazel agent).
 
 load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
+load("@bazel_lib//lib:transitions.bzl", "platform_transition_binary")
+
+# gawk's pinned BCR overlay defines __MINGW32__ and uses GNU link options.
+# This native Windows build tool is an executable boundary, not a library
+# linked into an MSVC program. Use its supported ABI without changing the host
+# platform used by Rust, Go or C++ targets. The gawk patch retains @gawk//:gawk.
+platform_transition_binary(
+    name = "gawk_windows",
+    basename = "gawk.exe",
+    binary = "@gawk//:gawk_bin",
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+    target_platform = "@llvm//platforms:windows_x86_64",
+    visibility = ["@gawk//:__pkg__"],
+)
 
 # An xcode_config with no versions. `.bazelrc` points --xcode_version_config at
 # it so Bazel never runs xcode-locator or reads the local Xcode: C/C++ comes from

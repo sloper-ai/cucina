@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# The BCR Windows config explicitly targets MinGW, not MSVC. Preserve the
+# public executable label and use the workspace's GNU-ABI adapter on Windows.
+# pc/popen.h replaces and then pc/popen.c undefines the CRT's compatibility
+# aliases; call _popen/_pclose directly instead of relying on those aliases.
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -160,7 +160,16 @@
+ cc_binary(
+-    name = "gawk",
++    name = "gawk_bin",
+     srcs = ["main.c"],
+     copts = GAWK_COPTS,
+     visibility = ["//visibility:public"],
+     deps = [":awk"],
+ )
++
++alias(
++    name = "gawk",
++    actual = select({
++        "@platforms//os:windows": "@@//bazel/toolchains:gawk_windows",
++        "//conditions:default": ":gawk_bin",
++    }),
++    visibility = ["//visibility:public"],
++)
+diff --git a/pc/popen.c b/pc/popen.c
+--- a/pc/popen.c
++++ b/pc/popen.c
+@@ -235 +235 @@
+-    current = popen(command, mode);
++    current = _popen(command, mode);
+@@ -282 +282 @@
+-    rval = pclose(current);
++    rval = _pclose(current);
