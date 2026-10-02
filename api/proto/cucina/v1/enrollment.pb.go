@@ -85,7 +85,8 @@ type EnrollWorkerRequest struct {
 	Protocol *ProtocolVersion       `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	// Raw JSON of http://169.254.169.254/latest/dynamic/instance-identity/document.
 	InstanceIdentityDocument []byte `protobuf:"bytes,2,opt,name=instance_identity_document,json=instanceIdentityDocument,proto3" json:"instance_identity_document,omitempty"`
-	// Base64 RSA-2048 signature (…/instance-identity/signature) over the document.
+	// Base64 RSA-2048 signature: the body of …/instance-identity/rsa2048 (NOT /signature, which is
+	// RSA-1024) — the controller verifies it against the AWS regional certificate over the document.
 	Signature string `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
 	// PEM PKCS#10 CSR for a key the agent generated at boot (the key never leaves the instance).
 	CsrPem        []byte `protobuf:"bytes,4,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`

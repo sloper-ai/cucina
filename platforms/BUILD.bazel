@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Platform catalog data consumed as test/runtime data by Go, Rust and chart tests.
+exports_files(
+    glob(["*.json"]),
+    visibility = ["//visibility:public"],
+)

@@ -182,6 +182,7 @@ message PoolCost {
   Money ebs = 4;
   Money data_transfer = 5;
   Money standing = 6;
+  Money public_ipv4 = 7;
 }
 
 // StartLatency is one VM start: API call -> running -> registered -> first action.

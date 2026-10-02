@@ -117,6 +117,7 @@ message ControllerMessage {
     CollectDiagnostics collect_diagnostics = 8;
     UpdateHostConfig update_config = 9;
     Ping ping = 10;
+    CancelCommand cancel_command = 11;
   }
   string command_id = 20; // echoed in CommandResult
 }
@@ -138,6 +139,7 @@ message HostSettings {
   uint32 vm_memory_gib = 4; // 0 = derive (RAM-8GB)/slots
   string central_endpoint = 5;     // worker endpoint for the L2 cache upstream
   string scheduler_endpoint = 6;   // forwarded for VMs through hostd
+  uint64 maximum_message_size_bytes = 7; // identical in every Buildbarn component (default 16 MiB)
 }
 
 message StartVM {
@@ -191,6 +193,12 @@ message UpdateHostConfig {
 }
 
 message Ping {}
+
+// CancelCommand stops a long-running command, e.g. a followed log stream
+// (CollectDiagnostics with follow=true), identified by its command_id.
+message CancelCommand {
+  string target_command_id = 1;
+}
 
 // ------------------------------------------------------------- unary RPC messages
 

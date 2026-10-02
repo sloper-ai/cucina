@@ -734,6 +734,7 @@ type ControllerMessage struct {
 	//	*ControllerMessage_CollectDiagnostics
 	//	*ControllerMessage_UpdateConfig
 	//	*ControllerMessage_Ping
+	//	*ControllerMessage_CancelCommand
 	Message       isControllerMessage_Message `protobuf_oneof:"message"`
 	CommandId     string                      `protobuf:"bytes,20,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"` // echoed in CommandResult
 	unknownFields protoimpl.UnknownFields
@@ -867,6 +868,15 @@ func (x *ControllerMessage) GetPing() *Ping {
 	return nil
 }
 
+func (x *ControllerMessage) GetCancelCommand() *CancelCommand {
+	if x != nil {
+		if x, ok := x.Message.(*ControllerMessage_CancelCommand); ok {
+			return x.CancelCommand
+		}
+	}
+	return nil
+}
+
 func (x *ControllerMessage) GetCommandId() string {
 	if x != nil {
 		return x.CommandId
@@ -918,6 +928,10 @@ type ControllerMessage_Ping struct {
 	Ping *Ping `protobuf:"bytes,10,opt,name=ping,proto3,oneof"`
 }
 
+type ControllerMessage_CancelCommand struct {
+	CancelCommand *CancelCommand `protobuf:"bytes,11,opt,name=cancel_command,json=cancelCommand,proto3,oneof"`
+}
+
 func (*ControllerMessage_Welcome) isControllerMessage_Message() {}
 
 func (*ControllerMessage_StartVm) isControllerMessage_Message() {}
@@ -937,6 +951,8 @@ func (*ControllerMessage_CollectDiagnostics) isControllerMessage_Message() {}
 func (*ControllerMessage_UpdateConfig) isControllerMessage_Message() {}
 
 func (*ControllerMessage_Ping) isControllerMessage_Message() {}
+
+func (*ControllerMessage_CancelCommand) isControllerMessage_Message() {}
 
 type Welcome struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -1024,15 +1040,16 @@ func (x *Welcome) GetSettings() *HostSettings {
 
 // HostSettings are controller-provided overrides on top of the managed preferences.
 type HostSettings struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	L2SizeGib         uint32                 `protobuf:"varint,1,opt,name=l2_size_gib,json=l2SizeGib,proto3" json:"l2_size_gib,omitempty"`
-	LogLevel          string                 `protobuf:"bytes,2,opt,name=log_level,json=logLevel,proto3" json:"log_level,omitempty"`
-	VmCpu             uint32                 `protobuf:"varint,3,opt,name=vm_cpu,json=vmCpu,proto3" json:"vm_cpu,omitempty"`                                    // 0 = derive (cores-2)/slots
-	VmMemoryGib       uint32                 `protobuf:"varint,4,opt,name=vm_memory_gib,json=vmMemoryGib,proto3" json:"vm_memory_gib,omitempty"`                // 0 = derive (RAM-8GB)/slots
-	CentralEndpoint   string                 `protobuf:"bytes,5,opt,name=central_endpoint,json=centralEndpoint,proto3" json:"central_endpoint,omitempty"`       // worker endpoint for the L2 cache upstream
-	SchedulerEndpoint string                 `protobuf:"bytes,6,opt,name=scheduler_endpoint,json=schedulerEndpoint,proto3" json:"scheduler_endpoint,omitempty"` // forwarded for VMs through hostd
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	L2SizeGib               uint32                 `protobuf:"varint,1,opt,name=l2_size_gib,json=l2SizeGib,proto3" json:"l2_size_gib,omitempty"`
+	LogLevel                string                 `protobuf:"bytes,2,opt,name=log_level,json=logLevel,proto3" json:"log_level,omitempty"`
+	VmCpu                   uint32                 `protobuf:"varint,3,opt,name=vm_cpu,json=vmCpu,proto3" json:"vm_cpu,omitempty"`                                                           // 0 = derive (cores-2)/slots
+	VmMemoryGib             uint32                 `protobuf:"varint,4,opt,name=vm_memory_gib,json=vmMemoryGib,proto3" json:"vm_memory_gib,omitempty"`                                       // 0 = derive (RAM-8GB)/slots
+	CentralEndpoint         string                 `protobuf:"bytes,5,opt,name=central_endpoint,json=centralEndpoint,proto3" json:"central_endpoint,omitempty"`                              // worker endpoint for the L2 cache upstream
+	SchedulerEndpoint       string                 `protobuf:"bytes,6,opt,name=scheduler_endpoint,json=schedulerEndpoint,proto3" json:"scheduler_endpoint,omitempty"`                        // forwarded for VMs through hostd
+	MaximumMessageSizeBytes uint64                 `protobuf:"varint,7,opt,name=maximum_message_size_bytes,json=maximumMessageSizeBytes,proto3" json:"maximum_message_size_bytes,omitempty"` // identical in every Buildbarn component (default 16 MiB)
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *HostSettings) Reset() {
@@ -1105,6 +1122,13 @@ func (x *HostSettings) GetSchedulerEndpoint() string {
 		return x.SchedulerEndpoint
 	}
 	return ""
+}
+
+func (x *HostSettings) GetMaximumMessageSizeBytes() uint64 {
+	if x != nil {
+		return x.MaximumMessageSizeBytes
+	}
+	return 0
 }
 
 type StartVM struct {
@@ -1625,6 +1649,52 @@ func (*Ping) Descriptor() ([]byte, []int) {
 	return file_cucina_v1_host_proto_rawDescGZIP(), []int{19}
 }
 
+// CancelCommand stops a long-running command, e.g. a followed log stream
+// (CollectDiagnostics with follow=true), identified by its command_id.
+type CancelCommand struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TargetCommandId string                 `protobuf:"bytes,1,opt,name=target_command_id,json=targetCommandId,proto3" json:"target_command_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CancelCommand) Reset() {
+	*x = CancelCommand{}
+	mi := &file_cucina_v1_host_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelCommand) ProtoMessage() {}
+
+func (x *CancelCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_cucina_v1_host_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelCommand.ProtoReflect.Descriptor instead.
+func (*CancelCommand) Descriptor() ([]byte, []int) {
+	return file_cucina_v1_host_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *CancelCommand) GetTargetCommandId() string {
+	if x != nil {
+		return x.TargetCommandId
+	}
+	return ""
+}
+
 type RenewCertificateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CsrPem        []byte                 `protobuf:"bytes,1,opt,name=csr_pem,json=csrPem,proto3" json:"csr_pem,omitempty"`
@@ -1634,7 +1704,7 @@ type RenewCertificateRequest struct {
 
 func (x *RenewCertificateRequest) Reset() {
 	*x = RenewCertificateRequest{}
-	mi := &file_cucina_v1_host_proto_msgTypes[20]
+	mi := &file_cucina_v1_host_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1646,7 +1716,7 @@ func (x *RenewCertificateRequest) String() string {
 func (*RenewCertificateRequest) ProtoMessage() {}
 
 func (x *RenewCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_host_proto_msgTypes[20]
+	mi := &file_cucina_v1_host_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1659,7 +1729,7 @@ func (x *RenewCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewCertificateRequest.ProtoReflect.Descriptor instead.
 func (*RenewCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_host_proto_rawDescGZIP(), []int{20}
+	return file_cucina_v1_host_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RenewCertificateRequest) GetCsrPem() []byte {
@@ -1680,7 +1750,7 @@ type RenewCertificateResponse struct {
 
 func (x *RenewCertificateResponse) Reset() {
 	*x = RenewCertificateResponse{}
-	mi := &file_cucina_v1_host_proto_msgTypes[21]
+	mi := &file_cucina_v1_host_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1692,7 +1762,7 @@ func (x *RenewCertificateResponse) String() string {
 func (*RenewCertificateResponse) ProtoMessage() {}
 
 func (x *RenewCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_host_proto_msgTypes[21]
+	mi := &file_cucina_v1_host_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1705,7 +1775,7 @@ func (x *RenewCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewCertificateResponse.ProtoReflect.Descriptor instead.
 func (*RenewCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_host_proto_rawDescGZIP(), []int{21}
+	return file_cucina_v1_host_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RenewCertificateResponse) GetCertificatePem() []byte {
@@ -1740,7 +1810,7 @@ type IssueVMIdentityRequest struct {
 
 func (x *IssueVMIdentityRequest) Reset() {
 	*x = IssueVMIdentityRequest{}
-	mi := &file_cucina_v1_host_proto_msgTypes[22]
+	mi := &file_cucina_v1_host_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1752,7 +1822,7 @@ func (x *IssueVMIdentityRequest) String() string {
 func (*IssueVMIdentityRequest) ProtoMessage() {}
 
 func (x *IssueVMIdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_host_proto_msgTypes[22]
+	mi := &file_cucina_v1_host_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1765,7 +1835,7 @@ func (x *IssueVMIdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueVMIdentityRequest.ProtoReflect.Descriptor instead.
 func (*IssueVMIdentityRequest) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_host_proto_rawDescGZIP(), []int{22}
+	return file_cucina_v1_host_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *IssueVMIdentityRequest) GetVmName() string {
@@ -1801,7 +1871,7 @@ type IssueVMIdentityResponse struct {
 
 func (x *IssueVMIdentityResponse) Reset() {
 	*x = IssueVMIdentityResponse{}
-	mi := &file_cucina_v1_host_proto_msgTypes[23]
+	mi := &file_cucina_v1_host_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1813,7 +1883,7 @@ func (x *IssueVMIdentityResponse) String() string {
 func (*IssueVMIdentityResponse) ProtoMessage() {}
 
 func (x *IssueVMIdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_host_proto_msgTypes[23]
+	mi := &file_cucina_v1_host_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1826,7 +1896,7 @@ func (x *IssueVMIdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueVMIdentityResponse.ProtoReflect.Descriptor instead.
 func (*IssueVMIdentityResponse) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_host_proto_rawDescGZIP(), []int{23}
+	return file_cucina_v1_host_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *IssueVMIdentityResponse) GetCertificatePem() []byte {
@@ -1866,7 +1936,7 @@ type GetRegistryCredentialsRequest struct {
 
 func (x *GetRegistryCredentialsRequest) Reset() {
 	*x = GetRegistryCredentialsRequest{}
-	mi := &file_cucina_v1_host_proto_msgTypes[24]
+	mi := &file_cucina_v1_host_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1878,7 +1948,7 @@ func (x *GetRegistryCredentialsRequest) String() string {
 func (*GetRegistryCredentialsRequest) ProtoMessage() {}
 
 func (x *GetRegistryCredentialsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_host_proto_msgTypes[24]
+	mi := &file_cucina_v1_host_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1891,7 +1961,7 @@ func (x *GetRegistryCredentialsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegistryCredentialsRequest.ProtoReflect.Descriptor instead.
 func (*GetRegistryCredentialsRequest) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_host_proto_rawDescGZIP(), []int{24}
+	return file_cucina_v1_host_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetRegistryCredentialsRequest) GetImage() string {
@@ -1913,7 +1983,7 @@ type GetRegistryCredentialsResponse struct {
 
 func (x *GetRegistryCredentialsResponse) Reset() {
 	*x = GetRegistryCredentialsResponse{}
-	mi := &file_cucina_v1_host_proto_msgTypes[25]
+	mi := &file_cucina_v1_host_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1925,7 +1995,7 @@ func (x *GetRegistryCredentialsResponse) String() string {
 func (*GetRegistryCredentialsResponse) ProtoMessage() {}
 
 func (x *GetRegistryCredentialsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_host_proto_msgTypes[25]
+	mi := &file_cucina_v1_host_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1938,7 +2008,7 @@ func (x *GetRegistryCredentialsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegistryCredentialsResponse.ProtoReflect.Descriptor instead.
 func (*GetRegistryCredentialsResponse) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_host_proto_rawDescGZIP(), []int{25}
+	return file_cucina_v1_host_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetRegistryCredentialsResponse) GetHost() string {
@@ -2034,7 +2104,7 @@ const file_cucina_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x12\n" +
-	"\x04last\x18\x03 \x01(\bR\x04last\"\xe2\x04\n" +
+	"\x04last\x18\x03 \x01(\bR\x04last\"\xa5\x05\n" +
 	"\x11ControllerMessage\x12.\n" +
 	"\awelcome\x18\x01 \x01(\v2\x12.cucina.v1.WelcomeH\x00R\awelcome\x12/\n" +
 	"\bstart_vm\x18\x02 \x01(\v2\x12.cucina.v1.StartVMH\x00R\astartVm\x12,\n" +
@@ -2049,7 +2119,8 @@ const file_cucina_v1_host_proto_rawDesc = "" +
 	"\x13collect_diagnostics\x18\b \x01(\v2\x1d.cucina.v1.CollectDiagnosticsH\x00R\x12collectDiagnostics\x12B\n" +
 	"\rupdate_config\x18\t \x01(\v2\x1b.cucina.v1.UpdateHostConfigH\x00R\fupdateConfig\x12%\n" +
 	"\x04ping\x18\n" +
-	" \x01(\v2\x0f.cucina.v1.PingH\x00R\x04ping\x12\x1d\n" +
+	" \x01(\v2\x0f.cucina.v1.PingH\x00R\x04ping\x12A\n" +
+	"\x0ecancel_command\x18\v \x01(\v2\x18.cucina.v1.CancelCommandH\x00R\rcancelCommand\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x14 \x01(\tR\tcommandIdB\t\n" +
 	"\amessage\"\x9c\x02\n" +
@@ -2060,14 +2131,15 @@ const file_cucina_v1_host_proto_rawDesc = "" +
 	"\x12heartbeat_interval\x18\x03 \x01(\v2\x19.google.protobuf.DurationR\x11heartbeatInterval\x12%\n" +
 	"\x0edesired_images\x18\x04 \x03(\tR\rdesiredImages\x12\x14\n" +
 	"\x05slots\x18\x05 \x01(\rR\x05slots\x123\n" +
-	"\bsettings\x18\x06 \x01(\v2\x17.cucina.v1.HostSettingsR\bsettings\"\xe0\x01\n" +
+	"\bsettings\x18\x06 \x01(\v2\x17.cucina.v1.HostSettingsR\bsettings\"\x9d\x02\n" +
 	"\fHostSettings\x12\x1e\n" +
 	"\vl2_size_gib\x18\x01 \x01(\rR\tl2SizeGib\x12\x1b\n" +
 	"\tlog_level\x18\x02 \x01(\tR\blogLevel\x12\x15\n" +
 	"\x06vm_cpu\x18\x03 \x01(\rR\x05vmCpu\x12\"\n" +
 	"\rvm_memory_gib\x18\x04 \x01(\rR\vvmMemoryGib\x12)\n" +
 	"\x10central_endpoint\x18\x05 \x01(\tR\x0fcentralEndpoint\x12-\n" +
-	"\x12scheduler_endpoint\x18\x06 \x01(\tR\x11schedulerEndpoint\"\x8f\x02\n" +
+	"\x12scheduler_endpoint\x18\x06 \x01(\tR\x11schedulerEndpoint\x12;\n" +
+	"\x1amaximum_message_size_bytes\x18\a \x01(\x04R\x17maximumMessageSizeBytes\"\x8f\x02\n" +
 	"\aStartVM\x12\x17\n" +
 	"\avm_name\x18\x01 \x01(\tR\x06vmName\x12\x12\n" +
 	"\x04pool\x18\x02 \x01(\tR\x04pool\x12\x14\n" +
@@ -2106,7 +2178,9 @@ const file_cucina_v1_host_proto_rawDesc = "" +
 	"\x06follow\x18\x05 \x01(\bR\x06follow\"G\n" +
 	"\x10UpdateHostConfig\x123\n" +
 	"\bsettings\x18\x01 \x01(\v2\x17.cucina.v1.HostSettingsR\bsettings\"\x06\n" +
-	"\x04Ping\"2\n" +
+	"\x04Ping\";\n" +
+	"\rCancelCommand\x12*\n" +
+	"\x11target_command_id\x18\x01 \x01(\tR\x0ftargetCommandId\"2\n" +
 	"\x17RenewCertificateRequest\x12\x17\n" +
 	"\acsr_pem\x18\x01 \x01(\fR\x06csrPem\"\x95\x01\n" +
 	"\x18RenewCertificateResponse\x12'\n" +
@@ -2150,7 +2224,7 @@ func file_cucina_v1_host_proto_rawDescGZIP() []byte {
 	return file_cucina_v1_host_proto_rawDescData
 }
 
-var file_cucina_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_cucina_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_cucina_v1_host_proto_goTypes = []any{
 	(*HostMessage)(nil),                    // 0: cucina.v1.HostMessage
 	(*Hello)(nil),                          // 1: cucina.v1.Hello
@@ -2172,17 +2246,18 @@ var file_cucina_v1_host_proto_goTypes = []any{
 	(*CollectDiagnostics)(nil),             // 17: cucina.v1.CollectDiagnostics
 	(*UpdateHostConfig)(nil),               // 18: cucina.v1.UpdateHostConfig
 	(*Ping)(nil),                           // 19: cucina.v1.Ping
-	(*RenewCertificateRequest)(nil),        // 20: cucina.v1.RenewCertificateRequest
-	(*RenewCertificateResponse)(nil),       // 21: cucina.v1.RenewCertificateResponse
-	(*IssueVMIdentityRequest)(nil),         // 22: cucina.v1.IssueVMIdentityRequest
-	(*IssueVMIdentityResponse)(nil),        // 23: cucina.v1.IssueVMIdentityResponse
-	(*GetRegistryCredentialsRequest)(nil),  // 24: cucina.v1.GetRegistryCredentialsRequest
-	(*GetRegistryCredentialsResponse)(nil), // 25: cucina.v1.GetRegistryCredentialsResponse
-	(*ProtocolVersion)(nil),                // 26: cucina.v1.ProtocolVersion
-	(*HostFacts)(nil),                      // 27: cucina.v1.HostFacts
-	(*timestamppb.Timestamp)(nil),          // 28: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),            // 29: google.protobuf.Duration
-	(*WorkerSettings)(nil),                 // 30: cucina.v1.WorkerSettings
+	(*CancelCommand)(nil),                  // 20: cucina.v1.CancelCommand
+	(*RenewCertificateRequest)(nil),        // 21: cucina.v1.RenewCertificateRequest
+	(*RenewCertificateResponse)(nil),       // 22: cucina.v1.RenewCertificateResponse
+	(*IssueVMIdentityRequest)(nil),         // 23: cucina.v1.IssueVMIdentityRequest
+	(*IssueVMIdentityResponse)(nil),        // 24: cucina.v1.IssueVMIdentityResponse
+	(*GetRegistryCredentialsRequest)(nil),  // 25: cucina.v1.GetRegistryCredentialsRequest
+	(*GetRegistryCredentialsResponse)(nil), // 26: cucina.v1.GetRegistryCredentialsResponse
+	(*ProtocolVersion)(nil),                // 27: cucina.v1.ProtocolVersion
+	(*HostFacts)(nil),                      // 28: cucina.v1.HostFacts
+	(*timestamppb.Timestamp)(nil),          // 29: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),            // 30: google.protobuf.Duration
+	(*WorkerSettings)(nil),                 // 31: cucina.v1.WorkerSettings
 }
 var file_cucina_v1_host_proto_depIdxs = []int32{
 	1,  // 0: cucina.v1.HostMessage.hello:type_name -> cucina.v1.Hello
@@ -2190,16 +2265,16 @@ var file_cucina_v1_host_proto_depIdxs = []int32{
 	5,  // 2: cucina.v1.HostMessage.vm_event:type_name -> cucina.v1.VMEvent
 	6,  // 3: cucina.v1.HostMessage.command_result:type_name -> cucina.v1.CommandResult
 	7,  // 4: cucina.v1.HostMessage.log:type_name -> cucina.v1.LogData
-	26, // 5: cucina.v1.Hello.protocol:type_name -> cucina.v1.ProtocolVersion
-	27, // 6: cucina.v1.Hello.facts:type_name -> cucina.v1.HostFacts
+	27, // 5: cucina.v1.Hello.protocol:type_name -> cucina.v1.ProtocolVersion
+	28, // 6: cucina.v1.Hello.facts:type_name -> cucina.v1.HostFacts
 	4,  // 7: cucina.v1.Hello.vms:type_name -> cucina.v1.VMInfo
-	28, // 8: cucina.v1.Heartbeat.time:type_name -> google.protobuf.Timestamp
+	29, // 8: cucina.v1.Heartbeat.time:type_name -> google.protobuf.Timestamp
 	4,  // 9: cucina.v1.Heartbeat.vms:type_name -> cucina.v1.VMInfo
 	3,  // 10: cucina.v1.Heartbeat.metrics:type_name -> cucina.v1.HostMetrics
-	28, // 11: cucina.v1.VMInfo.created:type_name -> google.protobuf.Timestamp
-	28, // 12: cucina.v1.VMInfo.started:type_name -> google.protobuf.Timestamp
+	29, // 11: cucina.v1.VMInfo.created:type_name -> google.protobuf.Timestamp
+	29, // 12: cucina.v1.VMInfo.started:type_name -> google.protobuf.Timestamp
 	4,  // 13: cucina.v1.VMEvent.vm:type_name -> cucina.v1.VMInfo
-	28, // 14: cucina.v1.VMEvent.time:type_name -> google.protobuf.Timestamp
+	29, // 14: cucina.v1.VMEvent.time:type_name -> google.protobuf.Timestamp
 	9,  // 15: cucina.v1.ControllerMessage.welcome:type_name -> cucina.v1.Welcome
 	11, // 16: cucina.v1.ControllerMessage.start_vm:type_name -> cucina.v1.StartVM
 	12, // 17: cucina.v1.ControllerMessage.stop_vm:type_name -> cucina.v1.StopVM
@@ -2210,28 +2285,29 @@ var file_cucina_v1_host_proto_depIdxs = []int32{
 	17, // 22: cucina.v1.ControllerMessage.collect_diagnostics:type_name -> cucina.v1.CollectDiagnostics
 	18, // 23: cucina.v1.ControllerMessage.update_config:type_name -> cucina.v1.UpdateHostConfig
 	19, // 24: cucina.v1.ControllerMessage.ping:type_name -> cucina.v1.Ping
-	26, // 25: cucina.v1.Welcome.protocol:type_name -> cucina.v1.ProtocolVersion
-	29, // 26: cucina.v1.Welcome.heartbeat_interval:type_name -> google.protobuf.Duration
-	10, // 27: cucina.v1.Welcome.settings:type_name -> cucina.v1.HostSettings
-	29, // 28: cucina.v1.StopVM.timeout:type_name -> google.protobuf.Duration
-	10, // 29: cucina.v1.UpdateHostConfig.settings:type_name -> cucina.v1.HostSettings
-	28, // 30: cucina.v1.RenewCertificateResponse.expires_at:type_name -> google.protobuf.Timestamp
-	28, // 31: cucina.v1.IssueVMIdentityResponse.expires_at:type_name -> google.protobuf.Timestamp
-	30, // 32: cucina.v1.IssueVMIdentityResponse.settings:type_name -> cucina.v1.WorkerSettings
-	28, // 33: cucina.v1.GetRegistryCredentialsResponse.expires_at:type_name -> google.protobuf.Timestamp
-	0,  // 34: cucina.v1.HostService.Connect:input_type -> cucina.v1.HostMessage
-	20, // 35: cucina.v1.HostService.RenewCertificate:input_type -> cucina.v1.RenewCertificateRequest
-	22, // 36: cucina.v1.HostService.IssueVMIdentity:input_type -> cucina.v1.IssueVMIdentityRequest
-	24, // 37: cucina.v1.HostService.GetRegistryCredentials:input_type -> cucina.v1.GetRegistryCredentialsRequest
-	8,  // 38: cucina.v1.HostService.Connect:output_type -> cucina.v1.ControllerMessage
-	21, // 39: cucina.v1.HostService.RenewCertificate:output_type -> cucina.v1.RenewCertificateResponse
-	23, // 40: cucina.v1.HostService.IssueVMIdentity:output_type -> cucina.v1.IssueVMIdentityResponse
-	25, // 41: cucina.v1.HostService.GetRegistryCredentials:output_type -> cucina.v1.GetRegistryCredentialsResponse
-	38, // [38:42] is the sub-list for method output_type
-	34, // [34:38] is the sub-list for method input_type
-	34, // [34:34] is the sub-list for extension type_name
-	34, // [34:34] is the sub-list for extension extendee
-	0,  // [0:34] is the sub-list for field type_name
+	20, // 25: cucina.v1.ControllerMessage.cancel_command:type_name -> cucina.v1.CancelCommand
+	27, // 26: cucina.v1.Welcome.protocol:type_name -> cucina.v1.ProtocolVersion
+	30, // 27: cucina.v1.Welcome.heartbeat_interval:type_name -> google.protobuf.Duration
+	10, // 28: cucina.v1.Welcome.settings:type_name -> cucina.v1.HostSettings
+	30, // 29: cucina.v1.StopVM.timeout:type_name -> google.protobuf.Duration
+	10, // 30: cucina.v1.UpdateHostConfig.settings:type_name -> cucina.v1.HostSettings
+	29, // 31: cucina.v1.RenewCertificateResponse.expires_at:type_name -> google.protobuf.Timestamp
+	29, // 32: cucina.v1.IssueVMIdentityResponse.expires_at:type_name -> google.protobuf.Timestamp
+	31, // 33: cucina.v1.IssueVMIdentityResponse.settings:type_name -> cucina.v1.WorkerSettings
+	29, // 34: cucina.v1.GetRegistryCredentialsResponse.expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 35: cucina.v1.HostService.Connect:input_type -> cucina.v1.HostMessage
+	21, // 36: cucina.v1.HostService.RenewCertificate:input_type -> cucina.v1.RenewCertificateRequest
+	23, // 37: cucina.v1.HostService.IssueVMIdentity:input_type -> cucina.v1.IssueVMIdentityRequest
+	25, // 38: cucina.v1.HostService.GetRegistryCredentials:input_type -> cucina.v1.GetRegistryCredentialsRequest
+	8,  // 39: cucina.v1.HostService.Connect:output_type -> cucina.v1.ControllerMessage
+	22, // 40: cucina.v1.HostService.RenewCertificate:output_type -> cucina.v1.RenewCertificateResponse
+	24, // 41: cucina.v1.HostService.IssueVMIdentity:output_type -> cucina.v1.IssueVMIdentityResponse
+	26, // 42: cucina.v1.HostService.GetRegistryCredentials:output_type -> cucina.v1.GetRegistryCredentialsResponse
+	39, // [39:43] is the sub-list for method output_type
+	35, // [35:39] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_cucina_v1_host_proto_init() }
@@ -2259,6 +2335,7 @@ func file_cucina_v1_host_proto_init() {
 		(*ControllerMessage_CollectDiagnostics)(nil),
 		(*ControllerMessage_UpdateConfig)(nil),
 		(*ControllerMessage_Ping)(nil),
+		(*ControllerMessage_CancelCommand)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2266,7 +2343,7 @@ func file_cucina_v1_host_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cucina_v1_host_proto_rawDesc), len(file_cucina_v1_host_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

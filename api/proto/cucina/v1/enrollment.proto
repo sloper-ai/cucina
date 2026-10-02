@@ -31,7 +31,8 @@ message EnrollWorkerRequest {
   ProtocolVersion protocol = 1;
   // Raw JSON of http://169.254.169.254/latest/dynamic/instance-identity/document.
   bytes instance_identity_document = 2;
-  // Base64 RSA-2048 signature (…/instance-identity/signature) over the document.
+  // Base64 RSA-2048 signature: the body of …/instance-identity/rsa2048 (NOT /signature, which is
+  // RSA-1024) — the controller verifies it against the AWS regional certificate over the document.
   string signature = 3;
   // PEM PKCS#10 CSR for a key the agent generated at boot (the key never leaves the instance).
   bytes csr_pem = 4;
