@@ -18,4 +18,5 @@ blobs/sha256/historical_execute_response/<hash>-<size>/`. The management API's `
 ## Consequences
 Failed actions are inspectable from the link Bazel prints, provided the chart sets a `portalUrl` (any URL; only the path is
 used). Contract gap reported to the lead: `GetOperationResponse` could carry the completed `ExecuteResponse` (BuildQueueState
-keeps it briefly) so `action inspect <operation>` also shows a just-failed result.
+keeps it briefly) so `action inspect <operation>` also shows a just-failed result — closed: `GetOperationResponse.
+execute_response` (2026-10-02), used as `result.source = execute-response` (docs/cli.md, Action inspection).

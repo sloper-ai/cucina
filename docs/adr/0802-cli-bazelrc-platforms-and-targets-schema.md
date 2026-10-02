@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 # 0802 — `cucinactl bazelrc`: flag scope, platform labels and the targets schema
 
-* Status: accepted (2026-10-02)
+* Status: accepted (2026-10-02); flag scope (`common`) and the targets fixture superseded by 0807
 
 ## Context
 UC9 and R-XPLAT-2(d) need `cucinactl bazelrc` to print endpoint, TLS, helper, instance, platform and transfer flags, and
