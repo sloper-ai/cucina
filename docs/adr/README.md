@@ -111,6 +111,7 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0305](0305-qemu-cross-runtimes.md) | qemu-user and cross glibc runtimes on the x86_64 Linux image | accepted | images |
 | [0306](0306-linux-worker-boot-trims.md) | Linux worker boot trims (no SSH, reduced cloud-init, volatile journal) | accepted | images |
 | [0307](0307-private-source-image-pins.md) | Private source-image pins and build attestations | accepted | images |
+| [0308](0308-fast-launch-child-tag-reconciliation.md) | Reconcile replacement Fast Launch snapshot tags | accepted | images |
 | [0350](0350-macos-worker-image.md) | macOS worker image: Cirrus base, unprivileged auto-login build user, hostd-started services | accepted | images |
 | [0351](0351-macos-build-directory.md) | macOS VMs use NFSv4 virtual build directories | accepted | images |
 | [0352](0352-xcode-source-for-worker-images.md) | Where a worker image's Xcode comes from | accepted | images |

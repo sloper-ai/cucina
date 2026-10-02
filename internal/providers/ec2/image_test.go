@@ -4,6 +4,7 @@ package ec2
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -75,7 +76,12 @@ func TestResolveImage(t *testing.T) {
 // callers rely on before deregistering an AMI.
 func TestFastLaunch(t *testing.T) {
 	ctx := context.Background()
-	e := newEnv(t)
+	campaign := map[string]string{"cucina:env": "test", "cucina:run": "run-a", "cucina:expires": "2099-01-01T00:00:00Z"}
+	e := newEnv(t, func(o *Options) { o.ExtraTags = campaign })
+	img := e.ec2.images["ami-win"]
+	img.Tags = toEC2Tags(campaign)
+	e.ec2.images["ami-win"] = img
+	e.ec2.templates["lt-prep"] = ec2types.LaunchTemplate{LaunchTemplateId: aws.String("lt-prep"), Tags: toEC2Tags(campaign)}
 	op := func(action string) ports.FastLaunchOp {
 		return ports.FastLaunchOp{Action: action, ImageID: "ami-win", TargetCount: 4, MaxParallel: 2, LaunchTemplateID: "lt-prep"}
 	}
@@ -94,7 +100,24 @@ func TestFastLaunch(t *testing.T) {
 	st, err = e.p.FastLaunch(ctx, op(FastLaunchEnable))
 	require.NoError(t, err)
 	assert.Equal(t, "enabled", st.State)
-	assert.Equal(t, 1, e.ec2.callCount("EnableFastLaunch"), "re-enabling with the same settings makes no call")
+	assert.Equal(t, 1, e.ec2.callCount("EnableFastLaunch"), "re-enabling with the same settings makes no enable call")
+	// Guards: replacement Fast Launch snapshots lose inherited tags; every explicit enable reconciles them.
+	for _, s := range e.ec2.snapshots {
+		assert.Subset(t, fromEC2Tags(s.Tags), campaign)
+	}
+	e.ec2.replenishFastLaunch("ami-win", "lt-prep", 4)
+	_, err = e.p.FastLaunch(ctx, op(FastLaunchDescribe))
+	require.NoError(t, err)
+	for _, s := range e.ec2.snapshots {
+		assert.NotContains(t, fromEC2Tags(s.Tags), "cucina:run", "describe is read-only")
+	}
+	e.ec2.pageSize = 1 // replacement reconciliation must page beyond the first snapshot
+	_, err = e.p.FastLaunch(ctx, op(FastLaunchEnable))
+	require.NoError(t, err)
+	for _, s := range e.ec2.snapshots {
+		assert.Subset(t, fromEC2Tags(s.Tags), campaign)
+	}
+	assert.Equal(t, 1, e.ec2.callCount("EnableFastLaunch"), "tag reconciliation must not re-enable preparation")
 
 	st, err = e.p.FastLaunch(ctx, op(FastLaunchDisable))
 	require.NoError(t, err)
@@ -123,4 +146,68 @@ func TestFastLaunch(t *testing.T) {
 	st, err = e.p.FastLaunch(short, op(FastLaunchDisable))
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, "disabling", st.State)
+}
+
+// Guards: R-POOL-2 / campaign ownership — snapshot reconciliation never adopts another run's resources.
+func TestFastLaunchOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*env)
+		wantErr bool
+	}{
+		{"untagged image", func(e *env) { i := e.ec2.images["ami-win"]; i.Tags = nil; e.ec2.images["ami-win"] = i }, true},
+		{"foreign image owner", func(e *env) {
+			i := e.ec2.images["ami-win"]
+			i.OwnerId = aws.String("foreign")
+			e.ec2.images["ami-win"] = i
+		}, true},
+		{"foreign template run", func(e *env) {
+			lt := e.ec2.templates["lt-prep"]
+			lt.Tags = toEC2Tags(map[string]string{"cucina:run": "foreign"})
+			e.ec2.templates["lt-prep"] = lt
+		}, true},
+		{"child conflicting run", func(e *env) {
+			e.ec2.snapshots[0].Tags = append(e.ec2.snapshots[0].Tags, ec2types.Tag{Key: aws.String("cucina:run"), Value: aws.String("foreign")})
+		}, true},
+		{"child conflicting env", func(e *env) {
+			e.ec2.snapshots[0].Tags = append(e.ec2.snapshots[0].Tags, ec2types.Tag{Key: aws.String("cucina:env"), Value: aws.String("production")})
+		}, true},
+		{"child conflicting expiry", func(e *env) {
+			e.ec2.snapshots[0].Tags = append(e.ec2.snapshots[0].Tags, ec2types.Tag{Key: aws.String("cucina:expires"), Value: aws.String("different")})
+		}, true},
+		{"different template", func(e *env) {
+			e.ec2.snapshots[0].Tags = toEC2Tags(map[string]string{"CreatedBy": "EC2 Fast Launch", "CreatedByLaunchTemplateId": "lt-other"})
+		}, false},
+		{"similar image name", func(e *env) {
+			e.ec2.snapshots[0].Description = aws.String("This is Fast Launch snapshot for image ami-win-other")
+		}, false},
+		{"different creator", func(e *env) {
+			e.ec2.snapshots[0].Tags = toEC2Tags(map[string]string{"CreatedBy": "not Fast Launch", "CreatedByLaunchTemplateId": "lt-prep"})
+		}, false},
+		{"foreign snapshot owner", func(e *env) { e.ec2.snapshots[0].OwnerId = aws.String("foreign") }, false},
+		{"tag permission failure", func(e *env) { e.ec2.failOnce("CreateTags", apiError("UnauthorizedOperation")) }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tags := map[string]string{"cucina:env": "test", "cucina:run": "run-a", "cucina:expires": "2099-01-01T00:00:00Z"}
+			e := newEnv(t, func(o *Options) { o.ExtraTags = maps.Clone(tags) })
+			i := e.ec2.images["ami-win"]
+			i.Tags = toEC2Tags(tags)
+			e.ec2.images["ami-win"] = i
+			e.ec2.templates["lt-prep"] = ec2types.LaunchTemplate{LaunchTemplateId: aws.String("lt-prep"), Tags: toEC2Tags(tags)}
+			e.ec2.fastLaunch["ami-win"] = &fakeFastLaunch{item: ec2types.DescribeFastLaunchImagesSuccessItem{
+				ImageId: aws.String("ami-win"), State: ec2types.FastLaunchStateCodeEnabled, MaxParallelLaunches: aws.Int32(6),
+				SnapshotConfiguration: &ec2types.FastLaunchSnapshotConfigurationResponse{TargetResourceCount: aws.Int32(1)},
+				LaunchTemplate:        &ec2types.FastLaunchLaunchTemplateSpecificationResponse{LaunchTemplateId: aws.String("lt-prep")}}}
+			e.ec2.replenishFastLaunch("ami-win", "lt-prep", 1)
+			tc.mutate(e)
+			before := fromEC2Tags(e.ec2.snapshots[0].Tags)
+			_, err := e.p.FastLaunch(context.Background(), ports.FastLaunchOp{Action: FastLaunchEnable, ImageID: "ami-win", LaunchTemplateID: "lt-prep", TargetCount: 1, MaxParallel: 6})
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, before, fromEC2Tags(e.ec2.snapshots[0].Tags), "unowned/conflicting child must be untouched")
+		})
+	}
 }

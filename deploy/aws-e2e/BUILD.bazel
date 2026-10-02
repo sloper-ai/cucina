@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("//bazel:tiers.bzl", "cucina_sh_test")
+
+cucina_sh_test(
+    name = "fast_launch_cleanup_test",
+    srcs = ["tests/fast_launch_cleanup_test.sh"],
+    data = [
+        "scripts/lib.sh",
+        "scripts/sweep.sh",
+        "//workers/windows:scripts/fast-launch.sh",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "integration",
+)

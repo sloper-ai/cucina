@@ -312,15 +312,37 @@ run "controller_policy_is_tag_conditioned" {
 run "controller_images_policy_is_scoped" {
   command = plan
 
-  # Image lifecycle and Fast Launch: every Allow is either limited to cucina:env=e2e resources or is the
-  # RunInstances dry run that EnableFastLaunch performs, allowed only from the prep launch template.
+  # Image lifecycle and Fast Launch: existing env resources, a prep-template launch dry run, or narrowly scoped
+  # inheritance onto untagged replacement snapshots (all conditions checked in the assertion below).
   assert {
     condition = alltrue([
       for s in jsondecode(aws_iam_policy.controller_images.policy).Statement :
       s.Effect != "Allow" || try(s.Condition.StringEquals["aws:ResourceTag/cucina:env"] == "e2e", false) ||
-      try(s.Condition.ArnEquals["ec2:LaunchTemplate"] == aws_launch_template.fast_launch_prep.arn, false)
+      try(s.Condition.ArnEquals["ec2:LaunchTemplate"] == aws_launch_template.fast_launch_prep.arn, false) ||
+      try(s.Action == ["ec2:CreateTags"] &&
+        s.Condition.StringEquals["aws:ResourceTag/CreatedBy"] == "EC2 Fast Launch" &&
+        s.Condition.StringEquals["aws:ResourceTag/CreatedByLaunchTemplateId"] == aws_launch_template.fast_launch_prep.id &&
+      s.Condition.StringEquals["aws:RequestTag/cucina:run"] == var.run_id, false)
     ])
-    error_message = "image / Fast Launch permissions must require the env tag, or the prep launch template for the launch dry run"
+    error_message = "image / Fast Launch permissions require tagged resources, the prep-template dry run, or constrained child-tag inheritance"
+  }
+  # Guards: replenished snapshots have no campaign tags. Only children of this prep template may gain ours.
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_policy.controller_images.policy).Statement :
+      try(s.Action == ["ec2:CreateTags"] &&
+        s.Condition.StringEquals["aws:ResourceTag/CreatedBy"] == "EC2 Fast Launch" &&
+        s.Condition.StringEquals["aws:ResourceTag/CreatedByLaunchTemplateId"] == aws_launch_template.fast_launch_prep.id &&
+        s.Condition.StringEquals["aws:RequestTag/cucina:env"] == "e2e" &&
+        s.Condition.StringEquals["aws:RequestTag/cucina:run"] == var.run_id &&
+        s.Condition.StringEquals["aws:RequestTag/cucina:expires"] == var.expires &&
+        s.Condition.StringEqualsIfExists["aws:ResourceTag/cucina:env"] == "e2e" &&
+        s.Condition.StringEqualsIfExists["aws:ResourceTag/cucina:run"] == var.run_id &&
+        s.Condition.StringEqualsIfExists["aws:ResourceTag/cucina:expires"] == var.expires &&
+        toset(s.Condition["ForAllValues:StringEquals"]["aws:TagKeys"]) == toset(["cucina:env", "cucina:run", "cucina:expires"]) &&
+      alltrue([for r in tolist(s.Resource) : endswith(r, "::snapshot/*")]), false)
+    ])
+    error_message = "snapshot CreateTags must require exact Fast Launch template lineage, exact campaign request tags, no conflicting existing tags, and no other tag keys"
   }
   # EnableFastLaunch is authorized against the launch template as well as the image (found on real EC2).
   assert {

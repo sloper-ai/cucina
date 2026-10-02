@@ -5,6 +5,7 @@ package reconcile_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -19,9 +20,68 @@ import (
 	"github.com/sloper-ai/cucina/api/v1alpha1"
 	"github.com/sloper-ai/cucina/internal/controller"
 	"github.com/sloper-ai/cucina/internal/fakes"
+	"github.com/sloper-ai/cucina/internal/ports"
 	"github.com/sloper-ai/cucina/internal/reconcile"
 	"github.com/sloper-ai/cucina/internal/scaling"
 )
+
+// Guards: R-POOL-2 replacement-child reconciliation runs on already-enabled images, with bounded success/error cadence.
+// The Compute fake exposes desired preparation via its refill target; snapshot tag ownership is proved at the EC2 port.
+func TestFastLaunchReconcileCadence(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		name := "success"
+		if failure {
+			name = "failure does not hot-loop"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			clock := fakes.NewClock(t0)
+			cfg := fakes.DefaultComputeConfig()
+			cfg.FastLaunchRefill = time.Second
+			compute := fakes.NewCompute(clock, fakes.NewRand(7), cfg)
+			compute.PreProvisionFastLaunch(testAMI, 1)
+			wp := linuxPool("windows", 2)
+			wp.Annotations = map[string]string{reconcile.AnnFastLaunchImages: testAMI}
+			wp.Spec.EC2.FastLaunch = &v1alpha1.FastLaunchSpec{Enabled: true, LaunchTemplateID: "lt-fixture"}
+			rt := &reconcile.PoolRuntime{EC2: &reconcile.EC2Launch{ImageID: testAMI}}
+			m := &reconcile.FastLaunchManager{Compute: compute, Clock: clock, Log: slog.New(slog.DiscardHandler)}
+			_, err := m.Sync(ctx, wp, rt, reconcile.Snapshot{}, false)
+			require.NoError(t, err)
+			st, err := compute.FastLaunch(ctx, ports.FastLaunchOp{Action: "describe", ImageID: testAMI})
+			require.NoError(t, err)
+			require.Equal(t, 2, st.Snapshots, "an already-enabled image still receives its desired configuration")
+			// Replacement/preparation state changes after the first successful reconciliation.
+			compute.PreProvisionFastLaunch(testAMI, 1)
+			calls := compute.Calls("FastLaunch")
+			clock.Advance(59 * time.Second)
+			_, err = m.Sync(ctx, wp, rt, reconcile.Snapshot{}, false)
+			require.NoError(t, err)
+			require.Equal(t, calls, compute.Calls("FastLaunch"), "one-second controller polls do not hammer the provider")
+			clock.Advance(time.Second)
+			if failure {
+				compute.FailRate("FastLaunch", 1, errors.New("tag permission denied"))
+			}
+			_, err = m.Sync(ctx, wp, rt, reconcile.Snapshot{}, false)
+			if failure {
+				require.Error(t, err)
+				calls = compute.Calls("FastLaunch")
+				for range 59 {
+					clock.Advance(time.Second)
+					_, err = m.Sync(ctx, wp, rt, reconcile.Snapshot{}, false)
+					require.Error(t, err, "the previous reconciliation error remains visible")
+				}
+				require.Equal(t, calls, compute.Calls("FastLaunch"), "failed reconciliation is also rate-bounded")
+				compute.FailRate("FastLaunch", 0, nil)
+				clock.Advance(time.Second)
+				_, err = m.Sync(ctx, wp, rt, reconcile.Snapshot{}, false)
+			}
+			require.NoError(t, err)
+			st, err = compute.FastLaunch(ctx, ports.FastLaunchOp{Action: "describe", ImageID: testAMI})
+			require.NoError(t, err)
+			require.Equal(t, 2, st.Snapshots, "the next bounded explicit reconcile restores replacement state")
+		})
+	}
+}
 
 func condition(t *testing.T, wp *v1alpha1.WorkerPool, typ string) (status, reason string) {
 	t.Helper()

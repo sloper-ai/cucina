@@ -33,15 +33,18 @@ type fakeEC2 struct {
 	seq      int
 	pageSize int
 
-	subnets    map[string]fakeSubnet
-	images     map[string]ec2types.Image
-	instances  map[string]*fakeInstance
-	order      []string
-	volumes    map[string]*ec2types.Volume
-	enis       map[string]*ec2types.NetworkInterface
-	snapshots  []ec2types.Snapshot
-	fastLaunch map[string]*fakeFastLaunch
-	tokens     map[string]tokenUse // client token + "|" + AZ (zonal idempotency)
+	subnets   map[string]fakeSubnet
+	images    map[string]ec2types.Image
+	instances map[string]*fakeInstance
+	order     []string
+	volumes   map[string]*ec2types.Volume
+	enis      map[string]*ec2types.NetworkInterface
+	snapshots []ec2types.Snapshot
+	templates map[string]ec2types.LaunchTemplate
+	// Fast Launch may disappear from Describe before its snapshots finish deletion.
+	snapshotDeleteTicks map[string]int
+	fastLaunch          map[string]*fakeFastLaunch
+	tokens              map[string]tokenUse // client token + "|" + AZ (zonal idempotency)
 
 	capacity map[string]string  // "type|subnet|market" → error code ("*" wildcards)
 	failNext map[string][]error // op → errors returned before any effect
@@ -84,20 +87,22 @@ const (
 
 func newFakeEC2(clock *stepClock) *fakeEC2 {
 	return &fakeEC2{
-		clock:      clock,
-		pageSize:   1000,
-		subnets:    map[string]fakeSubnet{"subnet-a": {az: azA}, "subnet-a2": {az: azA, mapPublicIP: true}, "subnet-b": {az: azB}},
-		images:     map[string]ec2types.Image{},
-		instances:  map[string]*fakeInstance{},
-		volumes:    map[string]*ec2types.Volume{},
-		enis:       map[string]*ec2types.NetworkInterface{},
-		fastLaunch: map[string]*fakeFastLaunch{},
-		tokens:     map[string]tokenUse{},
-		capacity:   map[string]string{},
-		failNext:   map[string][]error{},
-		lose:       map[string]int{},
-		calls:      map[string]int{},
-		hooks:      map[string]func(){},
+		clock:               clock,
+		pageSize:            1000,
+		subnets:             map[string]fakeSubnet{"subnet-a": {az: azA}, "subnet-a2": {az: azA, mapPublicIP: true}, "subnet-b": {az: azB}},
+		images:              map[string]ec2types.Image{},
+		instances:           map[string]*fakeInstance{},
+		volumes:             map[string]*ec2types.Volume{},
+		enis:                map[string]*ec2types.NetworkInterface{},
+		fastLaunch:          map[string]*fakeFastLaunch{},
+		templates:           map[string]ec2types.LaunchTemplate{},
+		snapshotDeleteTicks: map[string]int{},
+		tokens:              map[string]tokenUse{},
+		capacity:            map[string]string{},
+		failNext:            map[string][]error{},
+		lose:                map[string]int{},
+		calls:               map[string]int{},
+		hooks:               map[string]func(){},
 	}
 }
 
@@ -583,9 +588,34 @@ func (f *fakeEC2) DescribeSnapshots(_ context.Context, in *ec2sdk.DescribeSnapsh
 	if err := f.begin("DescribeSnapshots"); err != nil {
 		return nil, err
 	}
+	for image, ticks := range f.snapshotDeleteTicks {
+		// Keep pagination stable within one inventory observation.
+		if aws.ToString(in.NextToken) != "" {
+			continue
+		}
+		if ticks == 0 {
+			f.snapshots = slices.DeleteFunc(f.snapshots, func(s ec2types.Snapshot) bool {
+				return aws.ToString(s.Description) == "This is Fast Launch snapshot for image "+image
+			})
+			delete(f.snapshotDeleteTicks, image)
+		} else {
+			f.snapshotDeleteTicks[image]--
+		}
+	}
 	var matched []ec2types.Snapshot
 	for _, s := range f.snapshots {
-		ok, err := matchFilters(in.Filters, func(string) ([]string, bool) { return nil, false }, s.Tags)
+		if len(in.SnapshotIds) > 0 && !slices.Contains(in.SnapshotIds, aws.ToString(s.SnapshotId)) {
+			continue
+		}
+		if slices.Contains(in.OwnerIds, "self") && aws.ToString(s.OwnerId) != fakeOwner {
+			continue
+		}
+		ok, err := matchFilters(in.Filters, func(name string) ([]string, bool) {
+			if name == "description" {
+				return []string{aws.ToString(s.Description)}, true
+			}
+			return nil, false
+		}, s.Tags)
 		if err != nil {
 			return nil, err
 		}
@@ -595,6 +625,62 @@ func (f *fakeEC2) DescribeSnapshots(_ context.Context, in *ec2sdk.DescribeSnapsh
 	}
 	page, next, err := paginate(matched, in.NextToken, f.pageSize)
 	return &ec2sdk.DescribeSnapshotsOutput{Snapshots: page, NextToken: next}, err
+}
+
+func (f *fakeEC2) DescribeLaunchTemplates(_ context.Context, in *ec2sdk.DescribeLaunchTemplatesInput, _ ...func(*ec2sdk.Options)) (*ec2sdk.DescribeLaunchTemplatesOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.begin("DescribeLaunchTemplates"); err != nil {
+		return nil, err
+	}
+	var matched []ec2types.LaunchTemplate
+	for _, id := range sortedKeys(f.templates) {
+		lt := f.templates[id]
+		if len(in.LaunchTemplateIds) > 0 && !slices.Contains(in.LaunchTemplateIds, id) {
+			continue
+		}
+		ok, err := matchFilters(in.Filters, func(string) ([]string, bool) { return nil, false }, lt.Tags)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			matched = append(matched, lt)
+		}
+	}
+	page, next, err := paginate(matched, in.NextToken, f.pageSize)
+	return &ec2sdk.DescribeLaunchTemplatesOutput{LaunchTemplates: page, NextToken: next}, err
+}
+
+func (f *fakeEC2) CreateTags(_ context.Context, in *ec2sdk.CreateTagsInput, _ ...func(*ec2sdk.Options)) (*ec2sdk.CreateTagsOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.begin("CreateTags"); err != nil {
+		return nil, err
+	}
+	for _, id := range in.Resources {
+		index := slices.IndexFunc(f.snapshots, func(s ec2types.Snapshot) bool { return aws.ToString(s.SnapshotId) == id })
+		if index == -1 {
+			return nil, apiError("InvalidSnapshot.NotFound")
+		}
+		tags := fromEC2Tags(f.snapshots[index].Tags)
+		for _, tag := range in.Tags {
+			tags[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+		}
+		f.snapshots[index].Tags = toEC2Tags(tags)
+	}
+	return &ec2sdk.CreateTagsOutput{}, nil
+}
+
+// A consumed snapshot is replaced asynchronously, without inheriting the template's campaign tags.
+func (f *fakeEC2) replenishFastLaunch(image, template string, n int) {
+	f.snapshots = slices.DeleteFunc(f.snapshots, func(s ec2types.Snapshot) bool {
+		return aws.ToString(s.Description) == "This is Fast Launch snapshot for image "+image
+	})
+	for range n {
+		f.snapshots = append(f.snapshots, ec2types.Snapshot{SnapshotId: aws.String(f.id("snap")), OwnerId: aws.String(fakeOwner),
+			State: ec2types.SnapshotStateCompleted, Description: aws.String("This is Fast Launch snapshot for image " + image),
+			Tags: toEC2Tags(map[string]string{"CreatedBy": "EC2 Fast Launch", "CreatedByLaunchTemplateId": template})})
+	}
 }
 
 // ------------------------------------------------------------- fast launch
@@ -660,14 +746,14 @@ func (f *fakeEC2) DescribeFastLaunchImages(_ context.Context, in *ec2sdk.Describ
 			switch fl.item.State {
 			case ec2types.FastLaunchStateCodeEnabling:
 				fl.item.State = ec2types.FastLaunchStateCodeEnabled
-				for range aws.ToInt32(fl.item.SnapshotConfiguration.TargetResourceCount) {
-					f.snapshots = append(f.snapshots, ec2types.Snapshot{SnapshotId: aws.String(f.id("snap")),
-						Description: aws.String("Created by EC2 Fast Launch for " + id),
-						Tags:        []ec2types.Tag{{Key: aws.String(FastLaunchCreatedByTag), Value: aws.String(FastLaunchCreatedByValue)}}})
+				template := ""
+				if fl.item.LaunchTemplate != nil {
+					template = aws.ToString(fl.item.LaunchTemplate.LaunchTemplateId)
 				}
+				f.replenishFastLaunch(id, template, int(aws.ToInt32(fl.item.SnapshotConfiguration.TargetResourceCount)))
 			case ec2types.FastLaunchStateCodeDisabling:
 				delete(f.fastLaunch, id)
-				f.snapshots = slices.DeleteFunc(f.snapshots, func(s ec2types.Snapshot) bool { return snapshotReferences(s, id) })
+				f.snapshotDeleteTicks[id] = 2
 				continue
 			}
 		}

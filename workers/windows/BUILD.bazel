@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+exports_files(
+    ["scripts/fast-launch.sh"],
+    visibility = ["//deploy/aws-e2e:__pkg__"],
+)

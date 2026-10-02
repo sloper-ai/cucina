@@ -4,9 +4,9 @@
 # EC2 Fast Launch for Windows worker AMIs (R-POOL-2, user-approved standing cost).
 #
 #   fast-launch.sh enable  --ami AMI [--count N] [--max-parallel M] [--launch-template-id LT] [--wait]
-#   fast-launch.sh disable --ami AMI [--no-wait]      # default: wait until describe-fast-launch-images says disabled
+#   fast-launch.sh disable --ami AMI [--no-wait]      # default: disabled AND exact-AMI child snapshots gone
 #   fast-launch.sh status  --ami AMI
-#   fast-launch.sh tag     --ami AMI                  # campaign tags on this AMI's Fast Launch snapshots (best effort)
+#   fast-launch.sh tag     --ami AMI                  # reconcile current children; replacements need another pass
 #
 # enable: TargetResourceCount = the Windows pool's max (default 4) pre-provisioned snapshots, prepared by small,
 # cheap prep instances from a launch template (private subnet, IMDSv2). The template comes from --launch-template-id,
@@ -62,7 +62,7 @@ ensure_template() {
   if [[ -n "$lt" ]]; then return; fi
   local name="cucina-fastlaunch-prep-${RUN_ID}"
   lt=$(ec2 describe-launch-templates --filters "Name=launch-template-name,Values=$name" \
-    --query 'LaunchTemplates[0].LaunchTemplateId' --output text 2>/dev/null || true)
+    --query 'LaunchTemplates[0].LaunchTemplateId' --output text)
   if [[ -n "$lt" && "$lt" != None ]]; then return; fi
   local subnet sg data
   subnet=$(jq -r '.private_subnet_id' "$OUTPUTS")
@@ -81,23 +81,66 @@ ensure_template() {
   log "created launch template $lt ($PREP_TYPE, private subnet)"
 }
 
+child_snapshots() {
+  # AWS's exact description is not an ownership proof by itself, but avoids image-ID substring collisions.
+  ec2 describe-snapshots --owner-ids self --filters "Name=tag:CreatedBy,Values=EC2 Fast Launch" \
+    "Name=description,Values=This is Fast Launch snapshot for image $ami" --output json
+}
+
 tag_snapshots() {
-  # Fast Launch names its snapshots after the AMI; only those are tagged (never anyone else's resources).
-  local ids
-  ids=$(ec2 describe-snapshots --owner-ids self --filters "Name=tag:CreatedBy,Values=EC2 Fast Launch" \
-    --query "Snapshots[?contains(Description || '', '$ami') || contains(to_string(Tags), '$ami')].SnapshotId" --output text)
-  if [[ -n "$ids" && "$ids" != None ]]; then
-    # shellcheck disable=SC2086
-    ec2 create-tags --resources $ids --tags "Key=cucina:env,Value=$ENV_TAG" "Key=cucina:run,Value=$RUN_ID" "Key=cucina:expires,Value=$EXPIRES"
-    log "tagged snapshots: $ids"
-  else
-    log "no Fast Launch snapshots for $ami yet"
+  local children templates ids
+  children=$(child_snapshots)
+  templates=$(ec2 describe-launch-templates \
+    --filters "Name=tag:cucina:env,Values=$ENV_TAG" "Name=tag:cucina:run,Values=$RUN_ID" "Name=tag:cucina:expires,Values=$EXPIRES" \
+    --query 'LaunchTemplates[].LaunchTemplateId' --output json)
+  # Inherit only from independently verified parents, and never overwrite a conflicting campaign marker.
+  # Validate the entire inventory before a write. jq errors are fatal (not an empty inventory).
+  ids=$(jq -r --arg ami "$ami" --argjson templates "$templates" --arg env "$ENV_TAG" --arg run "$RUN_ID" --arg expires "$EXPIRES" '
+    {"cucina:env":$env,"cucina:run":$run,"cucina:expires":$expires} as $want
+    | [.Snapshots[] | select(.Description == ("This is Fast Launch snapshot for image " + $ami))
+       | (.Tags // [] | map({(.Key):.Value}) | add // {}) as $tags
+       | select($tags.CreatedBy == "EC2 Fast Launch")
+       | if ($templates | index($tags.CreatedByLaunchTemplateId)) == null then error("unverified Fast Launch parent template") else . end
+       | if any($want | to_entries[]; . as $t | ($tags | has($t.key)) and $tags[$t.key] != $t.value)
+         then error("conflicting Fast Launch child campaign tags") else . end
+       | select(any($want | keys[]; . as $k | $tags[$k] == null)) | .SnapshotId]
+    | .[]' <<<"$children")
+  if [[ -n "$ids" ]]; then
+    local -a resources=()
+    local id
+    while IFS= read -r id; do resources+=("$id"); done <<<"$ids"
+    local offset
+    for ((offset = 0; offset < ${#resources[@]}; offset += 1000)); do
+      ec2 create-tags --resources "${resources[@]:offset:1000}" --tags "Key=cucina:env,Value=$ENV_TAG" "Key=cucina:run,Value=$RUN_ID" "Key=cucina:expires,Value=$EXPIRES"
+    done
+    log "reconciled ${#resources[@]} snapshot tags"
   fi
+}
+
+wait_disabled() {
+  local s children
+  for _ in $(seq 1 240); do
+    s=$(state)
+    case "$s" in
+      disabled|none|None)
+        children=$(child_snapshots)
+        if [[ "$(jq '.Snapshots | length' <<<"$children")" == 0 ]]; then log "disabled; child snapshots gone"; return 0; fi
+        ;;
+      *failed*) log "disable failed ($s)"; return 1 ;;
+    esac
+    sleep 15 || return 1
+  done
+  log "timed out waiting for disable and child snapshot cleanup (last state $s)"
+  return 1
 }
 
 case "$cmd" in
   enable)
     ensure_template
+    owned_template=$(ec2 describe-launch-templates --launch-template-ids "$lt" \
+      --filters "Name=tag:cucina:env,Values=$ENV_TAG" "Name=tag:cucina:run,Values=$RUN_ID" "Name=tag:cucina:expires,Values=$EXPIRES" \
+      --query 'LaunchTemplates[0].LaunchTemplateId' --output text)
+    [[ "$owned_template" == "$lt" ]] || { log 'refusing enable: template lacks the matching campaign tags'; exit 1; }
     version=$(ec2 describe-launch-templates --launch-template-ids "$lt" --query 'LaunchTemplates[0].DefaultVersionNumber' --output text)
     (( max_parallel >= 6 )) || max_parallel=6
     log "enabling on $ami: $count snapshots, template $lt v$version, max parallel $max_parallel"
@@ -113,24 +156,18 @@ case "$cmd" in
         esac
         sleep 30
       done
-      tag_snapshots || true
+      [[ "$(state)" == enabled ]] || { log 'timed out waiting for enabled'; exit 1; }
     fi
+    tag_snapshots
     state
     ;;
   disable)
     s=$(state)
-    if [[ "$s" == none || "$s" == None || "$s" == disabled ]]; then log "not enabled on $ami ($s)"; exit 0; fi
-    log "disabling on $ami (was $s)"
-    ec2 disable-fast-launch --image-id "$ami" --query 'State' --output text >/dev/null
-    if (( wait )); then
-      for _ in $(seq 1 240); do
-        s=$(state)
-        if [[ "$s" == disabled || "$s" == none || "$s" == None ]]; then log "disabled ($s)"; exit 0; fi
-        sleep 15
-      done
-      log "timed out waiting for disable (last state $s)"
-      exit 1
+    if [[ "$s" != none && "$s" != None && "$s" != disabled && "$s" != disabling ]]; then
+      log "disabling on $ami (was $s)"
+      ec2 disable-fast-launch --image-id "$ami" --query 'State' --output text >/dev/null
     fi
+    if (( wait )); then wait_disabled; fi
     ;;
   status)
     ec2 describe-fast-launch-images --image-ids "$ami" --output json \

@@ -47,6 +47,8 @@ type Options struct {
 	Region string
 	// ExtraTags are added to every resource the provider creates (for example the
 	// campaign tags cucina:env, cucina:run, cucina:expires). Launch request tags win.
+	// Fast Launch mutations require nonempty ExtraTags matching the owned AMI and
+	// preparation template; explicit enable reconciles them onto replacement snapshots.
 	ExtraTags map[string]string
 	// OrphanGrace is how long a pool-tagged volume or ENI must have been unattached
 	// before ListOrphans reports it (default 5m).

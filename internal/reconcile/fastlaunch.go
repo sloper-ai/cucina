@@ -42,8 +42,15 @@ type FastLaunchManager struct {
 	// manager looked at (0 once disabled): standing cost (R-OBS-5).
 	Record func(pool domain.PoolName, image string, snapshots, sizeGiB int)
 
-	mu    sync.Mutex
-	state map[string]flState // by image ID
+	mu       sync.Mutex
+	state    map[string]flState   // successful observations, by image ID
+	attempts map[string]flAttempt // explicit reconciliation attempts; failures are rate-bounded too
+}
+
+type flAttempt struct {
+	at      time.Time
+	running bool
+	err     error
 }
 
 type flState struct {
@@ -68,29 +75,21 @@ func (m *FastLaunchManager) Sync(ctx context.Context, wp *v1alpha1.WorkerPool, r
 	}
 	var errs []error
 	if want != "" {
-		st, err := m.describe(ctx, want)
-		if err == nil && m.Record != nil {
-			m.Record(domain.PoolName(wp.Name), want, st.Snapshots, rt.ImageSizeGiB)
+		target := int(wp.Spec.Capacity.Max)
+		if fl.TargetCount != nil {
+			target = int(*fl.TargetCount)
 		}
-		switch {
-		case err != nil:
+		parallel := defaultFastLaunchParallel
+		if fl.MaxParallelLaunches != nil {
+			parallel = max(int(*fl.MaxParallelLaunches), defaultFastLaunchParallel)
+		}
+		// Explicit enable is an idempotent reconcile, not just an initial transition: AWS replenishes snapshots
+		// without our tags after every launch. Never make read-only Describe responsible for those writes.
+		st, err := m.ensure(ctx, ports.FastLaunchOp{Action: "enable", ImageID: want, TargetCount: max(target, 1), MaxParallel: parallel, LaunchTemplateID: fl.LaunchTemplateID})
+		if err != nil {
 			errs = append(errs, err)
-		case st.State == "" || st.State == "disabled" || st.State == "failed":
-			target := int(wp.Spec.Capacity.Max)
-			if fl.TargetCount != nil {
-				target = int(*fl.TargetCount)
-			}
-			parallel := defaultFastLaunchParallel
-			if fl.MaxParallelLaunches != nil {
-				parallel = max(int(*fl.MaxParallelLaunches), defaultFastLaunchParallel)
-			}
-			st, err := m.Compute.FastLaunch(ctx, ports.FastLaunchOp{Action: "enable", ImageID: want, TargetCount: max(target, 1), MaxParallel: parallel, LaunchTemplateID: fl.LaunchTemplateID})
-			if err != nil {
-				errs = append(errs, err)
-			} else {
-				m.remember(want, st)
-				m.Log.Info("enabled EC2 Fast Launch", "pool", wp.Name, "image", want, "targetCount", target)
-			}
+		} else if m.Record != nil {
+			m.Record(domain.PoolName(wp.Name), want, st.Snapshots, rt.ImageSizeGiB)
 		}
 	}
 
@@ -108,7 +107,7 @@ func (m *FastLaunchManager) Sync(ctx context.Context, wp *v1alpha1.WorkerPool, r
 		case err != nil:
 			errs = append(errs, err)
 			keep, done = append(keep, img), false
-		case st.State == "disabled" || st.State == "":
+		case (st.State == "disabled" || st.State == "") && st.Snapshots == 0:
 			m.Log.Info("EC2 Fast Launch disabled", "pool", wp.Name, "image", img)
 			if m.Record != nil {
 				m.Record(domain.PoolName(wp.Name), img, 0, 0)
@@ -131,6 +130,36 @@ func (m *FastLaunchManager) Sync(ctx context.Context, wp *v1alpha1.WorkerPool, r
 		}
 	}
 	return done, errors.Join(errs...)
+}
+
+// ensure allows at most one explicit attempt per image per minute, measured from completion too. Keep attempt
+// bookkeeping separate from the successful describe cache: a denied CreateTags must not retry every poll or be
+// hidden as success. The running flag also coalesces concurrent pools referring to the same image.
+func (m *FastLaunchManager) ensure(ctx context.Context, op ports.FastLaunchOp) (ports.FastLaunchStatus, error) {
+	m.mu.Lock()
+	a, ok := m.attempts[op.ImageID]
+	if ok && (a.running || m.Clock.Now().Sub(a.at) < fastLaunchDescribeEvery) {
+		st := m.state[op.ImageID].status
+		m.mu.Unlock()
+		return st, a.err
+	}
+	if m.attempts == nil {
+		m.attempts = map[string]flAttempt{}
+	}
+	m.attempts[op.ImageID] = flAttempt{at: m.Clock.Now(), running: true}
+	m.mu.Unlock()
+
+	st, err := m.Compute.FastLaunch(ctx, op)
+	m.mu.Lock()
+	m.attempts[op.ImageID] = flAttempt{at: m.Clock.Now(), err: err}
+	if err == nil {
+		if m.state == nil {
+			m.state = map[string]flState{}
+		}
+		m.state[op.ImageID] = flState{status: st, at: m.Clock.Now()}
+	}
+	m.mu.Unlock()
+	return st, err
 }
 
 func (m *FastLaunchManager) describe(ctx context.Context, image string) (ports.FastLaunchStatus, error) {

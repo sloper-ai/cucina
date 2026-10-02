@@ -235,7 +235,8 @@ locals {
   # Image lifecycle, kept in its own managed policy (the controller policy is close to IAM's size limit).
   # EnableFastLaunch is authorized against the prep launch template as well as the image, and runs a
   # RunInstances DRY RUN as the caller without request tags; that is allowed only when it launches from
-  # the (tagged) prep template, whose tag specifications tag everything it launches.
+  # the (tagged) prep template, whose specifications tag instances/volumes. Replacement snapshot tags are
+  # reconciled separately through the lineage-constrained permission below (not inherited by AWS).
   controller_images_policy = {
     Version = "2012-10-17"
     Statement = [
@@ -254,6 +255,29 @@ locals {
         Action    = ["ec2:EnableFastLaunch", "ec2:DisableFastLaunch"]
         Resource  = ["${local.ec2_arn}:launch-template/*"]
         Condition = local.cond_env_resource
+      },
+      {
+        # Fast Launch replacement snapshots inherit only AWS's lineage tags, not the template's instance/volume
+        # tags. Reconciliation may ADD our three tags only to this template's children, never replace another run.
+        Sid      = "TagFastLaunchSnapshotChildren"
+        Effect   = "Allow"
+        Action   = ["ec2:CreateTags"]
+        Resource = ["${local.ec2_noacc}::snapshot/*"]
+        Condition = {
+          StringEquals = {
+            "aws:ResourceTag/CreatedBy"                 = "EC2 Fast Launch"
+            "aws:ResourceTag/CreatedByLaunchTemplateId" = aws_launch_template.fast_launch_prep.id
+            "aws:RequestTag/cucina:env"                 = "e2e"
+            "aws:RequestTag/cucina:run"                 = var.run_id
+            "aws:RequestTag/cucina:expires"             = var.expires
+          }
+          StringEqualsIfExists = {
+            "aws:ResourceTag/cucina:env"     = "e2e"
+            "aws:ResourceTag/cucina:run"     = var.run_id
+            "aws:ResourceTag/cucina:expires" = var.expires
+          }
+          "ForAllValues:StringEquals" = { "aws:TagKeys" = ["cucina:env", "cucina:run", "cucina:expires"] }
+        }
       },
       {
         Sid       = "DeleteTaggedSnapshots"

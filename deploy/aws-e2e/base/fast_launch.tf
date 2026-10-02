@@ -6,7 +6,9 @@
 # free. It must NOT tag network interfaces: Fast Launch launches the prep instances with the
 # service-linked role AWSServiceRoleForEC2FastLaunch, which may not tag them, and the whole
 # enable fails ("enabled-failed ... not authorized to perform ec2:CreateTags on network-interface"). Windows AMIs enable Fast Launch via the Packer `fast_launch` block or the
-# controller (ec2:EnableFastLaunch) and reference this template.
+# controller (ec2:EnableFastLaunch) and reference this template. Snapshot children do NOT inherit these
+# instance/volume tag specifications: explicit controller reconciliation tags each replacement from verified
+# CreatedBy/CreatedByLaunchTemplateId lineage (ADR 0308). Do not modify the service-linked role to force inheritance.
 
 resource "aws_launch_template" "fast_launch_prep" {
   name                   = "${local.name}-fastlaunch-prep"

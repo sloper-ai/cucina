@@ -127,6 +127,15 @@ STUB
   fi
 fi
 
+# --- 2c. replacement Fast Launch children and safe teardown (stateful offline AWS CLI fake) -------
+step "Fast Launch child ownership and teardown"
+if bash "$here/fast_launch_cleanup_test.sh" >"$work/fast-launch.txt" 2>&1; then
+  pass "exact parent attribution; conflicting child tags refused; disabled waits for child deletion"
+else
+  head -n 30 "$work/fast-launch.txt"
+  fail "Fast Launch cleanup regression"
+fi
+
 # --- 3. shellcheck ----------------------------------------------------------------------------
 step "shellcheck"
 if skipped shellcheck; then

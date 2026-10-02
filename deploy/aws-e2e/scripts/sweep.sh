@@ -19,7 +19,7 @@
 # repositories, SSM parameters, Secrets Manager secrets - and, through the Resource Groups
 # Tagging API (us-west-1 and us-east-1 for IAM), anything else that carries the tags (log
 # groups, S3 buckets, ...). Only AMIs (and their snapshots) are ever deleted here, and only
-# when they carry both tags; everything else is removed by `tofu destroy` / the controller.
+# when they carry all three campaign tags; everything else is removed by `tofu destroy` / the controller.
 
 set -eu
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -155,7 +155,7 @@ collect() {
 # "unattributed" and still count as leftovers (conservative).
 collect_fast_launch() {
   cf_run=$1
-  cf_f=$(e2e_ec2_tag_filters "$cf_run")
+  cf_f="$(e2e_ec2_tag_filters "$cf_run") Name=tag:cucina:expires,Values=$E2E_EXPIRES"
   : >"$work/ours-amis"
   : >"$work/ours-lts"
   # shellcheck disable=SC2086
@@ -177,16 +177,21 @@ collect_fast_launch() {
   fi
 
   if aws_json "$work/r.json" ec2 describe-snapshots --owner-ids self --filters "Name=tag:CreatedBy,Values=$FASTLAUNCH_TAG_VALUE"; then
-    # A Fast Launch snapshot is ours when it carries the run's tags, names one of the run's AMIs in its
-    # description ("This is Fast Launch snapshot for image ami-..."), or was created from one of the
-    # run's launch templates (tag CreatedByLaunchTemplateId).
-    jq -r --arg run "$cf_run" --rawfile mine "$work/ours-amis" --rawfile lts "$work/ours-lts" "$has_tags_jq"'
+    # Read-only attribution requires BOTH independently tagged parents and exact AWS child lineage. Missing
+    # child campaign tags remain visible; conflicting tags are not authority to relabel another run's resources.
+    jq -r --arg run "$cf_run" --arg expires "$E2E_EXPIRES" --rawfile mine "$work/ours-amis" --rawfile lts "$work/ours-lts" "$has_tags_jq"'
       ($mine | split("\n") | map(select(. != ""))) as $amis
       | ($lts | split("\n") | map(select(. != ""))) as $templates
-      | .Snapshots[]
-      | ((.Description // "") + (.Tags | tojson)) as $hay
-      | (tagmap_of(.Tags)["CreatedByLaunchTemplateId"]) as $lt
-      | [.SnapshotId, .State, (if ((.Tags | ours($run)) or ($amis | any(. as $a | $hay | contains($a))) or ($lt != null and ($templates | index($lt)))) then "ours" else "unattributed" end)] | @tsv' "$work/r.json" | add_rows fastlaunch-snapshot
+      | .Snapshots[] | .Description as $description | tagmap_of(.Tags) as $tags
+      | ($tags.CreatedByLaunchTemplateId) as $lt
+      | ($tags.CreatedBy == "EC2 Fast Launch" and $lt != null and ($templates | index($lt)) != null
+         and ($amis | any(. as $a | $description == ("This is Fast Launch snapshot for image " + $a)))
+         and (($tags | has("cucina:env") | not) or $tags["cucina:env"] == "e2e")
+         and (($tags | has("cucina:run") | not) or $run == "" or $tags["cucina:run"] == $run)
+         and (($tags | has("cucina:expires") | not) or $tags["cucina:expires"] == $expires)) as $owned
+      | [.SnapshotId, .State, (if $owned then
+          (if ($tags | has("cucina:env") and has("cucina:run") and has("cucina:expires")) then "ours" else "ours-missing-tags" end)
+          else "unattributed" end)] | @tsv' "$work/r.json" | add_rows fastlaunch-snapshot
   else
     note_api_error "ec2 describe-snapshots (Fast Launch)"
   fi
@@ -359,7 +364,15 @@ wait_fast_launch_disabled() {
   while :; do
     wf_state=$(fast_launch_state "$wf_ami")
     case "$wf_state" in
-      none | disabled) return 0 ;;
+      none | disabled)
+        # Configuration disappearance is not proof that replacement-child deletion has completed.
+        # Query by AWS lineage independently of campaign tags, since those may never have been reconciled.
+        aws_json "$work/fl-children.json" ec2 describe-snapshots --owner-ids self \
+          --filters "Name=tag:CreatedBy,Values=$FASTLAUNCH_TAG_VALUE" \
+            "Name=description,Values=This is Fast Launch snapshot for image $wf_ami" || return 1
+        if [ "$(jq --arg ami "$wf_ami" '[.Snapshots[] | select(.Description == ("This is Fast Launch snapshot for image " + $ami))] | length' "$work/fl-children.json")" -eq 0 ]; then return 0; fi
+        e2e_log "  $wf_ami: disabled but Fast Launch children still exist; waiting, not deregistering"
+        ;;
       error) ;;
       enabled | enabled-failed | enabling-failed | disabling-failed)
         e2e_log "  $wf_ami: Fast Launch is '$wf_state'; disabling"
@@ -378,12 +391,13 @@ wait_fast_launch_disabled() {
       e2e_log "  $wf_ami: Fast Launch did not report disabled in time (state: $wf_state)"
       return 1
     }
-    sleep 20
+    sleep 20 || return 1
   done
 }
 
 delete_amis() {
-  da_f=$(e2e_ec2_tag_filters "$RUN")
+  # Destructive paths require all three protective tags; a different expiry is not this campaign's authority.
+  da_f="$(e2e_ec2_tag_filters "$RUN") Name=tag:cucina:expires,Values=$E2E_EXPIRES"
   # shellcheck disable=SC2086
   aws_json "$work/amis.json" ec2 describe-images --owners self --filters $da_f || return 1
   jq -r '.Images[].ImageId' "$work/amis.json" >"$work/ami-ids"
@@ -400,7 +414,7 @@ delete_amis() {
       continue
     fi
     jq -r --arg ami "$ami" '.Images[] | select(.ImageId == $ami) | .BlockDeviceMappings[]? | .Ebs.SnapshotId // empty' "$work/amis.json" >"$work/snaps-$ami"
-    # Both tags are guaranteed by the filter above: deregister.
+    # All three tags are guaranteed by the filter above, and child cleanup completed: deregister.
     if aws ec2 deregister-image --image-id "$ami" >/dev/null 2>"$work/dereg.err"; then
       e2e_log "  deregistered"
     else
@@ -420,7 +434,7 @@ delete_amis() {
           da_fail=1
         fi
       else
-        e2e_log "  snapshot $snap does not carry both tags: left alone"
+        e2e_log "  snapshot $snap does not carry all three campaign tags: left alone"
         da_fail=1
       fi
     done <"$work/snaps-$ami"

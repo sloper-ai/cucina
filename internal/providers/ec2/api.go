@@ -25,6 +25,8 @@ type ec2API interface {
 
 	DescribeImages(ctx context.Context, in *ec2sdk.DescribeImagesInput, opts ...func(*ec2sdk.Options)) (*ec2sdk.DescribeImagesOutput, error)
 	DescribeSnapshots(ctx context.Context, in *ec2sdk.DescribeSnapshotsInput, opts ...func(*ec2sdk.Options)) (*ec2sdk.DescribeSnapshotsOutput, error)
+	DescribeLaunchTemplates(ctx context.Context, in *ec2sdk.DescribeLaunchTemplatesInput, opts ...func(*ec2sdk.Options)) (*ec2sdk.DescribeLaunchTemplatesOutput, error)
+	CreateTags(ctx context.Context, in *ec2sdk.CreateTagsInput, opts ...func(*ec2sdk.Options)) (*ec2sdk.CreateTagsOutput, error)
 
 	EnableFastLaunch(ctx context.Context, in *ec2sdk.EnableFastLaunchInput, opts ...func(*ec2sdk.Options)) (*ec2sdk.EnableFastLaunchOutput, error)
 	DisableFastLaunch(ctx context.Context, in *ec2sdk.DisableFastLaunchInput, opts ...func(*ec2sdk.Options)) (*ec2sdk.DisableFastLaunchOutput, error)

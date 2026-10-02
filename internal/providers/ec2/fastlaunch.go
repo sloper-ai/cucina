@@ -5,7 +5,8 @@ package ec2
 import (
 	"context"
 	"fmt"
-	"strings"
+	"maps"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ec2sdk "github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -30,6 +31,8 @@ const (
 	// (snapshots, prep instances, volumes, launch templates): CreatedBy=EC2 Fast Launch.
 	FastLaunchCreatedByTag   = "CreatedBy"
 	FastLaunchCreatedByValue = "EC2 Fast Launch"
+	fastLaunchTemplateTag    = "CreatedByLaunchTemplateId"
+	fastLaunchDescription    = "This is Fast Launch snapshot for image "
 
 	// minParallelLaunches is EC2's lower bound for MaxParallelLaunches.
 	minParallelLaunches = 6
@@ -38,10 +41,12 @@ const (
 // FastLaunch drives Windows EC2 Fast Launch (R-POOL-2):
 //
 //   - "enable" enables pre-provisioned snapshots (ResourceType=snapshot,
-//     TargetResourceCount, MaxParallelLaunches >= 6, optional launch template) and
+//     TargetResourceCount, MaxParallelLaunches >= 6, verified launch template) and
 //     waits until EC2 reports "enabled" (the first snapshot exists) or a failure.
-//     Enabling an image that is already enabled/enabling with the same settings
-//     makes no API call.
+//     Every explicit enable reconciles ExtraTags onto replacement snapshots, even
+//     when configuration is unchanged (no additional EnableFastLaunch call). This
+//     requires an owned AMI and launch template matching nonempty ExtraTags; AWS
+//     does not inherit the template's instance/volume tags onto its snapshots.
 //   - "disable" disables it and waits until the image has left Fast Launch
 //     entirely (its snapshots are gone) — callers rely on that before
 //     deregistering an AMI. Disabling a disabled image is a no-op.
@@ -75,7 +80,17 @@ func (p *Provider) enableFastLaunch(ctx context.Context, op ports.FastLaunchOp) 
 	if err != nil {
 		return st, err
 	}
+	if op.LaunchTemplateID == "" && cur != nil && cur.LaunchTemplate != nil {
+		op.LaunchTemplateID = aws.ToString(cur.LaunchTemplate.LaunchTemplateId)
+	}
+	if err := p.fastLaunchOwnedImage(ctx, op.ImageID); err != nil {
+		return st, err
+	}
+	if err := p.fastLaunchOwnedTemplate(ctx, op.LaunchTemplateID); err != nil {
+		return st, err
+	}
 	same := cur != nil && fastLaunchMatches(*cur, op.TargetCount, parallel, op.LaunchTemplateID)
+	settle := false
 	switch {
 	case st.State == flDisabling:
 		// Re-enabling while EC2 cleans up is refused; wait for the clean-up first.
@@ -104,15 +119,25 @@ func (p *Provider) enableFastLaunch(ctx context.Context, op ports.FastLaunchOp) 
 		}
 		p.log.Info("fast launch enabling", "image", op.ImageID, "target", op.TargetCount, "parallel", parallel)
 		st.State = flEnabling
-		return p.waitFastLaunch(ctx, st, flEnabled, true)
+		settle = true
 	}
-	return p.waitFastLaunch(ctx, st, flEnabled, false)
+	st, err = p.waitFastLaunch(ctx, st, flEnabled, settle)
+	if err != nil {
+		return st, err
+	}
+	return st, p.tagFastLaunchSnapshots(ctx, op.ImageID, op.LaunchTemplateID)
 }
 
 func (p *Provider) disableFastLaunch(ctx context.Context, imageID string) (ports.FastLaunchStatus, error) {
 	st, _, err := p.fastLaunchState(ctx, imageID)
-	if err != nil || st.State == flDisabled {
+	if err != nil {
 		return st, err
+	}
+	if err := p.fastLaunchOwnedImage(ctx, imageID); err != nil {
+		return st, err
+	}
+	if st.State == flDisabled {
+		return p.waitFastLaunch(ctx, st, flDisabled, false)
 	}
 	if st.State != flDisabling {
 		if err := p.mutateBucket.Wait(ctx); err != nil {
@@ -146,7 +171,10 @@ func (p *Provider) waitFastLaunch(ctx context.Context, last ports.FastLaunchStat
 		last = st
 		switch st.State {
 		case want:
-			return st, nil
+			// A disabled configuration may still have children awaiting deletion.
+			if want != flDisabled || st.Snapshots == 0 {
+				return st, nil
+			}
 		case flFailed:
 			return st, fmt.Errorf("ec2 fast launch: image %s failed while waiting for %q", st.ImageID, want)
 		}
@@ -175,7 +203,10 @@ func (p *Provider) fastLaunchState(ctx context.Context, imageID string) (ports.F
 		}
 	}
 	if item == nil {
-		return st, nil, nil
+		// Still read-only: expose children that outlive the configuration so lifecycle callers do not confuse
+		// a missing Fast Launch record with completed snapshot cleanup.
+		st.Snapshots, err = p.fastLaunchSnapshots(ctx, imageID)
+		return st, nil, err
 	}
 	switch item.State {
 	case ec2types.FastLaunchStateCodeEnabling:
@@ -198,9 +229,8 @@ func (p *Provider) fastLaunchState(ctx context.Context, imageID string) (ports.F
 }
 
 // fastLaunchSnapshots counts the pre-provisioned snapshots of an image: snapshots
-// owned by the account, tagged CreatedBy=EC2 Fast Launch, that reference the image
-// in a tag value or their description (best effort; EC2 publishes the exact count
-// only as the CloudWatch metric NumberOfAvailableFastLaunchSnapshots).
+// owned by the account, tagged CreatedBy=EC2 Fast Launch, with the service's exact
+// image description. No substring/tag-value heuristic may adopt a different image.
 func (p *Provider) fastLaunchSnapshots(ctx context.Context, imageID string) (int, error) {
 	n := 0
 	var next *string
@@ -210,7 +240,7 @@ func (p *Provider) fastLaunchSnapshots(ctx context.Context, imageID string) (int
 		}
 		out, err := p.api.DescribeSnapshots(ctx, &ec2sdk.DescribeSnapshotsInput{
 			OwnerIds:   []string{"self"},
-			Filters:    []ec2types.Filter{filter("tag:"+FastLaunchCreatedByTag, FastLaunchCreatedByValue)},
+			Filters:    []ec2types.Filter{filter("tag:"+FastLaunchCreatedByTag, FastLaunchCreatedByValue), filter("description", fastLaunchDescription+imageID)},
 			MaxResults: aws.Int32(1000),
 			NextToken:  next,
 		})
@@ -230,15 +260,125 @@ func (p *Provider) fastLaunchSnapshots(ctx context.Context, imageID string) (int
 }
 
 func snapshotReferences(s ec2types.Snapshot, imageID string) bool {
-	if strings.Contains(aws.ToString(s.Description), imageID) {
-		return true
+	return aws.ToString(s.Description) == fastLaunchDescription+imageID
+}
+
+func (p *Provider) fastLaunchTagFilters() ([]ec2types.Filter, error) {
+	if len(p.opts.ExtraTags) == 0 {
+		return nil, fmt.Errorf("%w: Fast Launch mutations require nonempty ownership ExtraTags", ports.ErrInvalid)
 	}
-	for _, t := range s.Tags {
-		if aws.ToString(t.Value) == imageID {
-			return true
+	filters := make([]ec2types.Filter, 0, len(p.opts.ExtraTags))
+	for _, k := range slices.Sorted(maps.Keys(p.opts.ExtraTags)) {
+		if p.opts.ExtraTags[k] == "" || k == FastLaunchCreatedByTag || k == fastLaunchTemplateTag {
+			return nil, fmt.Errorf("%w: invalid Fast Launch ownership tag %s", ports.ErrInvalid, k)
+		}
+		filters = append(filters, filter("tag:"+k, p.opts.ExtraTags[k]))
+	}
+	return filters, nil
+}
+
+func (p *Provider) fastLaunchOwnedImage(ctx context.Context, id string) error {
+	filters, err := p.fastLaunchTagFilters()
+	if err != nil {
+		return err
+	}
+	if err := p.describeBucket.Wait(ctx); err != nil {
+		return err
+	}
+	out, err := p.api.DescribeImages(ctx, &ec2sdk.DescribeImagesInput{Owners: []string{"self"}, ImageIds: []string{id}, Filters: filters})
+	if err != nil {
+		return p.apiErr("DescribeImages", p.describeBucket, err)
+	}
+	for _, img := range out.Images {
+		if aws.ToString(img.ImageId) == id && fastLaunchTagsMatch(img.Tags, p.opts.ExtraTags) {
+			return nil
 		}
 	}
-	return false
+	return fmt.Errorf("%w: Fast Launch image is not owned with the configured tags", ports.ErrInvalid)
+}
+
+func (p *Provider) fastLaunchOwnedTemplate(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("%w: Fast Launch requires a tagged launch template", ports.ErrInvalid)
+	}
+	filters, err := p.fastLaunchTagFilters()
+	if err != nil {
+		return err
+	}
+	if err := p.describeBucket.Wait(ctx); err != nil {
+		return err
+	}
+	// LaunchTemplateIds is the API parameter; launch-template-id is not a supported filter.
+	out, err := p.api.DescribeLaunchTemplates(ctx, &ec2sdk.DescribeLaunchTemplatesInput{LaunchTemplateIds: []string{id}, Filters: filters})
+	if err != nil {
+		return p.apiErr("DescribeLaunchTemplates", p.describeBucket, err)
+	}
+	for _, lt := range out.LaunchTemplates {
+		if aws.ToString(lt.LaunchTemplateId) == id && fastLaunchTagsMatch(lt.Tags, p.opts.ExtraTags) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: Fast Launch template is not owned with the configured tags", ports.ErrInvalid)
+}
+
+func fastLaunchTagsMatch(tags []ec2types.Tag, want map[string]string) bool {
+	have := fromEC2Tags(tags)
+	for k, v := range want {
+		if have[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// Reconcile only on explicit enable, including its idempotent path. Describe stays read-only.
+// Collect/validate the entire paginated set before any write, so a conflicting child fails closed.
+func (p *Provider) tagFastLaunchSnapshots(ctx context.Context, imageID, templateID string) error {
+	var ids []string
+	var next *string
+	for {
+		if err := p.describeBucket.Wait(ctx); err != nil {
+			return err
+		}
+		out, err := p.api.DescribeSnapshots(ctx, &ec2sdk.DescribeSnapshotsInput{
+			OwnerIds: []string{"self"}, MaxResults: aws.Int32(1000), NextToken: next,
+			Filters: []ec2types.Filter{filter("tag:"+FastLaunchCreatedByTag, FastLaunchCreatedByValue), filter("tag:"+fastLaunchTemplateTag, templateID), filter("description", fastLaunchDescription+imageID)},
+		})
+		if err != nil {
+			return p.apiErr("DescribeSnapshots", p.describeBucket, err)
+		}
+		for _, s := range out.Snapshots {
+			have := fromEC2Tags(s.Tags)
+			if !snapshotReferences(s, imageID) || have[FastLaunchCreatedByTag] != FastLaunchCreatedByValue || have[fastLaunchTemplateTag] != templateID {
+				continue
+			}
+			missing := false
+			for k, v := range p.opts.ExtraTags {
+				got, exists := have[k]
+				if exists && got != v {
+					return fmt.Errorf("%w: Fast Launch child %s has a conflicting %s tag", ports.ErrInvalid, aws.ToString(s.SnapshotId), k)
+				}
+				missing = missing || !exists
+			}
+			if missing {
+				ids = append(ids, aws.ToString(s.SnapshotId))
+			}
+		}
+		if aws.ToString(out.NextToken) == "" {
+			break
+		}
+		next = out.NextToken
+	}
+	for batch := range slices.Chunk(ids, 1000) {
+		if err := p.mutateBucket.Wait(ctx); err != nil {
+			return err
+		}
+		_, err := p.api.CreateTags(ctx, &ec2sdk.CreateTagsInput{Resources: batch, Tags: toEC2Tags(p.opts.ExtraTags)})
+		if err != nil {
+			return p.apiErr("CreateTags", p.mutateBucket, err)
+		}
+	}
+	return nil
 }
 
 func fastLaunchMatches(cur ec2types.DescribeFastLaunchImagesSuccessItem, target, parallel int, lt string) bool {

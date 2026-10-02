@@ -189,6 +189,21 @@ consumed snapshot is replaced within minutes. Snapshots are tagged `CreatedBy: E
 existed in the account (created 2026-08-20) and is left in place. Disable (and wait) before deregistering an AMI, on
 rollout and at teardown.
 
+**Replacement snapshots do not inherit the campaign tags.** Real replacements carried only `CreatedBy`,
+`CreatedByLaunchTemplateId` and `CreatedByLaunchTemplateVersion`; tagging the initial quartet is not durable.
+The controller explicitly reconciles even an already-enabled image at most once per minute (errors use the same
+bound). The provider verifies the owned AMI and prep template against configured `AWS.ExtraTags`, then tags only
+self-owned children with exact service/template lineage and the exact AMI description. Conflicting existing tags
+are refused, never overwritten. `describe` and `sweep --report` remain read-only; the manual `tag` command repairs
+only the children currently present. Runtime tagging requires the narrow snapshot `CreateTags` grant in the
+controller images policy. Both that policy update and the repaired controller must be deployed before claiming
+ongoing coverage; the implementation was verified offline, not applied by the image agent (ADR 0308).
+
+Disable/prune/AMI teardown now require **both** disabled state and absence of exact-AMI Fast Launch children, even
+when those children are untagged. Sweep reports verified untagged replacements as `ours-missing-tags`; conflicting
+or unverified lineage is `unattributed`. Destructive AMI/root-snapshot calls require all three campaign tags. Stop
+or retarget live reconcilers before teardown so they cannot re-enable the old image.
+
 ## Measurements (2026-10-02, us-west-1b)
 
 ### Linux boot comparison (c7i.large / c7g.large; 5 sequential launches)
