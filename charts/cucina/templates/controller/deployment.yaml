@@ -43,6 +43,26 @@ spec:
       port: {{ $ports.controllerMetrics }}
       targetPort: metrics
 ---
+# HTTP discovery is backed by leader-local fleet/session state. Component metrics
+# still scrape every Pod through the ordinary controller Service above.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cucina.controllerLeader.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "controller") | nindent 4 }}
+    cucina.sloper.ai/endpoint: metrics-discovery
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cucina.selectorLabels" (dict "ctx" . "component" "controller") | nindent 4 }}
+    {{- with include "cucina.controllerLeaderSelector" . }}{{ . | nindent 4 }}{{- end }}
+  ports:
+    - name: metrics
+      port: {{ $ports.controllerMetrics }}
+      targetPort: metrics
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

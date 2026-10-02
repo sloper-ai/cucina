@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"path/filepath"
 	"sort"
@@ -28,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -92,9 +94,15 @@ type Options struct {
 	// StorageRelayListener/SchedulerRelayListener and RelayDial replace real
 	// sockets (tests run in-memory under testing/synctest).
 	StorageRelayListener, SchedulerRelayListener net.Listener
-	RelayDial                                    func(ctx context.Context, addr string) (net.Conn, error)
+	// WANRelayListener overrides the loopback-only L2-to-central listener in tests.
+	WANRelayListener net.Listener
+	RelayDial        func(ctx context.Context, addr string) (net.Conn, error)
 	// ScrapeActivity overrides the bb_worker metrics probe (tests).
 	ScrapeActivity func(ctx context.Context, ip netip.Addr, port uint32) (uint64, error)
+	// MetricsClient overrides local metric scrapes (tests); redirects are never followed.
+	MetricsClient *http.Client
+	// MetricsGatherer replaces the host process registry for deterministic tests.
+	MetricsGatherer prometheus.Gatherer
 	// EnrollDialOptions/HostDialOptions are appended to the gRPC dial options (tests).
 	EnrollDialOptions []grpc.DialOption
 	HostDialOptions   []grpc.DialOption
@@ -122,6 +130,7 @@ type Agent struct {
 	vmm     *vmm.Manager
 	link    *link.Link
 	l2      *l2.Supervisor
+	wan     *relay.Relay // loopback L2-to-central TLS passthrough and byte counters
 	relays  []*relay.Relay
 	desired []string
 
@@ -268,6 +277,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		return fmt.Errorf("host facts: %w", err)
 	}
 	a.facts = f
+	if f.Virtualization.Reason == "nested-macos" {
+		a.log.Warn("nested macOS virtualization unavailable", "virtualization", f.Virtualization)
+	} else {
+		a.log.Info("host virtualization assessment", "virtualization", f.Virtualization)
+	}
 	if err := a.EnsureIdentity(ctx); err != nil {
 		return err
 	}
@@ -323,6 +337,17 @@ func (a *Agent) Run(ctx context.Context) error {
 			return a.tunables.SchedulerEndpoint
 		}, OnUpstream: a.vmm.UpstreamOK, Log: a.log, Listener: a.o.SchedulerRelayListener, DialUpstream: a.o.RelayDial}
 	a.relays = []*relay.Relay{storage, scheduler}
+	if a.l2 != nil {
+		a.wan = &relay.Relay{Name: "wan", Listen: "127.0.0.1:0", Admit: loopbackAdmission{},
+			Listener: a.o.WANRelayListener, DialUpstream: a.o.RelayDial, Log: a.log,
+			SameNetwork: func(local, remote netip.Addr) bool { return local.IsLoopback() && remote.IsLoopback() },
+			Upstream: func() string {
+				a.mu.Lock()
+				defer a.mu.Unlock()
+				return a.tunables.CentralEndpoint
+			}}
+		a.relays = append(a.relays, a.wan)
+	}
 	for _, r := range a.relays {
 		if err := r.Start(); err != nil {
 			return fmt.Errorf("relay %s on %s: %w", r.Name, r.Listen, err)
@@ -349,13 +374,21 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.l2 != nil {
 		run("l2", a.l2.Run)
 	}
+	reg := metrics.Registry(a.metricsSource())
 	if cfg.MetricsListen != "" {
-		reg := metrics.Registry(a.metricsSource())
 		run("metrics", func(ctx context.Context) error { return metrics.Serve(ctx, cfg.MetricsListen, reg) })
 	}
+	relayRegistry := prometheus.Gatherer(reg)
+	if a.o.MetricsGatherer != nil {
+		relayRegistry = a.o.MetricsGatherer
+	}
+	run("metrics-relay", func(ctx context.Context) error { return a.relayMetrics(ctx, relayRegistry) })
 	run("housekeeping", a.housekeeping)
 	run("deadman-inputs", func(ctx context.Context) error { return a.upstreamLiveness(ctx, scheduler) })
-	a.log.Info("hostd running", "serial", a.facts.Serial, "user_mode", a.o.UserMode, "slots", a.tunables.Slots,
+	a.mu.Lock()
+	slots := a.tunables.Slots
+	a.mu.Unlock()
+	a.log.Info("hostd running", "serial", a.facts.Serial, "user_mode", a.o.UserMode, "slots", slots,
 		"version", a.o.Version)
 	if a.o.Ready != nil {
 		close(a.o.Ready)
@@ -411,8 +444,9 @@ func (a *Agent) heartbeat() *cucinav1.Heartbeat {
 	}
 	if a.l2 != nil {
 		st := a.l2.Stats()
-		m.L2Hits, m.L2Misses, m.WanBytesReceived, m.WanBytesSent, m.L2SizeBytes = st.Hits, st.Misses, st.WANReceived, st.WANSent, st.SizeBytes
+		m.L2Hits, m.L2Misses, m.L2SizeBytes = st.Hits, st.Misses, st.SizeBytes
 	}
+	m.WanBytesReceived, m.WanBytesSent = a.wanBytes()
 	return &cucinav1.Heartbeat{Vms: a.vmm.Inventory(), Metrics: m, Cordoned: a.vmm.Cordoned()}
 }
 
@@ -469,8 +503,12 @@ func (a *Agent) configureL2(t config.Tunables) {
 		return
 	}
 	host, _, _ := net.SplitHostPort(t.CentralEndpoint)
+	if a.wan == nil || a.wan.Addr() == nil {
+		a.log.Error("l2: counted upstream transport unavailable")
+		return
+	}
 	a.l2.Configure(l2.Settings{
-		ListenAddress: a.o.L2Listen, UpstreamAddress: t.CentralEndpoint, UpstreamServerName: host,
+		ListenAddress: a.o.L2Listen, UpstreamAddress: a.wan.Addr().String(), UpstreamServerName: host,
 		CABundlePEM: a.state.CAPEM, HostSerial: strings.ToUpper(a.facts.Serial),
 		CacheDir: a.l2CacheDir(), CacheSizeBytes: uint64(t.L2SizeGiB) << 30,
 		MaximumMessageSizeBytes: t.MaximumMessageSizeBytes, MetricsListenAddress: a.o.L2Metrics,
@@ -625,7 +663,7 @@ func (a *Agent) diagnostics(ctx context.Context, vmLogs bool) []byte {
 	enc := json.NewEncoder(&b)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(map[string]any{"facts": a.facts, "config": a.o.Config.String(), "inventory": a.vmm.Inventory(),
-		"connected": a.link.Connected(), "version": a.o.Version})
+		"virtualization": a.facts.Virtualization, "connected": a.link.Connected(), "version": a.o.Version})
 	if res, err := a.o.Runtime.List(ctx); err == nil {
 		_ = enc.Encode(map[string]any{"tart_list": res})
 	}
@@ -670,7 +708,8 @@ func (a *Agent) metricsSource() metrics.Source {
 				return 0, 0, 0, 0, 0
 			}
 			st := a.l2.Stats()
-			return st.Hits, st.Misses, st.WANReceived, st.WANSent, st.SizeBytes
+			received, sent := a.wanBytes()
+			return st.Hits, st.Misses, received, sent, st.SizeBytes
 		},
 		DiskFree: func() uint64 {
 			_, free, _ := a.o.FS.DiskUsage(a.o.StateDir)

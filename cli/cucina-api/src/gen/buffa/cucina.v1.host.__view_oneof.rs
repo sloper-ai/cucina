@@ -31,6 +31,11 @@ pub mod host_message {
                 super::super::super::super::__buffa::view::LogDataView<'a>,
             >,
         ),
+        MetricsSnapshot(
+            ::buffa::alloc::boxed::Box<
+                super::super::super::super::__buffa::view::MetricsSnapshotView<'a>,
+            >,
+        ),
     }
 }
 pub mod controller_message {

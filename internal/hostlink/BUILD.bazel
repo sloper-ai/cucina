@@ -5,16 +5,22 @@ load("//bazel:tiers.bzl", "cucina_go_test")
 
 go_library(
     name = "hostlink",
-    srcs = ["hostlink.go"],
+    srcs = [
+        "hostlink.go",
+        "metrics.go",
+        "metrics_http.go",
+    ],
     importpath = "github.com/sloper-ai/cucina/internal/hostlink",
     visibility = ["//:__subpackages__"],
     deps = [
         "//api/proto/cucina/v1:cucina",
         "//internal/domain",
         "//internal/hostlink/hostcmd",
+        "//internal/hostlink/metrictext",
         "//internal/pki",
         "//internal/ports",
         "//internal/proto",
+        "@com_github_prometheus_client_golang//prometheus",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials",
@@ -30,6 +36,7 @@ cucina_go_test(
     srcs = [
         "conformance_test.go",
         "integration_test.go",
+        "metrics_test.go",
     ],
     # hostd <-> hostlink over in-memory mTLS gRPC (synctest) and the HostFleet conformance suite: integration tier.
     tier = "integration",
@@ -47,9 +54,14 @@ cucina_go_test(
         "//internal/hostlink/hostlinktest",
         "//internal/ports",
         "//internal/ports/porttest",
+        "//internal/proto",
         "//internal/providers/tart",
         "//internal/providers/tart/faketart",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )

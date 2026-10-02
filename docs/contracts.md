@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 # Cucina engineering contracts (v1)
 
 Single reference for how Cucina's components fit together. The lead architect owns this file and the contract
@@ -89,6 +90,11 @@ Discovery document (JSON):
 response `{"access_token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":900}`; errors per RFC 6749
 (`invalid_request`, `invalid_grant`, `access_denied`, `server_error`) with an `error_description` that never echoes token material.
 
+`config.Endpoints.STSAliases` optionally lists explicit HTTPS transport origins (chart `endpoints.sts.aliases`) for private clients.
+Discovery may use a configured alias for `token_endpoint` and `jwks_uri` only when the incoming authority matches that allow-list;
+arbitrary Host/forwarded headers must never select a destination. JWT `iss` remains the canonical `stsUrl`, including when token
+exchange and renewal use a private address. Without an alias match, discovery keeps its canonical public URLs.
+
 Cucina JWT claims: `iss` (STS URL), `aud:"buildbarn"` (string), `sub`, `exp`, `iat`, `jti`, `sid`, no `nbf`, and
 `cucina:{"cas_read":[…],"cas_write":[…],"ac_read":[…],"ac_write":[…],"execute":[…],"admin":[…]}` (explicit instance-name lists; `"*"` expanded by the STS).
 Optional extra claim: `name` (display name from `claimMappings.displayName`, for audit only). Service-account keys are exchanged with
@@ -114,6 +120,34 @@ Controller `StartVM` → hostd: ensure image (pull via `GetRegistryCredentials`)
 whose storage endpoint is the host's L2 and whose scheduler endpoint is the host's TCP relay) → push config/certs via `tart exec` → worker registers
 `{pool, node=<host>/<vm>}`. Hostd makes all connections to VM IPs itself (root), never from the `tart` child (Local Network privacy).
 
+Mac-facing transport addresses are independent of EC2's private addresses: `config.Endpoints.HostStorage` and `HostScheduler`
+carry the upstreams sent in `HostSettings`; an empty value falls back to `WorkerStorage`/`WorkerScheduler` for compatibility.
+The chart exposes `endpoints.hosts.storageHost` and `schedulerHost`, defaulting to an explicitly supplied `endpoints.hosts.host`
+when present. Corresponding worker-listener certificates include these aliases. A host behind NAT must not be sent VPC-private
+upstreams it cannot reach. Host streams and `/sd/hosts` discovery use leader-routed Services because host sessions are local to
+the elected controller; per-target metric addresses still identify the pod holding that session.
+
+### 5.3.1 Host metric relay (protocol 1.1, R-OBS-1)
+
+`HostMessage.metrics_snapshot` carries a newly scraped `MetricsSnapshot`: `source` is `SOURCE_HOSTD`, `SOURCE_HOST_L2` or
+`SOURCE_WORKER`, `vm_name` is present only for a running worker VM belonging to the authenticated host, and `prometheus_text`
+is Prometheus text format 0.0.4. Hostd sends it only after a `Welcome` with protocol minor >= 1; protocol 1.0 peers continue
+using the existing heartbeat aggregates. Failed scrapes must not resend a cached snapshot as fresh.
+
+Limits: 128 KiB per snapshot, at most four targets per host (hostd, L2, two VMs), a 15-second scrape cadence and a 16 MiB
+controller-wide raw snapshot cache. The implementation also bounds metric families, samples and labels. Oversized, malformed,
+unowned or unsupported snapshots are rejected, never truncated; there is no log/configuration/credential payload. Identity labels
+(`serial`, `pool`, `node`, `job`, `instance`) cannot be supplied by the metric text: the controller derives authoritative source
+labels from the certificate/session and VM inventory. Snapshots expire within 45 seconds of receipt or immediately when the host
+disconnects; their absence is missing telemetry, not a measured zero.
+
+The controller metrics listener exposes `/sd/hosts` for Prometheus HTTP discovery and a separate per-target scrape path
+`/metrics/hosts/<serial>/<source>[/<vm>]`. Separating targets avoids collisions between the processes' own `process_*` and `go_*`
+metric families. Prometheus attaches the discovery labels to samples; aggregate host counters are also available on the controller's
+normal metrics endpoint with an authenticated `serial` label. Physical WAN series require a protocol-1.1 host; legacy logical-byte
+heartbeat values are not exported as physical bytes. The management CR WAN fields are unqualified until a provenance-bearing
+heartbeat-to-CR path exists. These endpoints are internal, just like `/sd/workers`.
+
 ### 5.4 Management API
 `cucinactl` ↔ `ManagementService` over TLS with `Authorization: Bearer <Cucina JWT>`; mutating methods need `admin`. Audit log line per mutating call
 (JSON: time, principal, method, request summary, result). Break-glass: `cucinactl login --key <service-account key>`.
@@ -128,6 +162,11 @@ stopped, failed), `cucina_pool_max{pool}`, `cucina_vm_start_seconds{pool,phase}`
 `cucina_queue_oldest_seconds{…}`, `cucina_scale_decisions_total{pool,action}`, `cucina_invariant_violations_total{invariant}`,
 `cucina_orphans{kind}`, `cucina_idle_instances_with_empty_queue{pool}` (cost-leak alert), `cucina_cert_expiry_seconds{role}`,
 `cucina_sts_exchanges_total{issuer,result}`, `cucina_sts_token_ttl_seconds`, `cucina_hosts{phase}`, `cucina_host_heartbeat_age_seconds{serial}`.
+The cost-leak gauge counts only live, scheduler-confirmed idle VMs above the effective floor after continuous non-floor idleness
+and empty queues exceed the resolved idle timeout plus two minutes of idle drain/termination grace. Busy workers are excluded;
+floor protection, work and unknown observations reset the evidence. Zero is not proof of zero cloud resources: acceptance checks
+must separately inventory tagged instances, volumes, interfaces and IPs.
+
 Hostd (`/metrics`): `cucina_hostd_vms{state}`, `cucina_hostd_l2_requests_total{result}`, `cucina_hostd_wan_bytes_total{direction}`,
 `cucina_hostd_l2_size_bytes`, `cucina_hostd_disk_free_bytes`. All metrics pass `testutil.CollectAndLint`.
 Canaries (`internal/canary`, `cucina-controller canary cache|exec`): `cucina_canary_up{canary}`, `cucina_canary_runs_total{canary,result}`,

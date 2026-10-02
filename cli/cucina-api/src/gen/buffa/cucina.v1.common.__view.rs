@@ -284,7 +284,7 @@ impl ::serde::Serialize for ProtocolVersionOwnedView {
     }
 }
 /// Constants for the current version live in code (internal/proto/version.go and
-/// cli/cucina-api): major 1, minor 0.
+/// cli/cucina-api): major 1, minor 1. MetricsSnapshot requires a peer's minor \>= 1.
 ///
 /// PlatformProperty is one REAPI platform property (name/value).
 #[derive(Clone, Debug, Default)]

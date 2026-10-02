@@ -789,6 +789,12 @@
       "pattern": "^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*|[0-9a-fA-F:]+)$",
       "type": "string"
     },
+    "httpsOrigin": {
+      "description": "An HTTPS origin with an optional trailing slash; no userinfo, other path, query or fragment. Ports are 1–65535; IPv6 addresses use brackets.",
+      "pattern": "^https://([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*|\\[[0-9a-fA-F:]+\\])(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?/?$",
+      "format": "uri",
+      "type": "string"
+    },
     "hostOrEmpty": {
       "oneOf": [
         {
@@ -2248,6 +2254,14 @@
             "port": {
               "$ref": "#/definitions/port",
               "description": "External port of the HostService."
+            },
+            "schedulerHost": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Scheduler hostname/IP reachable from Mac sites; uses worker.schedulerPort. Default: explicit hosts.host, else the worker scheduler host. Does not change EC2 endpoints."
+            },
+            "storageHost": {
+              "$ref": "#/definitions/hostOrEmpty",
+              "description": "Storage hostname/IP reachable from Mac sites; uses worker.storagePort. Default: explicit hosts.host, else the worker storage host. Does not change EC2 endpoints."
             }
           },
           "type": "object"
@@ -2269,6 +2283,12 @@
         "sts": {
           "additionalProperties": false,
           "properties": {
+            "aliases": {
+              "description": "Allowed HTTPS transport origins for the STS; discovery token/JWKS URLs may use them, but the canonical JWT issuer stays sts.url. Their hostname/IP SANs are included in STS certificates.",
+              "items": {"$ref": "#/definitions/httpsOrigin"},
+              "uniqueItems": true,
+              "type": "array"
+            },
             "port": {
               "$ref": "#/definitions/port",
               "description": "External port of the STS."
@@ -2718,7 +2738,7 @@
           "additionalProperties": false,
           "properties": {
             "enabled": {
-              "description": "ScrapeConfig over the controller's HTTP-SD endpoint for EC2 workers.",
+              "description": "ScrapeConfigs using the leader's HTTP discovery for EC2 workers and Mac host/VM metrics relayed through HostService.",
               "type": "boolean"
             },
             "refreshInterval": {

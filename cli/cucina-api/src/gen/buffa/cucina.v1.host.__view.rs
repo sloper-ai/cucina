@@ -194,6 +194,37 @@ impl<'a> ::buffa::MessageView<'a> for HostMessageView<'a> {
                     );
                 }
             }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                let __sub_ctx = ctx.descend()?;
+                let sub = ::buffa::types::borrow_bytes(&mut cur)?;
+                if let Some(
+                    super::super::__buffa::view::oneof::host_message::Message::MetricsSnapshot(
+                        ref mut existing,
+                    ),
+                ) = view.message
+                {
+                    ::buffa::MessageView::merge_into_view(
+                        &mut **existing,
+                        sub,
+                        __sub_ctx,
+                    )?;
+                } else {
+                    view.message = Some(
+                        super::super::__buffa::view::oneof::host_message::Message::MetricsSnapshot(
+                            ::buffa::alloc::boxed::Box::new(
+                                <super::super::__buffa::view::MetricsSnapshotView as ::buffa::MessageView>::decode_view_ctx(
+                                    sub,
+                                    __sub_ctx,
+                                )?,
+                            ),
+                        ),
+                    );
+                }
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -265,6 +296,15 @@ impl<'a> ::buffa::MessageView<'a> for HostMessageView<'a> {
                                     ),
                                 )
                             }
+                            super::super::__buffa::view::oneof::host_message::Message::MetricsSnapshot(
+                                v,
+                            ) => {
+                                super::super::__buffa::oneof::host_message::Message::MetricsSnapshot(
+                                    ::buffa::alloc::boxed::Box::new(
+                                        v.to_owned_from_source(__buffa_src)?,
+                                    ),
+                                )
+                            }
                         },
                     )
                 }
@@ -322,6 +362,16 @@ impl<'a> ::buffa::ViewEncode<'a> for HostMessageView<'a> {
                             + inner as u64;
                 }
                 super::super::__buffa::view::oneof::host_message::Message::Log(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u64 + ::buffa::encoding::varint_len(inner as u64) as u64
+                            + inner as u64;
+                }
+                super::super::__buffa::view::oneof::host_message::Message::MetricsSnapshot(
+                    x,
+                ) => {
                     let __slot = __cache.reserve();
                     let inner = x.compute_size(__cache);
                     __cache.set(__slot, inner);
@@ -390,6 +440,16 @@ impl<'a> ::buffa::ViewEncode<'a> for HostMessageView<'a> {
                     );
                     x.write_to(__cache, buf);
                 }
+                super::super::__buffa::view::oneof::host_message::Message::MetricsSnapshot(
+                    x,
+                ) => {
+                    ::buffa::types::put_len_delimited_header(
+                        6u32,
+                        u64::from(__cache.consume_next()),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
             }
         }
         self.__buffa_unknown_fields.write_to(buf);
@@ -435,6 +495,11 @@ impl<'__a> ::serde::Serialize for HostMessageView<'__a> {
                 }
                 super::super::__buffa::view::oneof::host_message::Message::Log(v) => {
                     __map.serialize_entry("log", v)?;
+                }
+                super::super::__buffa::view::oneof::host_message::Message::MetricsSnapshot(
+                    v,
+                ) => {
+                    __map.serialize_entry("metricsSnapshot", v)?;
                 }
             }
         }
@@ -562,6 +627,329 @@ impl ::buffa::HasMessageView for super::super::HostMessage {
     type ViewHandle = HostMessageOwnedView;
 }
 impl ::serde::Serialize for HostMessageOwnedView {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        ::serde::Serialize::serialize(&self.0, __s)
+    }
+}
+/// A newly scraped, bounded Prometheus text snapshot, relayed over the host's
+/// authenticated outbound stream (R-OBS-1). Never send cached data after a failed
+/// scrape. The controller derives identity labels from the authenticated host and
+/// its VM inventory, not from the payload; stale or disconnected sources disappear.
+#[derive(Clone, Debug, Default)]
+pub struct MetricsSnapshotView<'a> {
+    /// Field 1: `source`
+    pub source: ::buffa::EnumValue<super::super::metrics_snapshot::Source>,
+    /// Required only for SOURCE_WORKER; must name a running VM owned by this host.
+    ///
+    /// Field 2: `vm_name`
+    pub vm_name: &'a str,
+    /// Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+    /// cardinality and malformed snapshots are rejected, never silently truncated.
+    ///
+    /// Field 3: `prometheus_text`
+    pub prometheus_text: &'a [u8],
+    pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
+}
+impl<'a> ::buffa::MessageView<'a> for MetricsSnapshotView<'a> {
+    type Owned = super::super::MetricsSnapshot;
+    fn decode_view(buf: &'a [u8]) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        let __limit = ::core::cell::Cell::new(::buffa::DEFAULT_UNKNOWN_FIELD_LIMIT);
+        let __elem = ::core::cell::Cell::new(::buffa::DEFAULT_ELEMENT_MEMORY_LIMIT);
+        <Self as ::buffa::MessageView>::decode_view_ctx(
+            buf,
+            ::buffa::DecodeContext::new(::buffa::RECURSION_LIMIT, &__limit)
+                .with_element_memory(&__elem),
+        )
+    }
+    fn decode_view_with_ctx(
+        buf: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        <Self as ::buffa::MessageView>::decode_view_ctx(buf, ctx)
+    }
+    #[inline]
+    fn merge_view_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        cur: &'a [u8],
+        before_tag: &'a [u8],
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<&'a [u8], ::buffa::DecodeError> {
+        let _ = ctx;
+        #[allow(unused_variables)]
+        let view = self;
+        let mut cur = cur;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                view.source = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(&mut cur)?,
+                );
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.vm_name = ::buffa::types::borrow_str(&mut cur)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.prometheus_text = ::buffa::types::borrow_bytes(&mut cur)?;
+            }
+            _ => {
+                ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
+                let span_len = before_tag.len() - cur.len();
+                view.__buffa_unknown_fields.push_record(before_tag, span_len, ctx)?;
+            }
+        }
+        ::core::result::Result::Ok(cur)
+    }
+    fn to_owned_message(
+        &self,
+    ) -> ::core::result::Result<super::super::MetricsSnapshot, ::buffa::DecodeError> {
+        self.to_owned_from_source(None)
+    }
+    #[allow(clippy::useless_conversion, clippy::needless_update)]
+    fn to_owned_from_source(
+        &self,
+        __buffa_src: ::core::option::Option<&::buffa::bytes::Bytes>,
+    ) -> ::core::result::Result<super::super::MetricsSnapshot, ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::alloc::string::ToString as _;
+        let _ = __buffa_src;
+        ::core::result::Result::Ok(super::super::MetricsSnapshot {
+            source: self.source,
+            vm_name: self.vm_name.to_string(),
+            prometheus_text: (self.prometheus_text).to_vec(),
+            __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
+            ..::core::default::Default::default()
+        })
+    }
+}
+impl<'a> ::buffa::ViewEncode<'a> for MetricsSnapshotView<'a> {
+    #[allow(clippy::needless_borrow, clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u64;
+        {
+            let val = self.source.to_i32();
+            if val != 0 {
+                size += 1u64 + ::buffa::types::int32_encoded_len(val) as u64;
+            }
+        }
+        if !self.vm_name.is_empty() {
+            size += 1u64 + ::buffa::types::string_encoded_len(&self.vm_name) as u64;
+        }
+        if !self.prometheus_text.is_empty() {
+            size
+                += 1u64
+                    + ::buffa::types::bytes_encoded_len(&self.prometheus_text) as u64;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u64;
+        ::buffa::saturate_size(size)
+    }
+    #[allow(clippy::needless_borrow)]
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::EncodeSink,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        {
+            let val = self.source.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(1u32, val, buf);
+            }
+        }
+        if !self.vm_name.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.vm_name, buf);
+        }
+        if !self.prometheus_text.is_empty() {
+            ::buffa::types::put_shared_bytes_field(3u32, &self.prometheus_text, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+}
+/// Serializes this view as protobuf JSON.
+///
+/// Implicit-presence fields with default values are omitted, `required`
+/// fields are always emitted, explicit-presence (`optional`) fields are
+/// emitted only when set, bytes fields are base64-encoded, and enum
+/// values are their proto name strings.
+///
+/// This impl uses `serialize_map(None)` because the number of emitted
+/// fields depends on default-omission rules; serializers that require
+/// known map lengths (e.g. `bincode`) will return a runtime error.
+/// Use the owned message type for those formats.
+impl<'__a> ::serde::Serialize for MetricsSnapshotView<'__a> {
+    fn serialize<__S: ::serde::Serializer>(
+        &self,
+        __s: __S,
+    ) -> ::core::result::Result<__S::Ok, __S::Error> {
+        use ::serde::ser::SerializeMap as _;
+        let mut __map = __s.serialize_map(::core::option::Option::None)?;
+        if !::buffa::json_helpers::skip_if::is_default_enum_value(&self.source) {
+            __map.serialize_entry("source", &self.source)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_str(self.vm_name) {
+            __map.serialize_entry("vmName", self.vm_name)?;
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_bytes(self.prometheus_text) {
+            __map
+                .serialize_entry(
+                    "prometheusText",
+                    &::buffa::json_helpers::BytesJson(self.prometheus_text),
+                )?;
+        }
+        __map.end()
+    }
+}
+impl<'a> ::buffa::MessageName for MetricsSnapshotView<'a> {
+    const PACKAGE: &'static str = "cucina.v1";
+    const NAME: &'static str = "MetricsSnapshot";
+    const FULL_NAME: &'static str = "cucina.v1.MetricsSnapshot";
+    const TYPE_URL: &'static str = "type.googleapis.com/cucina.v1.MetricsSnapshot";
+}
+::buffa::impl_default_view_instance!(MetricsSnapshotView);
+::buffa::impl_view_reborrow!(MetricsSnapshotView);
+/** Self-contained, `'static` owned view of a `MetricsSnapshot` message.
+
+ Wraps [`::buffa::OwnedView`]`<`[`MetricsSnapshotView`]`<'static>>`: the decoded view and the [`::buffa::bytes::Bytes`] buffer it borrows from travel together, so the handle is `'static` and `Send + Sync` — suitable for async handlers, spawned tasks, and anywhere a `'static` bound is required.
+
+ Field accessors return borrows tied to `&self`. Use [`Self::view`] to get the full [`MetricsSnapshotView`] when you need struct patterns, iteration helpers, or to pass the view to lifetime-parameterised code.*/
+#[derive(Clone, Debug)]
+pub struct MetricsSnapshotOwnedView(::buffa::OwnedView<MetricsSnapshotView<'static>>);
+impl MetricsSnapshotOwnedView {
+    /// Decode an owned view from a [`::buffa::bytes::Bytes`] buffer.
+    ///
+    /// The view borrows directly from the buffer's data; the buffer is
+    /// retained inside the returned handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer contains invalid
+    /// protobuf data.
+    pub fn decode(
+        bytes: ::buffa::bytes::Bytes,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            MetricsSnapshotOwnedView(::buffa::OwnedView::decode(bytes)?),
+        )
+    }
+    /// Decode with custom [`::buffa::DecodeOptions`] (recursion limit,
+    /// max message size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError`] if the buffer is invalid or
+    /// exceeds the configured limits.
+    pub fn decode_with_options(
+        bytes: ::buffa::bytes::Bytes,
+        opts: &::buffa::DecodeOptions,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            MetricsSnapshotOwnedView(
+                ::buffa::OwnedView::decode_with_options(bytes, opts)?,
+            ),
+        )
+    }
+    /// Build from an owned message via an encode → decode round-trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`::buffa::DecodeError::MessageTooLarge`] if the
+    /// message's encoded size exceeds the 2 GiB protobuf limit, or
+    /// another [`::buffa::DecodeError`] if the re-encoded bytes are
+    /// somehow invalid (should not happen for well-formed messages).
+    pub fn from_owned(
+        msg: &super::super::MetricsSnapshot,
+    ) -> ::core::result::Result<Self, ::buffa::DecodeError> {
+        ::core::result::Result::Ok(
+            MetricsSnapshotOwnedView(::buffa::OwnedView::from_owned(msg)?),
+        )
+    }
+    /// Borrow the full [`MetricsSnapshotView`] with its lifetime tied to `&self`.
+    #[must_use]
+    pub fn view(&self) -> &MetricsSnapshotView<'_> {
+        self.0.reborrow()
+    }
+    /// Convert to the owned message type.
+    ///
+    /// Infallible: this type's constructors wire-decode their
+    /// buffer, and a view produced by wire decoding always
+    /// converts. Delegates to [`::buffa::OwnedView::to_owned_message`],
+    /// whose contract also governs handles converted from a raw
+    /// [`::buffa::OwnedView`].
+    #[must_use]
+    pub fn to_owned_message(&self) -> super::super::MetricsSnapshot {
+        self.0.to_owned_message()
+    }
+    /// The underlying bytes buffer.
+    #[must_use]
+    pub fn bytes(&self) -> &::buffa::bytes::Bytes {
+        self.0.bytes()
+    }
+    /// Consume the handle, returning the underlying bytes buffer.
+    #[must_use]
+    pub fn into_bytes(self) -> ::buffa::bytes::Bytes {
+        self.0.into_bytes()
+    }
+    /// Field 1: `source`
+    #[must_use]
+    pub fn source(&self) -> ::buffa::EnumValue<super::super::metrics_snapshot::Source> {
+        self.0.reborrow().source
+    }
+    /// Required only for SOURCE_WORKER; must name a running VM owned by this host.
+    ///
+    /// Field 2: `vm_name`
+    #[must_use]
+    pub fn vm_name(&self) -> &'_ str {
+        self.0.reborrow().vm_name
+    }
+    /// Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+    /// cardinality and malformed snapshots are rejected, never silently truncated.
+    ///
+    /// Field 3: `prometheus_text`
+    #[must_use]
+    pub fn prometheus_text(&self) -> &'_ [u8] {
+        self.0.reborrow().prometheus_text
+    }
+}
+impl ::core::convert::From<::buffa::OwnedView<MetricsSnapshotView<'static>>>
+for MetricsSnapshotOwnedView {
+    fn from(inner: ::buffa::OwnedView<MetricsSnapshotView<'static>>) -> Self {
+        MetricsSnapshotOwnedView(inner)
+    }
+}
+impl ::core::convert::From<MetricsSnapshotOwnedView>
+for ::buffa::OwnedView<MetricsSnapshotView<'static>> {
+    fn from(wrapper: MetricsSnapshotOwnedView) -> Self {
+        wrapper.0
+    }
+}
+impl ::core::convert::AsRef<::buffa::OwnedView<MetricsSnapshotView<'static>>>
+for MetricsSnapshotOwnedView {
+    fn as_ref(&self) -> &::buffa::OwnedView<MetricsSnapshotView<'static>> {
+        &self.0
+    }
+}
+impl ::buffa::HasMessageView for super::super::MetricsSnapshot {
+    type View<'a> = MetricsSnapshotView<'a>;
+    type ViewHandle = MetricsSnapshotOwnedView;
+}
+impl ::serde::Serialize for MetricsSnapshotOwnedView {
     fn serialize<__S: ::serde::Serializer>(
         &self,
         __s: __S,

@@ -115,9 +115,10 @@ type Server struct {
 	cucinav1.UnimplementedHostServiceServer
 	d Deps
 
-	mu    sync.Mutex
-	hosts map[string]*host
-	seq   uint64
+	mu          sync.Mutex
+	hosts       map[string]*host
+	seq         uint64
+	metricBytes int // all hosts' validated raw snapshots, bounded globally
 }
 
 var _ ports.HostFleet = (*Server)(nil)
@@ -142,6 +143,8 @@ type host struct {
 	slots     int
 	running   int
 	metrics   *cucinav1.HostMetrics
+	metricsAt time.Time // controller receive time of the latest metrics heartbeat
+	samples   map[metricTarget]metricSnapshot
 	bootID    string
 	pending   map[string]*pendingCmd // command id -> waiter (survives reconnects)
 	order     []string               // pending ids in send order
@@ -149,10 +152,11 @@ type host struct {
 }
 
 type session struct {
-	id   uint64
-	out  chan *cucinav1.ControllerMessage
-	done chan struct{}
-	once sync.Once
+	id             uint64
+	out            chan *cucinav1.ControllerMessage
+	done           chan struct{}
+	once           sync.Once
+	metricsAllowed bool
 }
 
 func (s *session) close() { s.once.Do(func() { close(s.done) }) }
@@ -199,6 +203,7 @@ func (s *Server) sweep() {
 			s.d.Log.Warn("host heartbeat stale; marking offline", "serial", serial, "last_seen", h.lastSeen)
 			h.session.close()
 			h.session = nil
+			s.dropMetricSnapshotsLocked(h)
 			changed = append(changed, serial)
 		}
 	}
@@ -310,7 +315,7 @@ func (s *Server) Connect(stream cucinav1.HostService_ConnectServer) error {
 		return err
 	}
 
-	sess := &session{out: make(chan *cucinav1.ControllerMessage, 256), done: make(chan struct{})}
+	sess := &session{out: make(chan *cucinav1.ControllerMessage, 256), done: make(chan struct{}), metricsAllowed: hello.GetProtocol().GetMinor() >= 1}
 	s.mu.Lock()
 	s.seq++
 	sess.id = s.seq
@@ -318,7 +323,9 @@ func (s *Server) Connect(stream cucinav1.HostService_ConnectServer) error {
 	if h.session != nil {
 		h.session.close() // a newer connection replaces the old one
 	}
+	s.dropMetricSnapshotsLocked(h)
 	h.session = sess
+	h.metrics, h.metricsAt = nil, time.Time{} // a new session needs a fresh sample
 	h.lastSeen = s.d.Clock.Now()
 	h.facts = hello.GetFacts()
 	h.images = append([]string(nil), hello.GetImages()...)
@@ -343,11 +350,15 @@ func (s *Server) Connect(stream cucinav1.HostService_ConnectServer) error {
 	}
 	s.mu.Unlock()
 	s.d.Log.Info("host connected", "serial", serial, "vms", len(hello.GetVms()), "images", len(hello.GetImages()))
+	if !sess.metricsAllowed {
+		s.d.Log.Warn("physical WAN metrics unavailable: upgrade hostd to protocol 1.1", "serial", serial)
+	}
 	s.changed(serial)
 	defer func() {
 		s.mu.Lock()
 		if h.session == sess {
 			h.session = nil
+			s.dropMetricSnapshotsLocked(h)
 		}
 		s.mu.Unlock()
 		sess.close()
@@ -403,10 +414,15 @@ func (s *Server) receive(serial string, sess *session, m *cucinav1.HostMessage) 
 	}
 	h.lastSeen = s.d.Clock.Now()
 	switch x := m.GetMessage().(type) {
+	case *cucinav1.HostMessage_MetricsSnapshot:
+		s.mu.Unlock()
+		s.receiveMetrics(serial, sess, x.MetricsSnapshot)
+		return
 	case *cucinav1.HostMessage_Heartbeat:
 		hb := x.Heartbeat
 		h.cordoned = hb.GetCordoned()
 		h.metrics = hb.GetMetrics()
+		h.metricsAt = h.lastSeen
 		h.running = int(hb.GetMetrics().GetRunningVms())
 		h.vms = map[string]*cucinav1.VMInfo{}
 		for _, vm := range hb.GetVms() {
@@ -644,7 +660,10 @@ func (s *Server) Hosts(context.Context) ([]ports.HostState, error) {
 	return out, nil
 }
 
-// Metrics returns the last heartbeat metrics of a host (MacHost status).
+// Metrics returns the raw last heartbeat metrics of a host. WAN fields from
+// protocol 1.0 are logical blob sizes, not physical traffic. Do not copy these
+// unqualified fields to management as physical WAN evidence; the collector
+// gates physical WAN publication on the current session's protocol capability.
 func (s *Server) Metrics(serial string) *cucinav1.HostMetrics {
 	s.mu.Lock()
 	defer s.mu.Unlock()

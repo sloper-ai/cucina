@@ -153,7 +153,7 @@ pub const __PROTOCOL_VERSION_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::
     is_wkt: false,
 };
 /// Constants for the current version live in code (internal/proto/version.go and
-/// cli/cucina-api): major 1, minor 0.
+/// cli/cucina-api): major 1, minor 1. MetricsSnapshot requires a peer's minor \>= 1.
 ///
 /// PlatformProperty is one REAPI platform property (name/value).
 #[derive(Clone, PartialEq, Default)]

@@ -47,7 +47,7 @@ pub mod proto;
 pub mod connect;
 
 /// Version of the management API / hostd protocol this client speaks
-/// (`ProtocolVersion` in `common.proto`): major 1, minor 0.
+/// (`ProtocolVersion` in `common.proto`): major 1, minor 1.
 pub const PROTOCOL_MAJOR: u32 = 1;
 /// See [`PROTOCOL_MAJOR`].
-pub const PROTOCOL_MINOR: u32 = 0;
+pub const PROTOCOL_MINOR: u32 = 1;

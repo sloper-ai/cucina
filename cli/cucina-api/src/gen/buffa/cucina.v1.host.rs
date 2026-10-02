@@ -86,6 +86,14 @@ impl ::buffa::Message for HostMessage {
                         += 1u64 + ::buffa::encoding::varint_len(inner as u64) as u64
                             + inner as u64;
                 }
+                __buffa::oneof::host_message::Message::MetricsSnapshot(x) => {
+                    let __slot = __cache.reserve();
+                    let inner = x.compute_size(__cache);
+                    __cache.set(__slot, inner);
+                    size
+                        += 1u64 + ::buffa::encoding::varint_len(inner as u64) as u64
+                            + inner as u64;
+                }
             }
         }
         size += self.__buffa_unknown_fields.encoded_len() as u64;
@@ -135,6 +143,14 @@ impl ::buffa::Message for HostMessage {
                 __buffa::oneof::host_message::Message::Log(x) => {
                     ::buffa::types::put_len_delimited_header(
                         5u32,
+                        u64::from(__cache.consume_next()),
+                        buf,
+                    );
+                    x.write_to(__cache, buf);
+                }
+                __buffa::oneof::host_message::Message::MetricsSnapshot(x) => {
+                    ::buffa::types::put_len_delimited_header(
+                        6u32,
                         u64::from(__cache.consume_next()),
                         buf,
                     );
@@ -252,6 +268,28 @@ impl ::buffa::Message for HostMessage {
                     ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
                     self.message = ::core::option::Option::Some(
                         __buffa::oneof::host_message::Message::Log(
+                            ::buffa::alloc::boxed::Box::new(val),
+                        ),
+                    );
+                }
+            }
+            6u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                if let ::core::option::Option::Some(
+                    __buffa::oneof::host_message::Message::MetricsSnapshot(
+                        ref mut existing,
+                    ),
+                ) = self.message
+                {
+                    ::buffa::Message::merge_length_delimited(&mut **existing, buf, ctx)?;
+                } else {
+                    let mut val = ::core::default::Default::default();
+                    ::buffa::Message::merge_length_delimited(&mut val, buf, ctx)?;
+                    self.message = ::core::option::Option::Some(
+                        __buffa::oneof::host_message::Message::MetricsSnapshot(
                             ::buffa::alloc::boxed::Box::new(val),
                         ),
                     );
@@ -421,6 +459,30 @@ impl<'de> ::serde::Deserialize<'de> for HostMessage {
                                 );
                             }
                         }
+                        "metricsSnapshot" | "metrics_snapshot" => {
+                            let v: ::core::option::Option<MetricsSnapshot> = map
+                                .next_value_seed(
+                                    ::buffa::json_helpers::NullableDeserializeSeed(
+                                        ::buffa::json_helpers::DefaultDeserializeSeed::<
+                                            MetricsSnapshot,
+                                        >::new(),
+                                    ),
+                                )?;
+                            if let Some(v) = v {
+                                if __oneof_message.is_some() {
+                                    return Err(
+                                        ::serde::de::Error::custom(
+                                            "multiple oneof fields set for 'message'",
+                                        ),
+                                    );
+                                }
+                                __oneof_message = Some(
+                                    __buffa::oneof::host_message::Message::MetricsSnapshot(
+                                        ::buffa::alloc::boxed::Box::new(v),
+                                    ),
+                                );
+                            }
+                        }
                         _ => {
                             map.next_value::<::serde::de::IgnoredAny>()?;
                         }
@@ -461,6 +523,356 @@ pub mod host_message {
     pub use super::__buffa::oneof::host_message::Message;
     #[doc(inline)]
     pub use super::__buffa::view::oneof::host_message::Message as MessageView;
+}
+/// A newly scraped, bounded Prometheus text snapshot, relayed over the host's
+/// authenticated outbound stream (R-OBS-1). Never send cached data after a failed
+/// scrape. The controller derives identity labels from the authenticated host and
+/// its VM inventory, not from the payload; stale or disconnected sources disappear.
+#[derive(Clone, PartialEq, Default)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(default)]
+pub struct MetricsSnapshot {
+    /// Field 1: `source`
+    #[serde(
+        rename = "source",
+        with = "::buffa::json_helpers::proto_enum",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_default_enum_value"
+    )]
+    pub source: ::buffa::EnumValue<metrics_snapshot::Source>,
+    /// Required only for SOURCE_WORKER; must name a running VM owned by this host.
+    ///
+    /// Field 2: `vm_name`
+    #[serde(
+        rename = "vmName",
+        alias = "vm_name",
+        with = "::buffa::json_helpers::proto_string",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
+    )]
+    pub vm_name: ::buffa::alloc::string::String,
+    /// Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+    /// cardinality and malformed snapshots are rejected, never silently truncated.
+    ///
+    /// Field 3: `prometheus_text`
+    #[serde(
+        rename = "prometheusText",
+        alias = "prometheus_text",
+        with = "::buffa::json_helpers::bytes",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_bytes"
+    )]
+    pub prometheus_text: ::buffa::alloc::vec::Vec<u8>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub __buffa_unknown_fields: ::buffa::UnknownFields,
+}
+impl ::core::fmt::Debug for MetricsSnapshot {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+        f.debug_struct("MetricsSnapshot")
+            .field("source", &self.source)
+            .field("vm_name", &self.vm_name)
+            .field("prometheus_text", &self.prometheus_text)
+            .finish()
+    }
+}
+impl MetricsSnapshot {
+    /// Protobuf type URL for this message, for use with `Any::pack` and
+    /// `Any::unpack_if`.
+    ///
+    /// Format: `type.googleapis.com/<fully.qualified.TypeName>`
+    pub const TYPE_URL: &'static str = "type.googleapis.com/cucina.v1.MetricsSnapshot";
+}
+::buffa::impl_default_instance!(MetricsSnapshot);
+impl ::buffa::MessageName for MetricsSnapshot {
+    const PACKAGE: &'static str = "cucina.v1";
+    const NAME: &'static str = "MetricsSnapshot";
+    const FULL_NAME: &'static str = "cucina.v1.MetricsSnapshot";
+    const TYPE_URL: &'static str = "type.googleapis.com/cucina.v1.MetricsSnapshot";
+}
+impl ::buffa::Message for MetricsSnapshot {
+    /// Returns the total encoded size in bytes.
+    ///
+    /// Accumulates in `u64` (which cannot overflow for in-memory
+    /// data) and saturates to `u32` at return, so a message whose
+    /// encoded size exceeds the 2 GiB protobuf limit yields a value
+    /// above [`::buffa::MAX_MESSAGE_BYTES`] that the encode entry
+    /// points reject, never a silently wrapped size.
+    #[allow(clippy::let_and_return)]
+    fn compute_size(&self, _cache: &mut ::buffa::SizeCache) -> u32 {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        let mut size = 0u64;
+        {
+            let val = self.source.to_i32();
+            if val != 0 {
+                size += 1u64 + ::buffa::types::int32_encoded_len(val) as u64;
+            }
+        }
+        if !self.vm_name.is_empty() {
+            size += 1u64 + ::buffa::types::string_encoded_len(&self.vm_name) as u64;
+        }
+        if !self.prometheus_text.is_empty() {
+            size
+                += 1u64
+                    + ::buffa::types::bytes_encoded_len(&self.prometheus_text) as u64;
+        }
+        size += self.__buffa_unknown_fields.encoded_len() as u64;
+        ::buffa::saturate_size(size)
+    }
+    fn write_to(
+        &self,
+        _cache: &mut ::buffa::SizeCache,
+        buf: &mut impl ::buffa::EncodeSink,
+    ) {
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        {
+            let val = self.source.to_i32();
+            if val != 0 {
+                ::buffa::types::put_int32_field(1u32, val, buf);
+            }
+        }
+        if !self.vm_name.is_empty() {
+            ::buffa::types::put_string_field(2u32, &self.vm_name, buf);
+        }
+        if !self.prometheus_text.is_empty() {
+            ::buffa::types::put_shared_bytes_field(3u32, &self.prometheus_text, buf);
+        }
+        self.__buffa_unknown_fields.write_to(buf);
+    }
+    fn merge_field(
+        &mut self,
+        tag: ::buffa::encoding::Tag,
+        buf: &mut impl ::buffa::bytes::Buf,
+        ctx: ::buffa::DecodeContext<'_>,
+    ) -> ::core::result::Result<(), ::buffa::DecodeError> {
+        #[allow(unused_imports)]
+        use ::buffa::bytes::Buf as _;
+        #[allow(unused_imports)]
+        use ::buffa::Enumeration as _;
+        match tag.field_number() {
+            1u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::Varint,
+                )?;
+                self.source = ::buffa::EnumValue::from(
+                    ::buffa::types::decode_int32(buf)?,
+                );
+            }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_string(&mut self.vm_name, buf)?;
+            }
+            3u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(&mut self.prometheus_text, buf)?;
+            }
+            _ => {
+                self.__buffa_unknown_fields
+                    .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
+            }
+        }
+        ::core::result::Result::Ok(())
+    }
+    fn clear(&mut self) {
+        self.source = ::buffa::EnumValue::from(0);
+        self.vm_name.clear();
+        self.prometheus_text.clear();
+        self.__buffa_unknown_fields.clear();
+    }
+}
+impl ::buffa::ExtensionSet for MetricsSnapshot {
+    const PROTO_FQN: &'static str = "cucina.v1.MetricsSnapshot";
+    fn unknown_fields(&self) -> &::buffa::UnknownFields {
+        &self.__buffa_unknown_fields
+    }
+    fn unknown_fields_mut(&mut self) -> &mut ::buffa::UnknownFields {
+        &mut self.__buffa_unknown_fields
+    }
+}
+impl ::buffa::json_helpers::ProtoElemJson for MetricsSnapshot {
+    fn serialize_proto_json<S: ::serde::Serializer>(
+        v: &Self,
+        s: S,
+    ) -> ::core::result::Result<S::Ok, S::Error> {
+        ::serde::Serialize::serialize(v, s)
+    }
+    fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+        d: D,
+    ) -> ::core::result::Result<Self, D::Error> {
+        <Self as ::serde::Deserialize>::deserialize(d)
+    }
+}
+#[doc(hidden)]
+pub const __METRICS_SNAPSHOT_JSON_ANY: ::buffa::type_registry::JsonAnyEntry = ::buffa::type_registry::JsonAnyEntry {
+    type_url: "type.googleapis.com/cucina.v1.MetricsSnapshot",
+    to_json: ::buffa::type_registry::any_to_json::<MetricsSnapshot>,
+    from_json: ::buffa::type_registry::any_from_json::<MetricsSnapshot>,
+    is_wkt: false,
+};
+pub mod metrics_snapshot {
+    #[allow(unused_imports)]
+    use super::*;
+    #[allow(non_camel_case_types)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+    #[repr(i32)]
+    pub enum Source {
+        SOURCE_UNSPECIFIED = 0i32,
+        SOURCE_HOSTD = 1i32,
+        SOURCE_HOST_L2 = 2i32,
+        SOURCE_WORKER = 3i32,
+    }
+    impl Source {
+        ///Idiomatic alias for [`Self::SOURCE_UNSPECIFIED`]; `Debug` prints the variant name.
+        #[allow(non_upper_case_globals)]
+        pub const Unspecified: Self = Self::SOURCE_UNSPECIFIED;
+        ///Idiomatic alias for [`Self::SOURCE_HOSTD`]; `Debug` prints the variant name.
+        #[allow(non_upper_case_globals)]
+        pub const Hostd: Self = Self::SOURCE_HOSTD;
+        ///Idiomatic alias for [`Self::SOURCE_HOST_L2`]; `Debug` prints the variant name.
+        #[allow(non_upper_case_globals)]
+        pub const HostL2: Self = Self::SOURCE_HOST_L2;
+        ///Idiomatic alias for [`Self::SOURCE_WORKER`]; `Debug` prints the variant name.
+        #[allow(non_upper_case_globals)]
+        pub const Worker: Self = Self::SOURCE_WORKER;
+    }
+    impl ::core::default::Default for Source {
+        fn default() -> Self {
+            Self::SOURCE_UNSPECIFIED
+        }
+    }
+    impl ::serde::Serialize for Source {
+        fn serialize<S: ::serde::Serializer>(
+            &self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            s.serialize_str(::buffa::Enumeration::proto_name(self))
+        }
+    }
+    impl<'de> ::serde::Deserialize<'de> for Source {
+        fn deserialize<D: ::serde::Deserializer<'de>>(
+            d: D,
+        ) -> ::core::result::Result<Self, D::Error> {
+            struct _V;
+            impl ::serde::de::Visitor<'_> for _V {
+                type Value = Source;
+                fn expecting(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.write_str(
+                        concat!("a string, integer, or null for ", stringify!(Source)),
+                    )
+                }
+                fn visit_str<E: ::serde::de::Error>(
+                    self,
+                    v: &str,
+                ) -> ::core::result::Result<Source, E> {
+                    <Source as ::buffa::Enumeration>::from_proto_name(v)
+                        .ok_or_else(|| { ::serde::de::Error::unknown_variant(v, &[]) })
+                }
+                fn visit_i64<E: ::serde::de::Error>(
+                    self,
+                    v: i64,
+                ) -> ::core::result::Result<Source, E> {
+                    let v32 = i32::try_from(v)
+                        .map_err(|_| {
+                            ::serde::de::Error::custom(
+                                ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                            )
+                        })?;
+                    <Source as ::buffa::Enumeration>::from_i32(v32)
+                        .ok_or_else(|| {
+                            ::serde::de::Error::custom(
+                                ::buffa::alloc::format!("unknown enum value {v32}"),
+                            )
+                        })
+                }
+                fn visit_u64<E: ::serde::de::Error>(
+                    self,
+                    v: u64,
+                ) -> ::core::result::Result<Source, E> {
+                    let v32 = i32::try_from(v)
+                        .map_err(|_| {
+                            ::serde::de::Error::custom(
+                                ::buffa::alloc::format!("enum value {v} out of i32 range"),
+                            )
+                        })?;
+                    <Source as ::buffa::Enumeration>::from_i32(v32)
+                        .ok_or_else(|| {
+                            ::serde::de::Error::custom(
+                                ::buffa::alloc::format!("unknown enum value {v32}"),
+                            )
+                        })
+                }
+                fn visit_unit<E: ::serde::de::Error>(
+                    self,
+                ) -> ::core::result::Result<Source, E> {
+                    ::core::result::Result::Ok(::core::default::Default::default())
+                }
+            }
+            d.deserialize_any(_V)
+        }
+    }
+    impl ::buffa::json_helpers::ProtoElemJson for Source {
+        fn serialize_proto_json<S: ::serde::Serializer>(
+            v: &Self,
+            s: S,
+        ) -> ::core::result::Result<S::Ok, S::Error> {
+            ::serde::Serialize::serialize(v, s)
+        }
+        fn deserialize_proto_json<'de, D: ::serde::Deserializer<'de>>(
+            d: D,
+        ) -> ::core::result::Result<Self, D::Error> {
+            <Self as ::serde::Deserialize>::deserialize(d)
+        }
+    }
+    impl ::buffa::Enumeration for Source {
+        fn from_i32(value: i32) -> ::core::option::Option<Self> {
+            match value {
+                0i32 => ::core::option::Option::Some(Self::SOURCE_UNSPECIFIED),
+                1i32 => ::core::option::Option::Some(Self::SOURCE_HOSTD),
+                2i32 => ::core::option::Option::Some(Self::SOURCE_HOST_L2),
+                3i32 => ::core::option::Option::Some(Self::SOURCE_WORKER),
+                _ => ::core::option::Option::None,
+            }
+        }
+        fn to_i32(&self) -> i32 {
+            *self as i32
+        }
+        fn proto_name(&self) -> &'static str {
+            match self {
+                Self::SOURCE_UNSPECIFIED => "SOURCE_UNSPECIFIED",
+                Self::SOURCE_HOSTD => "SOURCE_HOSTD",
+                Self::SOURCE_HOST_L2 => "SOURCE_HOST_L2",
+                Self::SOURCE_WORKER => "SOURCE_WORKER",
+            }
+        }
+        fn from_proto_name(name: &str) -> ::core::option::Option<Self> {
+            match name {
+                "SOURCE_UNSPECIFIED" => {
+                    ::core::option::Option::Some(Self::SOURCE_UNSPECIFIED)
+                }
+                "SOURCE_HOSTD" => ::core::option::Option::Some(Self::SOURCE_HOSTD),
+                "SOURCE_HOST_L2" => ::core::option::Option::Some(Self::SOURCE_HOST_L2),
+                "SOURCE_WORKER" => ::core::option::Option::Some(Self::SOURCE_WORKER),
+                _ => ::core::option::Option::None,
+            }
+        }
+        fn values() -> &'static [Self] {
+            &[
+                Self::SOURCE_UNSPECIFIED,
+                Self::SOURCE_HOSTD,
+                Self::SOURCE_HOST_L2,
+                Self::SOURCE_WORKER,
+            ]
+        }
+    }
 }
 #[derive(Clone, PartialEq, Default)]
 #[derive(::serde::Serialize, ::serde::Deserialize)]

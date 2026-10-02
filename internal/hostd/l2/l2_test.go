@@ -26,6 +26,13 @@ buildbarn_blob_access_operations_blob_size_bytes_count{backend_type="grpc",opera
 buildbarn_blob_access_operations_blob_size_bytes_sum{backend_type="grpc",operation="Get",storage_type="AC"} 777
 buildbarn_blob_access_operations_blob_size_bytes_count{backend_type="grpc",operation="Get",storage_type="AC"} 7
 `
-	st := l2.ParseMetrics(strings.NewReader(text))
-	require.Equal(t, l2.Stats{Hits: 750, Misses: 250, WANReceived: 2_500_000, WANSent: 4096}, st)
+	for _, tc := range []struct{ name, text string }{
+		{"legacy namespace", text},
+		{"pinned Buildbarn blobstore namespace", strings.ReplaceAll(text, "buildbarn_blob_access_", "buildbarn_blobstore_blob_access_")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := l2.ParseMetrics(strings.NewReader(tc.text))
+			require.Equal(t, l2.Stats{Hits: 750, Misses: 250, WANReceived: 2_500_000, WANSent: 4096}, st)
+		})
+	}
 }

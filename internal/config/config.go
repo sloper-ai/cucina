@@ -83,14 +83,17 @@ type Scheduler struct {
 
 // Endpoints are what workers and clients are told to connect to.
 type Endpoints struct {
-	ClientEndpoint  string `json:"clientEndpoint"`  // grpcs://cucina.example.com:443 (public)
-	WorkerScheduler string `json:"workerScheduler"` // host:port workers use for scheduler Synchronize (private)
-	WorkerStorage   string `json:"workerStorage"`   // host:port workers use for CAS/AC (private)
-	WorkerEnroll    string `json:"workerEnroll"`    // host:port of EnrollmentService (private)
-	HostEndpoint    string `json:"hostEndpoint"`    // host:port of HostService (reachable from Mac sites)
-	ServerName      string `json:"serverName"`      // TLS server name
-	STSURL          string `json:"stsUrl"`          // https://…/ (issuer of Cucina JWTs)
-	ManagementURL   string `json:"managementUrl"`   // host:port for cucinactl
+	ClientEndpoint  string   `json:"clientEndpoint"`          // grpcs://cucina.example.com:443 (public)
+	WorkerScheduler string   `json:"workerScheduler"`         // host:port workers use for scheduler Synchronize (private)
+	WorkerStorage   string   `json:"workerStorage"`           // host:port workers use for CAS/AC (private)
+	WorkerEnroll    string   `json:"workerEnroll"`            // host:port of EnrollmentService (private)
+	HostEndpoint    string   `json:"hostEndpoint"`            // host:port of HostService (reachable from Mac sites)
+	HostStorage     string   `json:"hostStorage,omitempty"`   // host:port Mac L2 caches use; empty falls back to WorkerStorage
+	HostScheduler   string   `json:"hostScheduler,omitempty"` // host:port Mac relays use; empty falls back to WorkerScheduler
+	ServerName      string   `json:"serverName"`              // TLS server name
+	STSURL          string   `json:"stsUrl"`                  // canonical issuer of Cucina JWTs
+	STSAliases      []string `json:"stsAliases,omitempty"`    // allowed HTTPS transport origins; never change the canonical JWT issuer
+	ManagementURL   string   `json:"managementUrl"`           // host:port for cucinactl
 }
 
 // AWS configures the EC2 provider. Credentials come from the default chain (IRSA,

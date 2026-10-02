@@ -24,6 +24,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,14 +54,17 @@ type Deps struct {
 
 // Server serves the STS.
 type Server struct {
-	d          Deps
-	issuer     string
-	ipLimit    *limiter
-	subLimit   *limiter
-	metrics    *metrics
-	instances  map[string]bool
-	mux        *http.ServeMux
-	shutdownTO time.Duration
+	d      Deps
+	issuer string
+	// transportOrigins is immutable after startup: normalized authorities map only
+	// to explicitly configured HTTPS origins, never to values supplied by a request.
+	transportOrigins map[string]string
+	ipLimit          *limiter
+	subLimit         *limiter
+	metrics          *metrics
+	instances        map[string]bool
+	mux              *http.ServeMux
+	shutdownTO       time.Duration
 }
 
 // New validates the configuration and builds the server.
@@ -80,6 +85,17 @@ func New(d Deps) (*Server, error) {
 	if len(d.Config.InstanceNames) == 0 {
 		return nil, errors.New("sts: at least one instance name is required")
 	}
+	origins, err := stsTransportOrigins(d.Config.Endpoints.STSAliases)
+	if err != nil {
+		return nil, err
+	}
+	// An alias of the public authority must not change its established URLs (which
+	// may include a reverse-proxy path prefix). Only other authorities are aliases.
+	if canonical, err := url.Parse(issuer); err == nil {
+		if authority, ok := stsAuthority(canonical.Host); ok {
+			delete(origins, authority)
+		}
+	}
 	perMin := d.Config.Auth.RateLimitPerMinute
 	if perMin <= 0 {
 		perMin = 60
@@ -93,7 +109,7 @@ func New(d Deps) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		d: d, issuer: issuer, metrics: m,
+		d: d, issuer: issuer, metrics: m, transportOrigins: origins,
 		ipLimit:    newLimiter(d.Clock, perMin, 100_000),
 		subLimit:   newLimiter(d.Clock, perMin, 100_000),
 		instances:  map[string]bool{},
@@ -109,6 +125,69 @@ func New(d Deps) (*Server, error) {
 	s.mux.HandleFunc("/-/healthy", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok\n")) })
 	s.mux.HandleFunc("/-/ready", s.handleReady)
 	return s, nil
+}
+
+// stsTransportOrigins accepts only HTTPS origins. The TLS listener/proxy certificate
+// must cover every alias hostname/IP (the chart adds their SANs); aliases do not
+// change the identity of the signer or the authentication/authorization policy.
+func stsTransportOrigins(aliases []string) (map[string]string, error) {
+	origins := make(map[string]string, len(aliases))
+	for i, raw := range aliases {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" ||
+			(u.Path != "" && u.Path != "/") || u.RawPath != "" || strings.ContainsAny(raw, "?#") {
+			return nil, fmt.Errorf("sts: endpoints.stsAliases[%d] must be an HTTPS origin without userinfo, path (except /), query or fragment", i)
+		}
+		authority, ok := stsAuthority(u.Host)
+		if !ok {
+			return nil, fmt.Errorf("sts: endpoints.stsAliases[%d] must have a valid hostname/IP and optional port (1–65535)", i)
+		}
+		origins[authority] = "https://" + authority
+	}
+	return origins, nil
+}
+
+// stsAuthority normalizes a bare authority, not a URL: DNS case, IP spelling and
+// the default HTTPS port. Do not resolve DNS or trust forwarded headers here.
+func stsAuthority(raw string) (string, bool) {
+	u, err := url.Parse("https://" + raw)
+	if err != nil || u.Host != raw || u.User != nil || u.Hostname() == "" || strings.HasSuffix(raw, ":") {
+		return "", false
+	}
+	host := strings.ToLower(u.Hostname())
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if ip.Zone() != "" || ip.Is6() != strings.HasPrefix(raw, "[") {
+			return "", false
+		}
+		host = ip.String()
+		if ip.Is6() {
+			host = "[" + host + "]"
+		}
+	} else {
+		if strings.HasPrefix(raw, "[") || len(host) > 253 {
+			return "", false
+		}
+		for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
+			if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+				return "", false
+			}
+			for _, c := range label {
+				if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+					return "", false
+				}
+			}
+		}
+	}
+	if port := u.Port(); port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", false
+		}
+		if n != 443 {
+			host += ":" + strconv.Itoa(n)
+		}
+	}
+	return host, true
 }
 
 // Issuer is the `iss` of minted tokens.
@@ -164,8 +243,14 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 	if idps == nil {
 		idps = []auth.LoginProvider{}
 	}
+	transport := s.issuer
+	if authority, ok := stsAuthority(r.Host); ok {
+		if origin, allowed := s.transportOrigins[authority]; allowed {
+			transport = origin
+		}
+	}
 	doc := discoveryDoc{
-		Version: 1, Issuer: s.issuer, TokenEndpoint: s.issuer + "/token", JWKSURI: s.issuer + "/jwks.json",
+		Version: 1, Issuer: s.issuer, TokenEndpoint: transport + "/token", JWKSURI: transport + "/jwks.json",
 		Endpoints: discoveryEndpoints{
 			RemoteExecution: s.d.Config.Endpoints.ClientEndpoint,
 			InstanceName:    s.d.Config.InstanceNames[0],

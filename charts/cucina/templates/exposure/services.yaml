@@ -32,7 +32,10 @@ addresses, on EKS each LoadBalancer Service is its own NLB (docs/operations/expo
 {{ include "cucina.exposedService" (dict "ctx" . "name" (printf "%s-scheduler" (include "cucina.worker.name" .)) "component" "scheduler" "endpoint" "worker" "exposure" $worker
   "ports" (list (dict "name" "grpc-scheduler" "port" .Values.endpoints.worker.schedulerPort "targetPort" "grpc-worker" "nodePort" $worker.nodePorts.scheduler))) }}
 ---
+{{- /* HostFleet sessions live on the scaling leader. Reuse the enrollment/host
+       Service and its existing load balancer; never distribute streams to standbys. */}}
 {{ include "cucina.exposedService" (dict "ctx" . "name" (printf "%s-controller" (include "cucina.worker.name" .)) "component" "controller" "endpoint" "worker" "exposure" $worker
+  "extraSelector" (include "cucina.controllerLeaderSelector" . | fromYaml)
   "ports" (list
     (dict "name" "grpc-enrollment" "port" .Values.endpoints.worker.enrollmentPort "targetPort" "grpc-enrollment" "nodePort" $worker.nodePorts.enrollment)
     (dict "name" "grpc-host" "port" .Values.endpoints.hosts.port "targetPort" "grpc-host" "nodePort" $worker.nodePorts.host))) }}

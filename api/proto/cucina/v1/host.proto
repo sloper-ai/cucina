@@ -39,7 +39,28 @@ message HostMessage {
     VMEvent vm_event = 3;
     CommandResult command_result = 4;
     LogData log = 5;
+    // Optional since protocol minor 1; send only when Welcome advertises minor >= 1.
+    MetricsSnapshot metrics_snapshot = 6;
   }
+}
+
+// A newly scraped, bounded Prometheus text snapshot, relayed over the host's
+// authenticated outbound stream (R-OBS-1). Never send cached data after a failed
+// scrape. The controller derives identity labels from the authenticated host and
+// its VM inventory, not from the payload; stale or disconnected sources disappear.
+message MetricsSnapshot {
+  enum Source {
+    SOURCE_UNSPECIFIED = 0;
+    SOURCE_HOSTD = 1;
+    SOURCE_HOST_L2 = 2;
+    SOURCE_WORKER = 3;
+  }
+  Source source = 1;
+  // Required only for SOURCE_WORKER; must name a running VM owned by this host.
+  string vm_name = 2;
+  // Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+  // cardinality and malformed snapshots are rejected, never silently truncated.
+  bytes prometheus_text = 3;
 }
 
 message Hello {

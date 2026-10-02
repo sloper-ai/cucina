@@ -361,6 +361,159 @@ func TestRenderedControllerConfigParses(t *testing.T) {
 	}
 }
 
+// Guards R-MAC-4/R-DATA-4/R-OBS-1 and the confirmed NAT/HA regressions: Mac
+// aliases must not change EC2's private endpoints; TLS must cover every alias;
+// host streams and discovery must reach the leader, without duplicate component
+// scraping or overwriting the host discovery's authoritative target labels.
+func TestRenderedNATAndLeaderContracts(t *testing.T) {
+	base := []string{"sizeProfile=small", "endpoints.worker.host=worker.internal.example", "endpoints.worker.storageHost=storage.internal.example",
+		"endpoints.worker.schedulerHost=scheduler.internal.example", "endpoints.worker.storagePort=18981", "endpoints.worker.schedulerPort=18983",
+		"endpoints.sts.url=https://sts.example.test", "monitoring.serviceMonitors.enabled=true", "monitoring.workerScrapeConfig.enabled=true"}
+	cases := []struct {
+		name                     string
+		sets                     []string
+		storage, scheduler       string
+		storageSAN, schedulerSAN string
+		aliases, aliasSANs       []string
+		leader, invalid          bool
+	}{
+		{name: "single replica defaults to per-service private workers", storage: "storage.internal.example:18981", scheduler: "scheduler.internal.example:18983", storageSAN: "storage.internal.example", schedulerSAN: "scheduler.internal.example"},
+		{name: "NAT host address with HA", sets: []string{"controller.replicas=2", "endpoints.hosts.host=mac.example.test"}, storage: "mac.example.test:18981", scheduler: "mac.example.test:18983", storageSAN: "mac.example.test", schedulerSAN: "mac.example.test", leader: true},
+		{name: "per-service IP aliases and STS transport origins", sets: []string{"controller.replicas=2", "endpoints.hosts.host=mac.example.test", "endpoints.hosts.storageHost=203.0.113.10", "endpoints.hosts.schedulerHost=2001:db8::7", "endpoints.sts.aliases[0]=https://auth.internal.example:18443", "endpoints.sts.aliases[1]=https://[2001:db8::9]/"},
+			storage: "203.0.113.10:18981", scheduler: "[2001:db8::7]:18983", storageSAN: "203.0.113.10", schedulerSAN: "2001:db8::7", leader: true,
+			aliases: []string{"https://auth.internal.example:18443", "https://[2001:db8::9]/"}, aliasSANs: []string{"auth.internal.example", "2001:db8::9"}},
+		{name: "cert-manager receives the same aliases", sets: []string{"controller.replicas=2", "endpoints.hosts.storageHost=mac-storage.example.test", "endpoints.hosts.schedulerHost=mac-scheduler.example.test", "endpoints.sts.aliases[0]=https://auth.internal.example:443/", "tls.public.source=certManager", "tls.public.certManager.issuerRef.name=test", "tls.internal.source=certManager", "tls.internal.certManager.issuerRef.name=test"},
+			storage: "mac-storage.example.test:18981", scheduler: "mac-scheduler.example.test:18983", storageSAN: "mac-storage.example.test", schedulerSAN: "mac-scheduler.example.test", leader: true,
+			aliases: []string{"https://auth.internal.example:443/"}, aliasSANs: []string{"auth.internal.example"}},
+		{name: "reject HTTP alias", sets: []string{"endpoints.sts.aliases[0]=http://auth.example.test"}, invalid: true},
+		{name: "reject alias path", sets: []string{"endpoints.sts.aliases[0]=https://auth.example.test/token"}, invalid: true},
+		{name: "reject alias query", sets: []string{"endpoints.sts.aliases[0]=https://auth.example.test?mode=token"}, invalid: true},
+		{name: "reject alias userinfo", sets: []string{"endpoints.sts.aliases[0]=https://user@auth.example.test"}, invalid: true},
+		{name: "reject alias fragment", sets: []string{"endpoints.sts.aliases[0]=https://auth.example.test#token"}, invalid: true},
+		{name: "reject alias port zero", sets: []string{"endpoints.sts.aliases[0]=https://auth.example.test:0"}, invalid: true},
+		{name: "reject alias port overflow", sets: []string{"endpoints.sts.aliases[0]=https://auth.example.test:65536"}, invalid: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sets := append(append([]string{}, base...), tc.sets...)
+			out, err := charttest.Helm(t, charttest.TemplateArgs(t, nil, sets...)...)
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("invalid STS alias rendered successfully")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			objects := map[string]charttest.Object{}
+			certSANs := map[string]map[string]bool{}
+			addSANs := func(name string, dns, ips []string) {
+				certSANs[name] = map[string]bool{}
+				for _, n := range append(dns, ips...) {
+					certSANs[name][n] = true
+				}
+			}
+			for _, o := range charttest.Objects(t, out) {
+				objects[o.Kind+"/"+o.Metadata.Name] = o
+				if o.Kind == "Certificate" {
+					var cert struct{ Spec pki.CertSpec }
+					if err := yaml.Unmarshal(o.Raw, &cert); err != nil {
+						t.Fatal(err)
+					}
+					addSANs(cert.Spec.SecretName, cert.Spec.DNSNames, cert.Spec.IPAddresses)
+				}
+			}
+			cm := objects["ConfigMap/cucina-controller"]
+			cfg, err := controller.ParseConfig([]byte(cm.Data["controller.json"]), controller.ModeController)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Endpoints.WorkerStorage != "storage.internal.example:18981" || cfg.Endpoints.WorkerScheduler != "scheduler.internal.example:18983" {
+				t.Error("Mac aliases changed EC2's private worker endpoints")
+			}
+			if cfg.Endpoints.HostStorage != tc.storage || cfg.Endpoints.HostScheduler != tc.scheduler {
+				t.Errorf("host endpoints = %q, %q; want %q, %q", cfg.Endpoints.HostStorage, cfg.Endpoints.HostScheduler, tc.storage, tc.scheduler)
+			}
+			if cfg.Endpoints.STSURL != "https://sts.example.test" || !reflect.DeepEqual(cfg.Endpoints.STSAliases, tc.aliases) {
+				t.Errorf("issuer/transport aliases = %q, %v; aliases must not change the canonical issuer", cfg.Endpoints.STSURL, cfg.Endpoints.STSAliases)
+			}
+			if len(tc.aliases) == 0 && strings.Contains(cm.Data["controller.json"], `"stsAliases"`) {
+				t.Error("empty aliases must not change the rendered configuration")
+			}
+			var specs []pki.CertSpec
+			if err := json.Unmarshal([]byte(cm.Data["certs.json"]), &specs); err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range specs {
+				addSANs(s.SecretName, s.DNSNames, s.IPAddresses)
+			}
+			for name, want := range map[string][]string{"cucina-tls-frontend-workers": {tc.storageSAN}, "cucina-tls-scheduler": {tc.schedulerSAN}, "cucina-tls-sts": append([]string{"sts.example.test"}, tc.aliasSANs...)} {
+				for _, n := range want {
+					if !certSANs[name][n] {
+						t.Errorf("%s lacks SAN %q", name, n)
+					}
+				}
+			}
+			for _, name := range []string{"cucina-worker-controller", "cucina-controller-leader"} {
+				svc, ok := objects["Service/"+name]
+				if !ok {
+					t.Errorf("missing leader-routed Service %s", name)
+					continue
+				}
+				selector, _ := svc.Spec["selector"].(map[string]any)
+				if (selector["cucina.sloper.ai/leader"] == "true") != tc.leader {
+					t.Errorf("%s leader selector = %v, HA = %v", name, selector, tc.leader)
+				}
+			}
+			leaderSvc := objects["Service/cucina-controller-leader"]
+			var meta struct {
+				Metadata struct{ Labels map[string]string }
+			}
+			if err := yaml.Unmarshal(leaderSvc.Raw, &meta); err != nil {
+				t.Fatal(err)
+			}
+			if meta.Metadata.Labels["cucina.sloper.ai/endpoint"] == "" || leaderSvc.Spec["type"] != "ClusterIP" {
+				t.Error("discovery Service must be internal and excluded from duplicate ServiceMonitor scraping")
+			}
+			ports, _ := leaderSvc.Spec["ports"].([]any)
+			if len(ports) != 1 || ports[0].(map[string]any)["port"] != float64(9090) || ports[0].(map[string]any)["targetPort"] != "metrics" {
+				t.Error("leader discovery Service must expose only the internal metrics listener")
+			}
+			monitor := objects["ServiceMonitor/cucina-controller"]
+			selector, _ := monitor.Spec["selector"].(map[string]any)
+			expressions, _ := selector["matchExpressions"].([]any)
+			excludesEndpoints := false
+			for _, e := range expressions {
+				rule := e.(map[string]any)
+				excludesEndpoints = excludesEndpoints || (rule["key"] == "cucina.sloper.ai/endpoint" && rule["operator"] == "DoesNotExist")
+			}
+			if !excludesEndpoints {
+				t.Error("controller ServiceMonitor would duplicate the leader scrape")
+			}
+			for _, suffix := range []string{"workers", "hosts"} {
+				sc := objects["ScrapeConfig/cucina-"+suffix]
+				wantSD := []any{map[string]any{"url": "http://cucina-controller-leader.cucina.svc.cluster.local:9090/sd/" + suffix, "refreshInterval": "30s"}}
+				if !reflect.DeepEqual(sc.Spec["httpSDConfigs"], wantSD) {
+					t.Errorf("%s SD does not use the leader Service: %v", suffix, sc.Spec["httpSDConfigs"])
+				}
+				if suffix == "hosts" {
+					if sc.Spec["honorLabels"] != false {
+						t.Error("host target labels must override payload labels")
+					}
+					relabelings, _ := sc.Spec["relabelings"].([]any)
+					for _, rule := range relabelings {
+						switch rule.(map[string]any)["targetLabel"] {
+						case "__address__", "__metrics_path__", "namespace", "serial", "pool", "node", "cucina_component":
+							t.Error("host relabeling overwrites an authoritative discovery label")
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 // TestRenderedCertificateListParses checks certs.json (the --certs list of the bootstrap
 // hook and the controller, ADR 0552/0403) strictly as []pki.CertSpec: one server
 // certificate per TLS consumer of the chart-generated groups with a valid component

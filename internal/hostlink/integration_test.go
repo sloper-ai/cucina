@@ -7,11 +7,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
@@ -49,15 +51,19 @@ func advanceUntil(t *testing.T, what string, limit time.Duration, cond func() bo
 }
 
 type hostEnv struct {
-	token     string
-	net       *hostlinktest.Net
-	ctrl      *hostlinktest.Controller
-	tart      *faketart.Tart
-	stateDir  string
-	secretDir string
-	agent     *hostd.Agent
-	cancel    context.CancelFunc
-	done      chan error
+	token           string
+	net             *hostlinktest.Net
+	ctrl            *hostlinktest.Controller
+	tart            *faketart.Tart
+	stateDir        string
+	secretDir       string
+	agent           *hostd.Agent
+	cancel          context.CancelFunc
+	done            chan error
+	metricsClient   *http.Client
+	metricsGatherer prometheus.Gatherer
+	enableL2        bool
+	wanListener     net.Listener
 }
 
 // newEnv builds the test bed inside a synctest bubble; ef comes from
@@ -80,7 +86,22 @@ func (e *hostEnv) start(t *testing.T) {
 	cfg.MetricsListen = ""
 	dial := grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) { return e.net.Dial(ctx, addr) })
 	rt := tart.New(tart.Options{Exec: e.tart, Binary: "tart"})
+	if e.metricsClient == nil {
+		e.metricsClient = &http.Client{Transport: metricsTransport(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("no metrics endpoint in this fixture")
+		})}
+	}
+	if e.metricsGatherer == nil {
+		// Virtual multi-day renewal tests must not repeatedly read real process
+		// telemetry. The dedicated metrics scenario supplies a populated source.
+		e.metricsGatherer = prometheus.NewRegistry()
+	}
+	l2Binary := ""
+	if e.enableL2 {
+		l2Binary = "bb_storage"
+	}
 	a, err := hostd.New(hostd.Options{
+		L2Binary: l2Binary, WANRelayListener: e.wanListener,
 		Config: cfg, UserMode: true, StateDir: e.stateDir, Version: "test",
 		Exec: e.tart, FS: sys.FS{}, Clock: hostlinktest.Clock{}, Secrets: secretstore.File{Dir: e.secretDir},
 		Runtime: rt, Render: render.BBConfig{},
@@ -92,6 +113,8 @@ func (e *hostEnv) start(t *testing.T) {
 		SchedulerRelayListener: e.net.Listen("hostd.test:8983"),
 		RelayDial:              e.net.Dial,
 		ScrapeActivity:         func(context.Context, netip.Addr, uint32) (uint64, error) { return 0, errors.New("no metrics") },
+		MetricsClient:          e.metricsClient,
+		MetricsGatherer:        e.metricsGatherer,
 		Gateway:                func(netip.Addr) (netip.Addr, bool) { return netip.MustParseAddr("192.168.64.1"), true },
 		SameNetwork:            func(netip.Addr, netip.Addr) bool { return true },
 		EnrollDialOptions:      []grpc.DialOption{dial},

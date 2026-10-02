@@ -254,6 +254,30 @@ capabilities:
 {{- define "cucina.hostsHost" -}}
 {{- default (include "cucina.workerEnrollmentHost" .) .Values.endpoints.hosts.host -}}
 {{- end -}}
+{{/* Mac aliases never modify the private endpoints handed to EC2 workers. */}}
+{{- define "cucina.hostStorageHost" -}}
+{{- default (default (include "cucina.workerStorageHost" .) .Values.endpoints.hosts.host) .Values.endpoints.hosts.storageHost -}}
+{{- end -}}
+{{- define "cucina.hostSchedulerHost" -}}
+{{- default (default (include "cucina.workerSchedulerHost" .) .Values.endpoints.hosts.host) .Values.endpoints.hosts.schedulerHost -}}
+{{- end -}}
+{{/* Host:port (bracket IPv6 literals); arguments: host, port. */}}
+{{- define "cucina.hostPort" -}}
+{{- $host := index . 0 -}}
+{{- if contains ":" $host -}}
+{{- printf "[%s]:%d" $host (int (index . 1)) -}}
+{{- else -}}
+{{- printf "%s:%d" $host (int (index . 1)) -}}
+{{- end -}}
+{{- end -}}
+{{- define "cucina.controllerLeader.name" -}}{{ include "cucina.controller.name" . }}-leader{{- end -}}
+{{/* Single-replica controllers need no election label to route their stateful APIs. */}}
+{{- define "cucina.controllerLeaderSelector" -}}
+{{- $eff := include "cucina.effective" (list . "controller") | fromYaml -}}
+{{- if gt (int $eff.replicas) 1 -}}
+cucina.sloper.ai/leader: "true"
+{{- end -}}
+{{- end -}}
 
 {{/* Is the argument an IPv4/IPv6 literal? Returns "true" or "". */}}
 {{- define "cucina.isIP" -}}

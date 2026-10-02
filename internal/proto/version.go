@@ -18,7 +18,7 @@ const (
 	// management protocol.
 	Major uint32 = 1
 	// Minor is bumped on backwards-compatible additions.
-	Minor uint32 = 0
+	Minor uint32 = 1
 )
 
 // Version is a protocol version as sent by a peer.

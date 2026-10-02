@@ -5,8 +5,8 @@
 Owner: agent `hostd` (`cmd/cucina-hostd`, `internal/hostd`, `internal/hostlink`, `internal/providers/tart`).
 Requirements: R-MAC-1..6, R-MAC-10, R-CACHE-2/-4, R-SEC-2/-3, R-POOL-6/-7, R-DATA-5, R-OBS-1/-4, NFR-M2, UC19..UC21.
 
-Sections 1–3 are **published contracts** (v1.2, 2026-10-02: hostd creates the worker directories planned by
-`internal/bbconfig`; `bb_worker` runs as `image.json` `workerUser`, default the build user as `workers/macos` builds it;
+Sections 1–3 are **published contracts** (v1.3, 2026-10-02: the current image runs `bb_worker` as root and
+`bb_runner` as unprivileged `builder`; hostd preserves a root-owned log parent with per-daemon log ownership;
 the L2 hop is TLS) that other agents build against:
 §1 for `macimage` (the golden VM image, `workers/macos/**`), §2 and §3 for `pkg` (`macos/**`, profiles, MDM guide).
 Changing them needs a note to the lead and to the consuming agent. Additive changes are preferred.
@@ -32,7 +32,9 @@ Buildbarn services are **started by hostd**, never automatically at boot.
 | PKI dir | `/etc/cucina/pki/` | *worker user* 0700 | Hostd writes `worker.key` (0600), `worker.crt`, `ca.crt` (0644), owned by the worker user. `ca.crt` = Cucina CA bundle + the host's L2 CA. |
 | Worker state | `/var/db/cucina/` | *worker user* 0700 | Created by hostd (bbconfig `StateRoot`): the persistent **L1** (`vm-disk` placement, default 40 GiB, survives VM shutdown, R-CACHE-2) and the file pool. |
 | Runner socket dir | `/var/run/cucina/` | *build user* 0700 | Created by hostd at every boot; `bb_runner` creates `runner.sock` here. |
-| Log dir | `/var/log/cucina/` | *build user*:staff 0755 | `bb_worker.log`, `bb_runner.log`; rotate with `/etc/newsyslog.d/cucina.conf` (e.g. 50 MiB × 3, `J` compression). |
+| Log dir | `/var/log/cucina/` | root:wheel 0755 | Never build-user writable: launchd opens the privileged worker log through this parent. Hostd reasserts this at every activation. |
+| Worker log | `/var/log/cucina/bb_worker.log` | *worker user* 0644 (current image root:wheel) | Regular file, no symlink or extra hardlink. Rotation must retain the same owner. |
+| Runner log | `/var/log/cucina/bb_runner.log` | *build user*:staff 0644 | Same regular-file requirement. `/etc/newsyslog.d/cucina.conf` uses separate per-daemon ownership entries; neither rotation nor activation changes the parent's owner. |
 | Data volume | APFS volume **`cucina`**, format **Case-sensitive APFS**, mounted at `/Volumes/cucina` | root:wheel 0755 | Same APFS container as the system volume (grows with `tart set --disk-size` + guest-agent disk resize); add `.metadata_never_index`. Hostd creates `build/` (NFSv4 mount point or native build directory) and `cache/` (native input cache) inside with the owners (worker user / build user) and modes `internal/bbconfig` plans. R-MAC-4 (case-sensitive build directories). |
 | Tart Guest Agent | `tart exec` works once the VM is up | — | Cirrus Labs images ship it. See "root access" below. |
 | Auto-login | the **build user** is auto-logged-in to a GUI (Aqua) session | — | `bb_runner` runs in that session (some Xcode tools need it). |
@@ -52,15 +54,16 @@ Buildbarn services are **started by hostd**, never automatically at boot.
              "developerDir": "/Applications/Xcode.app/Contents/Developer", "xcodeVersionOverride": "27.0.0.27A266a" },
   "buildbarn": "20260930T173749Z-1a3be95",
   "buildUser": "builder",
-  "workerUser": "builder"
+  "workerUser": "root"
 }
 ```
 
 * `buildUser` (required, not root): the auto-login user that runs `bb_runner` (GUI LaunchAgent) and therefore every
   action (R-SEC-5).
-* `workerUser` (optional, default `buildUser`): the worker plist's `UserName`. Native build directories work with the
-  build user (the `workers/macos` default, ADR 0350); NFSv4 virtual build directories need mounts, so such an image sets
-  `"root"` and drops `UserName`. Hostd owns the PKI directory and the worker-state directories accordingly.
+* `workerUser` (optional, legacy default `buildUser`): the worker plist's `UserName`. The current `workers/macos`
+  image explicitly sets `"root"` and omits `UserName` from that plist, including in native-directory mode, keeping
+  worker credentials and state inaccessible to build actions. NFSv4 mode also needs root for mounts. Hostd owns
+  the PKI directory, worker-state directories and worker log accordingly; the runner remains unprivileged.
 * `xcode.developerDir` (optional, default `/Applications/Xcode.app/Contents/Developer`) and `xcode.xcodeVersionOverride`
   (Bazel's `XCODE_VERSION_OVERRIDE` value) map to `bb_runner`'s developer-directory table.
 * `imageVersion` (required) is reported to the controller (VM inventory, generation checks). `xcode.version` must match
@@ -69,13 +72,13 @@ Buildbarn services are **started by hostd**, never automatically at boot.
 **Root access for hostd.** Hostd runs every privileged guest command as `tart exec <vm> /usr/bin/sudo -n -- <cmd>`.
 Two image setups satisfy this; hostd supports both and never needs a password:
 
-* (A) *Default, simplest*: the Cirrus default — build user `admin`, passwordless sudo, Guest Agent RPC in the `admin`
-  GUI session (`tart-guest-agent --run-agent`). Residual risk: an action can become root inside its VM. Accepted for v1
-  because a pool is the trust boundary (R-SEC-5), the VM holds only a ≤ 12 h worker certificate and is re-cloned
-  regularly (max age 7 d).
-* (B) *Hardened (SHOULD)*: a dedicated **standard** build user (no sudo) with auto-login; the Guest Agent RPC moves to a
-  root LaunchDaemon (`tart-guest-agent --run-daemon --run-rpc`) and the GUI agent keeps only `--run-vdagent`.
-  `sudo -n` then runs as root without a sudoers entry.
+* **Current image**: a dedicated **standard** build user (`builder`, UID 600, no sudo) with auto-login; Guest Agent
+  RPC runs as a root LaunchDaemon and the GUI agent provides only the desktop channel. Hostd's `sudo -n` therefore
+  already runs as root without granting actions sudo access. Root-owned PKI, worker state and log parent preserve
+  the worker/runner privilege boundary.
+* **Legacy compatibility only**: the Cirrus default `admin` GUI-session RPC with passwordless sudo can also execute
+  hostd's commands, but actions can become root in that image. It does **not** provide the current image's
+  unprivileged-action security boundary.
 
 ### 1.2 What hostd does at every VM start (exact sequence)
 
@@ -94,20 +97,15 @@ Two image setups satisfy this; hostd supports both and never needs a password:
    `tart exec -i <vm> /usr/bin/sudo -n -- /usr/bin/tar -x -p -f - -C /private/etc/cucina`
    The tar stream contains `bb/worker.json`, `bb/runner.json`, `vm.json` (root, 0644) and `pki/worker.key` (0600),
    `pki/worker.crt`, `pki/ca.crt` (0644) owned by the worker user. Existing files are replaced.
-6. Activate (one `tart exec <vm> /usr/bin/sudo -n -- /bin/sh -c '<script>'`, script generated by hostd):
-   ```sh
-   set -eu
-   mdutil -a -i off >/dev/null 2>&1 || true
-   install -d -o <uid> -g <gid> -m 0755 /var/log/cucina
-   # every directory of bbconfig's WorkerPlan.Directories (worker user or build user), e.g.:
-   mkdir -p '/var/db/cucina' && chown <wuid>:<wgid> '/var/db/cucina' && chmod 700 '/var/db/cucina'
-   mkdir -p '/var/run/cucina' && chown <uid>:<gid> '/var/run/cucina' && chmod 700 '/var/run/cucina'
-   launchctl bootout gui/<uid>/ai.sloper.cucina.bb-runner 2>/dev/null || true
-   launchctl bootout system/ai.sloper.cucina.bb-worker 2>/dev/null || true
-   # (bounded retry loop around each bootstrap: bootout completes asynchronously)
-   launchctl bootstrap gui/<uid> /usr/local/cucina/launchd/ai.sloper.cucina.bb-runner.plist
-   launchctl bootstrap system /usr/local/cucina/launchd/ai.sloper.cucina.bb-worker.plist
-   ```
+6. Activate (one `tart exec <vm> /usr/bin/sudo -n -- /bin/sh -c '<script>'`, generated by
+   `guest.ActivateCmd`): disable Spotlight, create `WorkerPlan.Directories` with the planned owner/mode, then secure
+   the logs **before** bootstrapping either daemon. Reject a symlinked log directory; reassert `/var/log/cucina` as
+   root:wheel 0755 without recursive ownership changes, removing legacy ACL grants from the directory and daemon
+   log files. Reject symlinked, non-regular or multiply linked log files
+   rather than touching their targets. Create missing files without clobbering an existing path; preserve existing
+   regular log contents, assigning each daemon's UID:GID and 0644. An unsafe path fails activation and needs operator
+   cleanup or reimaging. Finally boot out the old runner/worker jobs and bootstrap the runner in `gui/<uid>` and the
+   worker in `system`, with bounded retries because bootout is asynchronous.
 7. Health: `launchctl print system/ai.sloper.cucina.bb-worker` shows `state = running`, `bb_worker`'s metrics endpoint
    (`http://<vm-ip>:<metrics_port>/metrics`, scraped by hostd as root) answers, and the controller sees the worker
    `{pool, node=<host>/<vm>}` register through the relay. Hostd then reports `VMEvent{event: "ready"}`.
@@ -189,13 +187,13 @@ uptime beyond `max_uptime` (12 h) → `tart stop`. The image does not need an in
 | VM user | `cucina` — standard (non-admin) user, auto-login, FileVault off; owns `~cucina/.tart` (Tart's default `TART_HOME`). Hostd fails fast if it does not exist (root mode). |
 | State dir | `/var/db/cucina/hostd/` (root:wheel 0700): identity certificate, enrollment state, VM inventory journal |
 | L2 cache dir | `/var/db/cucina/l2/` (root:wheel 0700), default 200 GiB (`L2SizeGiB`) |
-| Keys | System keychain (`/Library/Keychains/System.keychain`), generic-password items, service `ai.sloper.cucina.hostd`, accounts `host-identity-key` (host mTLS key) and `host-l2-ca-key` (host-local CA for the L2's VM-facing certificate), PKCS#8 DER. Preserved across upgrades; removed only by uninstall `--purge`. |
+| Keys | System keychain (`/Library/Keychains/System.keychain`), generic-password items, service `ai.sloper.cucina.hostd`, accounts `host-identity-key` (host mTLS key) and `host-l2-ca-key` (host-local CA for the L2's VM-facing certificate), PKCS#8 DER. Preserved across upgrades; removed by default uninstall unless `--keep-state` is passed. |
 | Logs | `/Library/Logs/Cucina/hostd.log` (JSON, rotated by hostd 5 × 20 MiB), `/Library/Logs/Cucina/bb_storage.log` (rotated by hostd); unified logging subsystem `ai.sloper.cucina`, category `hostd` (`log show --predicate 'subsystem == "ai.sloper.cucina"'`) |
 | Listeners | `0.0.0.0:8981` and `0.0.0.0:8983` (VM relays, admission by VM IP on the vmnet bridge); `127.0.0.1:9470` hostd `/metrics` (override `MetricsListen`); `127.0.0.1:8991` / `127.0.0.1:9991` L2 gRPC / diagnostics |
 | Application firewall | with `EnableFirewall`, add `/usr/local/cucina/bin/cucina-hostd` as allowed (`socketfilterfw --add … --unblockapp …`) so VMs can reach the relays; bb_storage listens on loopback only |
 | vmnet DHCP lease | 600 s: `/Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default.plist` `bootpd.DHCPLeaseTimeSecs = 600` (hostd re-asserts at start in root mode; postinstall may set it too) |
 | Upgrade in place | stop daemon (`launchctl bootout system/ai.sloper.cucina.hostd`), replace binaries, bootstrap again; never touch `/var/db/cucina`, the keychain item or `~cucina/.tart` |
-| Uninstall | bootout, remove `/usr/local/cucina`, the plist, `/Library/Logs/Cucina`; `--purge` additionally removes `/var/db/cucina`, the keychain item and (optionally) VMs/images |
+| Uninstall | bootout, remove `/usr/local/cucina`, the plist, logs, state and identity by default; `--keep-state` explicitly preserves state/identity; `--purge` additionally removes VM/image/cache bulk data. |
 
 Hostd exit codes (launchd restarts it; a config error is logged once per start with the precise key):
 `0` clean stop, `2` invalid configuration, `3` enrollment refused (`DENIED`/`TOKEN_INVALID`), `1` other.
@@ -324,15 +322,67 @@ derived share.
   `s.Register(grpcServer)` on the mTLS host listener (client certificates required, Cucina CA) with
   `keepalive.EnforcementPolicy{MinTime: 10 * time.Second, PermitWithoutStream: true}`; `go s.Run(ctx)`; use `s` as
   `ports.HostFleet`; `Hosts`/`Metrics`/`Facts` feed the MacHost status; `SetCordon`, `Reimage(serial, "")` and
-  `Diagnostics(serial, DiagnosticsRequest)` back the management API's HostAdmin.
+  `Diagnostics(serial, DiagnosticsRequest)` back the management API's HostAdmin. `Welcome` prefers
+  `endpoints.hostStorage` / `endpoints.hostScheduler` for NAT-reachable Mac upstreams, with the worker equivalents
+  as legacy fallbacks. Chart `endpoints.hosts.storageHost` / `schedulerHost` select these aliases; EC2 worker
+  enrollment keeps the private worker endpoints. Changing only `ControllerURL` does not override VM/cache upstreams.
 
 ### 4.3 Metrics and logs
 
-`/metrics` (default `127.0.0.1:9470`): `cucina_hostd_vms{state}`, `cucina_hostd_l2_requests_total{result}`,
-`cucina_hostd_wan_bytes_total{direction}`, `cucina_hostd_l2_size_bytes`, `cucina_hostd_disk_free_bytes`,
-`cucina_hostd_controller_connected`, `cucina_hostd_relay_bytes_total{relay,direction}`, Go/process collectors (RSS,
-NFR-M2 ≤ 100 MiB). The same L2/disk numbers ride on every heartbeat (Mac sites are behind NAT). Logs: JSON lines to
-`hostd.log` (5 × 20 MiB) and unified logging (`log show --predicate 'subsystem == "ai.sloper.cucina"'`).
+`/metrics` (default `127.0.0.1:9470`) exposes host VM, L2, disk, relay and connection metrics plus Go/process
+collectors. Heartbeats carry L2/disk counters and **measured L2 transport bytes**. L2 now dials a loopback-only
+counted TCP passthrough before the central worker listener; its TLS server name remains the original central
+host, not localhost. `cucina_hostd_wan_bytes_total{direction}` counts the opaque TLS stream (compressed bytes and
+TLS/gRPC framing), not logical blob sizes. It excludes TCP/IP headers, retransmissions, scheduler traffic and
+host-management traffic. No payload is decrypted or retained. Native Buildbarn blob-size counters remain the
+logical-byte evidence for cache effectiveness; do not mistake them for network-byte measurements.
+
+The controller registers the existing `cucina_hostd_l2_requests_total`, `cucina_hostd_wan_bytes_total`,
+`cucina_hostd_l2_size_bytes` and `cucina_hostd_disk_free_bytes` families with an authenticated `serial` label.
+Only live sessions with a recent metrics heartbeat contribute; scrapes do not add counters again, other messages
+do not refresh old samples, and reconnect clears previous-session samples. **Physical WAN counters require protocol
+1.1 or newer.** Protocol 1.0 hosts retain reliable L2/disk metrics, but their logical-byte `wan_*` fields are omitted
+from the physical WAN family (missing, never zero); the controller logs an upgrade-needed notice. Raw heartbeat
+values and management's persisted CR WAN field carry no physical-byte provenance and must not be used as physical
+WAN evidence.
+
+**Protocol 1.1 raw metric relay** (`docs/contracts.md` §5.3.1): every 15 seconds hostd gathers its process metrics
+and scrapes the local L2 plus at most two running managed VM workers. It sends only newly obtained, validated
+snapshots over the outbound mTLS link. Failed scrapes send nothing. Snapshots queued for a session expire after
+15 seconds and never replay across reconnect; protocol 1.0 controllers receive only legacy heartbeat aggregates.
+
+* Sources: `hostd`, `host-l2`, `worker`. Worker endpoints come from VM runtime IPs and configured metrics ports,
+  never a metric-owned URL; local scrapes have a five-second deadline and refuse redirects. VM metrics ports are
+  journaled for restart adoption; legacy journals recover the port from the root-owned worker configuration,
+  keeping the runtime VM IP as the address.
+* Selection: process RSS/CPU, Go goroutine/allocated-heap gauges; hostd VM/connection/relay metrics; Buildbarn
+  `buildbarn_builder_build_executor_duration_seconds` (worker), `buildbarn_blobstore_blob_access_operations_blob_size_bytes`,
+  `buildbarn_blobstore_blob_access_operations_duration_seconds`, and the blobstore retention timestamp (worker/L2).
+  The four aggregate families above are excluded from the raw hostd target to prevent double counting.
+* Bounds: 1 MiB input per local scrape; 128 KiB per selected snapshot; at most 64 families, 4,096 emitted samples,
+  16 labels per series and 256 bytes per label value. Only operational labels of the selected families are allowed;
+  metric-owned identity, job, instance, namespace and discovery labels are rejected. HELP text is canonicalized.
+  Oversized or invalid selected data fails as a whole, never truncates. The controller has a **global 16 MiB** raw
+  cache, at most four targets per host, and expires samples within 45 seconds or the shorter host stale interval.
+* `/sd/hosts` on the controller's internal metrics listener returns per-target HTTP discovery entries, with
+  `namespace`, `serial`, `pool`, `node`, `cucina_component` and `__metrics_path__`. Worker `node` is `<serial>/<vm>`;
+  the pool comes from the session's running VM inventory. The scrape path is
+  `/metrics/hosts/<serial>/<source>[/<vm>]`. These separate targets avoid collisions between process/Go families.
+* The chart routes host sessions and HTTP discovery through the same **leader Service**. Discovery advertises
+  the accepting pod's actual metrics-listener address, not the load-balanced Service. A non-owning controller
+  cannot serve another pod's cached data. Custom deployments that distribute host sessions must discover every
+  owning pod. During leader handoff, telemetry is absent until reconnect and a new scrape; no synthetic zeros.
+  Unknown, invalidated, stopped-VM, expired or disconnected targets return 404 and disappear from discovery.
+
+Logs are JSON lines to `hostd.log` (5 × 20 MiB) and unified logging
+(`log show --predicate 'subsystem == "ai.sloper.cucina"'`). The first JSON object in the full diagnostics bundle
+also carries `virtualization`, for example
+`{"available":false,"reason":"nested-macos","model":"VirtualMac2,1","hv_support":0}`. Facts probe `hw.model`
+(with hardware-profiler fallback) and `kern.hv_support`. Apple virtual hardware reports nested macOS unavailable,
+even if its hypervisor flag permits nested Linux. A zero hypervisor flag outside a detected guest reports
+`hypervisor-unavailable`. Other hosts report `available:null` with `macos-support-unverified` or
+`probe-unavailable`: `hv_support=1` alone is **not** proof that a macOS VM configuration is supported. The same
+assessment is logged before enrollment; it does not prevent the package's diagnostics-only T14 registration.
 
 ### 4.4 Running hostd in user mode against a dev controller (T13)
 
@@ -353,7 +403,7 @@ NFR-M2 ≤ 100 MiB). The same L2/disk numbers ride on every heartbeat (Mac sites
 
 | Tier | What | Command |
 | --- | --- | --- |
-| unit | lifecycle property test (2-VM cap, cordon, re-clone, dead-man), re-clone/dead-man/sizing tables, managed preferences (XML/binary, forced vs local, strict errors), privilege-drop construction, redaction, L2 metric parsing, tart JSON/error mapping | `go test ./internal/hostd/... ./internal/providers/tart/...` |
-| integration | hostd ↔ hostlink over in-memory mTLS with the tart emulator inside `testing/synctest` (enrollment pending→approved, StartVM→configured VM, 2-VM cap, persistence, crash, disk full, reset_peer/timeout/down, controller restart resync, hostd restart adoption, idempotency, refused token, log streaming); `porttest.RunVMRuntime` on the adapter + emulator; `porttest.RunHostFleet` on hostlink + hostd; relay on localhost | `go test ./internal/hostlink/... ./internal/hostd/relay/` |
+| unit | lifecycle property test (2-VM cap, cordon, re-clone, dead-man), re-clone/dead-man/sizing tables, managed preferences (XML/binary, forced vs local, strict errors), privilege-drop construction, redaction, L2 metric parsing including the pinned blobstore namespace, truthful virtualization facts through fake Exec, tart JSON/error mapping | `go test ./internal/hostd/... ./internal/providers/tart/...` |
+| integration | hostd ↔ hostlink over in-memory mTLS with fake Tart and fake clocks; enrollment, lifecycle, conformance, faults/restarts, log streaming and renewal; generated guest activation permissions/link rejection in a private filesystem tree; raw metric ownership/limits/expiry/global budget, legacy protocol gating, failed-scrape freshness and exact L2 transport counts | `go test ./internal/hostlink/... ./internal/hostd/...` |
 | acceptance | `porttest.RunVMRuntime` against real Tart with throwaway `cucina-test-*` VMs | `CUCINA_TART_ACCEPTANCE=1 CUCINA_TART_IMAGE=<local image> go test -run TestConformanceRealTart ./internal/providers/tart/` |
 | manual | MT-001 (root daemon → `cucina` Tart path, both privdrop modes), MT-004 (power/network/disk faults) | `docs/testing/manual/` |

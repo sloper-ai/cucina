@@ -31,6 +31,20 @@ type Facts struct {
 	AgentVersion string
 	FileVault    string // off | on | unknown
 	Hostname     string
+	// Virtualization is diagnostic evidence, not an admission or capacity claim.
+	Virtualization Virtualization `json:"virtualization"`
+}
+
+// Virtualization reports what the host probes establish about running macOS
+// guests. Available is nil when support has not been established: a working
+// hypervisor alone does not validate a macOS Virtualization.framework config.
+// In particular, nested Linux support does not imply nested macOS support.
+// This additive diagnostic JSON is not part of the HostFacts protobuf.
+type Virtualization struct {
+	Available *bool  `json:"available"`
+	Reason    string `json:"reason"`
+	Model     string `json:"model"`
+	HVSupport *int   `json:"hv_support"`
 }
 
 // Proto converts to the wire type.
@@ -161,5 +175,30 @@ func (g Gatherer) Gather(ctx context.Context) (Facts, error) {
 	if f.Serial == "" {
 		return f, errors.New("serial number is empty")
 	}
+	f.Virtualization = g.virtualization(ctx, f.Model)
 	return f, nil
+}
+
+func (g Gatherer) virtualization(ctx context.Context, model string) Virtualization {
+	v := Virtualization{Model: model, Reason: "probe-unavailable"}
+	if out, err := g.out(ctx, "/usr/sbin/sysctl", "-n", "hw.model"); err == nil {
+		if m := strings.TrimSpace(string(out)); m != "" {
+			v.Model = m
+		}
+	}
+	if out, err := g.out(ctx, "/usr/sbin/sysctl", "-n", "kern.hv_support"); err == nil {
+		if n, err := strconv.Atoi(strings.TrimSpace(string(out))); err == nil && (n == 0 || n == 1) {
+			v.HVSupport = &n
+		}
+	}
+	unavailable := false
+	switch {
+	case strings.Contains(strings.ToLower(v.Model), "virtualmac") || strings.Contains(strings.ToLower(model), "virtualmac"):
+		v.Available, v.Reason = &unavailable, "nested-macos"
+	case v.HVSupport != nil && *v.HVSupport == 0:
+		v.Available, v.Reason = &unavailable, "hypervisor-unavailable"
+	case v.HVSupport != nil:
+		v.Reason = "macos-support-unverified"
+	}
+	return v
 }

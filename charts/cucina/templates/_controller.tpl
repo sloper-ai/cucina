@@ -48,7 +48,9 @@ creates when TLS is chart-generated (docs/operations/chart.md §Bootstrap).
     "workerScheduler" (printf "%s:%d" (include "cucina.workerSchedulerHost" .) (int .Values.endpoints.worker.schedulerPort))
     "workerStorage" (printf "%s:%d" (include "cucina.workerStorageHost" .) (int .Values.endpoints.worker.storagePort))
     "workerEnroll" (printf "%s:%d" (include "cucina.workerEnrollmentHost" .) (int .Values.endpoints.worker.enrollmentPort))
-    "hostEndpoint" (printf "%s:%d" (include "cucina.hostsHost" .) (int .Values.endpoints.hosts.port))
+    "hostEndpoint" (include "cucina.hostPort" (list (include "cucina.hostsHost" .) .Values.endpoints.hosts.port))
+    "hostStorage" (include "cucina.hostPort" (list (include "cucina.hostStorageHost" .) .Values.endpoints.worker.storagePort))
+    "hostScheduler" (include "cucina.hostPort" (list (include "cucina.hostSchedulerHost" .) .Values.endpoints.worker.schedulerPort))
     "serverName" (include "cucina.workerServerName" .)
     "stsUrl" (include "cucina.stsUrl" .)
     "managementUrl" (printf "%s:%d" (include "cucina.managementHost" .) (int .Values.endpoints.management.port)))
@@ -84,6 +86,9 @@ creates when TLS is chart-generated (docs/operations/chart.md §Bootstrap).
     "logLevel" $c.logLevel
     "otlpEndpoint" $c.otlpEndpoint
     "costEnabled" $c.costEnabled) -}}
+{{- with .Values.endpoints.sts.aliases -}}
+{{- $_ := set $cfg.endpoints "stsAliases" . -}}
+{{- end -}}
 {{- with .Values.auth.groupLookup -}}
 {{- $_ := set $cfg.auth "groupLookup" (dict "serviceAccountSecret" .serviceAccountSecret "cacheTtl" .cacheTtl) -}}
 {{- end -}}
@@ -128,22 +133,26 @@ validate them).
 {{- define "cucina.certSpecs" -}}
 {{- $f := include "cucina.fullname" . -}}
 {{- $stsHost := (urlParse (include "cucina.stsUrl" .)).hostname -}}
+{{- $stsNames := list $stsHost -}}
+{{- range .Values.endpoints.sts.aliases -}}
+{{- $stsNames = append $stsNames (urlParse .).hostname -}}
+{{- end -}}
 {{- $w := .Values.endpoints.worker -}}
 {{- $consumers := list
   (dict "name" "frontend" "component" "frontend"
         "names" (concat (list (include "cucina.clientHost" .)) .Values.endpoints.client.extraNames)
         "services" (list (include "cucina.frontend.name" .) (include "cucina.client.name" .)))
   (dict "name" "sts" "component" "sts"
-        "names" (concat (list $stsHost) .Values.endpoints.client.extraNames)
+        "names" (concat $stsNames .Values.endpoints.client.extraNames)
         "services" (list (include "cucina.sts.name" .) (printf "%s-api-sts" $f)))
   (dict "name" "frontend-workers" "component" "frontend"
-        "names" (concat (list (include "cucina.workerStorageHost" .) (include "cucina.workerServerName" .)) $w.extraNames)
+        "names" (concat (list (include "cucina.workerStorageHost" .) (include "cucina.workerServerName" .) (include "cucina.hostStorageHost" .)) $w.extraNames)
         "services" (list (include "cucina.frontend.name" .) (printf "%s-storage" (include "cucina.worker.name" .))))
   (dict "name" "scheduler" "component" "scheduler"
-        "names" (concat (list (include "cucina.workerSchedulerHost" .) (include "cucina.workerServerName" .)) $w.extraNames)
+        "names" (concat (list (include "cucina.workerSchedulerHost" .) (include "cucina.workerServerName" .) (include "cucina.hostSchedulerHost" .)) $w.extraNames)
         "services" (list (include "cucina.scheduler.name" .) (printf "%s-scheduler" (include "cucina.worker.name" .))))
   (dict "name" "controller" "component" "controller"
-        "names" (concat (list (include "cucina.workerEnrollmentHost" .) (include "cucina.hostsHost" .) (include "cucina.workerServerName" .) (include "cucina.managementHost" .) $stsHost) $w.extraNames .Values.endpoints.client.extraNames)
+        "names" (concat (list (include "cucina.workerEnrollmentHost" .) (include "cucina.hostsHost" .) (include "cucina.workerServerName" .) (include "cucina.managementHost" .)) $stsNames $w.extraNames .Values.endpoints.client.extraNames)
         "services" (list (include "cucina.controller.name" .) (printf "%s-api-management" $f) (printf "%s-controller" (include "cucina.worker.name" .)))) -}}
 {{- $specs := list -}}
 {{- range $consumers -}}

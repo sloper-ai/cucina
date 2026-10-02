@@ -71,7 +71,7 @@ type env struct {
 	breakKey string
 }
 
-func newEnv(t *testing.T, ratePerMinute int) *env {
+func newEnv(t *testing.T, ratePerMinute int, configure ...func(*config.Controller)) *env {
 	ctx := context.Background()
 	e := &env{t: t, clock: keystest.NewClock(time.Now().Truncate(time.Second)), audit: &bytes.Buffer{}, logs: &bytes.Buffer{}}
 	e.idps = oidctest.NewServer(t)
@@ -86,6 +86,9 @@ func newEnv(t *testing.T, ratePerMinute int) *env {
 			BreakGlassKeySecret: "bg", TokenTTL: config.Duration{Duration: 15 * time.Minute}, Audience: "buildbarn",
 			KeyRotationPublishLead: config.Duration{Duration: 10 * time.Minute}, RateLimitPerMinute: ratePerMinute,
 		},
+	}
+	for _, apply := range configure {
+		apply(&cfg)
 	}
 	require.NoError(t, keys.EnsureSigningKeysIn(ctx, objs, cfg.Auth, e.clock, nil))
 	require.NoError(t, keys.EnsureBreakGlassIn(ctx, objs, cfg.Auth, e.clock, nil))
@@ -435,7 +438,188 @@ func sortedKeys(m map[string]any) []string {
 	return out
 }
 
-// TestRateLimits guards R-AUTH-1 rate limiting: per client IP, with 429 and Retry-After.
+// TestDiscoveryTransportAliases guards R-DATA-4/R-AUTH-1: discovery reached through an
+// explicitly configured transport authority must not send the client's token back
+// over the public route. Neither Host injection nor forwarded headers may invent an
+// endpoint or change the canonical issuer or the other discovery fields.
+func TestDiscoveryTransportAliases(t *testing.T) {
+	const private = "https://sts.private.example.com:8443"
+	longestDNS := strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("z", 61)
+	e := newEnv(t, 1000, func(c *config.Controller) {
+		c.Endpoints.STSAliases = []string{
+			private + "/", "https://DEFAULT.example.com:443", "https://[2001:db8::1]:443",
+			"https://[2001:db8::2]:8443", "https://a0-z9.private.example.com:1",
+			"https://z9-a0.private.example.com:65535", "https://" + longestDNS,
+		}
+	})
+	discover := func(host, forwardedHost string) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, stsURL+"/.well-known/cucina-configuration", nil)
+		req.Host = host
+		if forwardedHost != "" {
+			req.Header.Set("X-Forwarded-Host", forwardedHost)
+			req.Header.Set("X-Forwarded-Proto", "http")
+			req.Header.Set("Forwarded", "host="+forwardedHost+";proto=http")
+		}
+		rr := httptest.NewRecorder()
+		e.srv.Handler().ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &doc))
+		return doc
+	}
+	public := discover("cucina.example.com", "")
+	for _, tc := range []struct {
+		name, host, forwardedHost, origin string
+	}{
+		{"public unchanged", "cucina.example.com", "", stsURL},
+		{"private origin", "sts.private.example.com:8443", "", private},
+		{"host casing", "STS.PRIVATE.EXAMPLE.COM:8443", "", private},
+		{"default HTTPS port omitted", "default.example.com", "", "https://default.example.com"},
+		{"explicit default HTTPS port", "default.example.com:443", "", "https://default.example.com"},
+		{"IPv6 normalized", "[2001:0db8:0:0:0:0:0:1]:443", "", "https://[2001:db8::1]"},
+		{"IPv6 nondefault port", "[2001:db8::2]:8443", "", "https://[2001:db8::2]:8443"},
+		{"DNS digits and hyphen with minimum port", "A0-Z9.private.example.com:1", "", "https://a0-z9.private.example.com:1"},
+		{"maximum port", "z9-a0.private.example.com:65535", "", "https://z9-a0.private.example.com:65535"},
+		{"maximum DNS lengths", longestDNS, "", "https://" + longestDNS},
+		{"foreign Host", "attacker.example.com", "", stsURL},
+		{"alias-looking suffix", "sts.private.example.com.attacker.example.com:8443", "", stsURL},
+		{"wrong port", "sts.private.example.com:9443", "", stsURL},
+		{"forwarded alias on foreign Host", "attacker.example.com", "sts.private.example.com:8443", stsURL},
+		{"forwarded alias on public Host", "cucina.example.com", "sts.private.example.com:8443", stsURL},
+		{"forwarded foreign Host on alias", "sts.private.example.com:8443", "attacker.example.com", private},
+		{"Host is not a URL", "https://sts.private.example.com:8443", "", stsURL},
+		{"Host cannot contain userinfo", "user@sts.private.example.com:8443", "", stsURL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := discover(tc.host, tc.forwardedHost)
+			assert.Equal(t, stsURL, doc["issuer"])
+			assert.Equal(t, tc.origin+"/token", doc["token_endpoint"])
+			assert.Equal(t, tc.origin+"/jwks.json", doc["jwks_uri"])
+			assert.Equal(t, public["endpoints"], doc["endpoints"])
+			assert.Equal(t, public["identity_providers"], doc["identity_providers"])
+		})
+	}
+
+	t.Run("no aliases preserves canonical prefix", func(t *testing.T) {
+		e := newEnv(t, 1000, func(c *config.Controller) { c.Endpoints.STSURL = stsURL + "/sts/" })
+		req := httptest.NewRequest(http.MethodGet, private+"/.well-known/cucina-configuration", nil)
+		rr := httptest.NewRecorder()
+		e.srv.Handler().ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &doc))
+		assert.Equal(t, stsURL+"/sts", doc["issuer"])
+		assert.Equal(t, stsURL+"/sts/token", doc["token_endpoint"])
+		assert.Equal(t, stsURL+"/sts/jwks.json", doc["jwks_uri"])
+	})
+
+	t.Run("public authority alias cannot strip canonical prefix", func(t *testing.T) {
+		e := newEnv(t, 1000, func(c *config.Controller) {
+			c.Endpoints.STSURL = stsURL + "/sts/"
+			c.Endpoints.STSAliases = []string{stsURL + ":443/", private}
+		})
+		for host, want := range map[string]string{
+			"cucina.example.com:443":       stsURL + "/sts",
+			"sts.private.example.com:8443": private,
+		} {
+			req := httptest.NewRequest(http.MethodGet, stsURL+"/.well-known/cucina-configuration", nil)
+			req.Host = host
+			rr := httptest.NewRecorder()
+			e.srv.Handler().ServeHTTP(rr, req)
+			require.Equal(t, http.StatusOK, rr.Code)
+			var doc map[string]any
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &doc))
+			assert.Equal(t, stsURL+"/sts", doc["issuer"])
+			assert.Equal(t, want+"/token", doc["token_endpoint"])
+			assert.Equal(t, want+"/jwks.json", doc["jwks_uri"])
+		}
+	})
+}
+
+// TestDiscoveryRejectsMalformedAliases guards R-TEST-7/R-DATA-4: unsafe or ambiguous
+// transport origins fail startup, including bad entries after a valid one.
+func TestDiscoveryRejectsMalformedAliases(t *testing.T) {
+	e := newEnv(t, 1000)
+	for _, alias := range []string{
+		"", "sts.private.example.com", "http://sts.private.example.com", "https:///",
+		"https://user@sts.private.example.com", "https://user:synthetic@sts.private.example.com",
+		"https://sts.private.example.com/prefix", "https://sts.private.example.com//",
+		"https://sts.private.example.com?query=x", "https://sts.private.example.com?",
+		"https://sts.private.example.com#fragment", "https://sts.private.example.com#",
+		"https://sts.private.example.com:", "https://sts.private.example.com:0",
+		"https://sts.private.example.com:65536", "https://sts.private.example.com:port",
+		"https://*.private.example.com", "https://[not-an-ip]", "https://2001:db8::1",
+	} {
+		t.Run(alias, func(t *testing.T) {
+			_, err := sts.New(sts.Deps{
+				Engine: e.engine, Keys: e.mgr, Clock: e.clock,
+				Config: config.Controller{
+					InstanceNames: []string{"main"},
+					Endpoints:     config.Endpoints{STSURL: stsURL, STSAliases: []string{"https://valid.example.com", alias}},
+				},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "endpoints.stsAliases[1]")
+		})
+	}
+}
+
+// TestPrivateSTSDiscoveryExchange guards the real R-DATA-4 edge: a TLS-verified
+// private alias keeps discovery, exchange and JWKS on that transport; the issued JWT
+// still verifies against the canonical issuer. The IdP is the local OIDC fixture.
+func TestPrivateSTSDiscoveryExchange(t *testing.T) {
+	private := httptest.NewUnstartedServer(nil)
+	t.Cleanup(private.Close)
+	origin := "https://" + private.Listener.Addr().String()
+	e := newEnv(t, 1000, func(c *config.Controller) { c.Endpoints.STSAliases = []string{origin} })
+	private.Config.Handler = e.srv.Handler()
+	private.StartTLS()
+	client := private.Client() // verifies the certificate's loopback-IP SAN, never skips TLS verification
+
+	resp, err := client.Get(origin + "/.well-known/cucina-configuration")
+	require.NoError(t, err)
+	var doc struct {
+		Issuer        string `json:"issuer"`
+		TokenEndpoint string `json:"token_endpoint"`
+		JWKSURI       string `json:"jwks_uri"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&doc))
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, origin+"/token", doc.TokenEndpoint)
+	require.Equal(t, origin+"/jwks.json", doc.JWKSURI)
+	assert.Equal(t, stsURL, doc.Issuer)
+
+	resp, err = client.PostForm(doc.TokenEndpoint, url.Values{
+		"grant_type": {sts.GrantTypeTokenExchange}, "subject_token_type": {auth.TokenTypeIDToken},
+		"subject_token": {e.google.Token(e.googleClaims())},
+	})
+	require.NoError(t, err)
+	var token struct {
+		AccessToken string `json:"access_token"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&token))
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	claims, err := e.mgr.Verifier.Verify(token.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, stsURL, claims.Issuer)
+	assert.Equal(t, "buildbarn", claims.Audience)
+
+	resp, err = client.Get(doc.JWKSURI)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	want, err := e.mgr.Ring.KeySet().JWKSJSON()
+	require.NoError(t, err)
+	assert.JSONEq(t, string(want), string(body))
+}
+
+// TestRateLimits guards R-AUTH-1 rate limiting: per client IP, with 429 and Retry-After,
+// and exactly one request refilled every 20 seconds when the limit is three per minute.
 func TestRateLimits(t *testing.T) {
 	e := newEnv(t, 3)
 	for i := 0; i < 3; i++ {
@@ -445,8 +629,21 @@ func TestRateLimits(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, r.code)
 	assert.Equal(t, "slow_down", r.body["error"])
 	assert.NotEmpty(t, r.hdr.Get("Retry-After"))
-	e.clock.Advance(20 * time.Second) // refills one token (3 per minute)
-	assert.Equal(t, http.StatusBadRequest, e.exchange("not-a-token", auth.TokenTypeIDToken).code)
+	for _, step := range []struct {
+		name       string
+		advance    time.Duration
+		wantStatus int
+	}{
+		{"19 seconds cannot refill a full request", 19 * time.Second, http.StatusTooManyRequests},
+		// 400 means the rate limiter admitted the request and token validation rejected it.
+		{"20 seconds refill exactly one request", time.Second, http.StatusBadRequest},
+		{"the refilled request is consumed", 0, http.StatusTooManyRequests},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			e.clock.Advance(step.advance)
+			assert.Equal(t, step.wantStatus, e.exchange("not-a-token", auth.TokenTypeIDToken).code)
+		})
+	}
 }
 
 // TestServeTLS guards the STS transport (R-AUTH-1, UC22): HTTPS with HTTP/2, and a

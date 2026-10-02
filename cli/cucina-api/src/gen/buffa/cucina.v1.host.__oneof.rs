@@ -11,6 +11,9 @@ pub mod host_message {
         VmEvent(::buffa::alloc::boxed::Box<super::super::super::VMEvent>),
         CommandResult(::buffa::alloc::boxed::Box<super::super::super::CommandResult>),
         Log(::buffa::alloc::boxed::Box<super::super::super::LogData>),
+        MetricsSnapshot(
+            ::buffa::alloc::boxed::Box<super::super::super::MetricsSnapshot>,
+        ),
     }
     impl ::buffa::Oneof for Message {}
     impl From<super::super::super::Hello> for Message {
@@ -63,6 +66,16 @@ pub mod host_message {
             Self::Some(Message::from(v))
         }
     }
+    impl From<super::super::super::MetricsSnapshot> for Message {
+        fn from(v: super::super::super::MetricsSnapshot) -> Self {
+            Self::MetricsSnapshot(::buffa::alloc::boxed::Box::new(v))
+        }
+    }
+    impl From<super::super::super::MetricsSnapshot> for ::core::option::Option<Message> {
+        fn from(v: super::super::super::MetricsSnapshot) -> Self {
+            Self::Some(Message::from(v))
+        }
+    }
     impl ::serde::Serialize for Message {
         fn serialize<S: ::serde::Serializer>(
             &self,
@@ -85,6 +98,9 @@ pub mod host_message {
                 }
                 Self::Log(v) => {
                     map.serialize_entry("log", &**v)?;
+                }
+                Self::MetricsSnapshot(v) => {
+                    map.serialize_entry("metricsSnapshot", &**v)?;
                 }
             }
             map.end()

@@ -79,7 +79,9 @@ type Supervisor struct {
 	restarts int
 }
 
-// Stats are the scraped L2 counters.
+// Stats are the scraped L2 counters. WANReceived/WANSent retain their legacy
+// names but count logical CAS blob bytes, NOT network traffic; hostd's WAN
+// telemetry is measured separately by its counted L2-to-central TCP relay.
 type Stats struct {
 	Hits, Misses         uint64
 	WANReceived, WANSent uint64
@@ -386,6 +388,9 @@ func ParseMetrics(r io.Reader) Stats {
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		line := sc.Text()
+		if strings.HasPrefix(line, "buildbarn_blobstore_blob_access_") {
+			line = "buildbarn_blob_access_" + strings.TrimPrefix(line, "buildbarn_blobstore_blob_access_")
+		}
 		if !strings.HasPrefix(line, "buildbarn_blob_access_operations_blob_size_bytes_") {
 			continue
 		}

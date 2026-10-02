@@ -62,6 +62,10 @@ endpoints:
     # -- Issuer URL of Cucina JWTs and base URL of the STS. Default: https://<client.host>:<sts.port>.
     url: ""
     port: 8443
+    # -- Allowed HTTPS transport origins (e.g. private STS addresses); discovery may return
+    # their token/JWKS URLs when contacted there, but the JWT issuer always stays sts.url.
+    # Only origins, optionally ending in /; no credentials, paths, queries or fragments.
+    aliases: []
   management:
     # -- Host of the management API (cucinactl). Default: client.host.
     host: ""
@@ -82,9 +86,15 @@ endpoints:
     # -- Extra DNS names/IPs for the internal certificate.
     extraNames: []
   hosts:
-    # -- Address Mac hosts use for the controller's HostService. Default: worker.host.
+    # -- Address Mac hosts use for the controller's HostService. Default: the worker enrollment host.
     host: ""
     port: 8446
+    # -- Hostname/IP Mac L2 caches use for storage; default: explicit hosts.host, else the
+    # worker storage host. Uses worker.storagePort; never changes the EC2 worker address.
+    storageHost: ""
+    # -- Hostname/IP Mac relays use for the scheduler; default: explicit hosts.host, else
+    # the worker scheduler host. Uses worker.schedulerPort; never changes the EC2 address.
+    schedulerHost: ""
 
 exposure:
   # Remote-execution endpoint (the frontend's client listener).
@@ -405,7 +415,8 @@ monitoring:
   serviceMonitors:
     enabled: false
     interval: 30s
-  # -- Prometheus HTTP service discovery for EC2 workers (controller /sd/workers) via a ScrapeConfig.
+  # -- Prometheus HTTP discovery through the leader metrics Service: EC2 workers (/sd/workers)
+  # and Mac host/VM metrics relayed over HostService (/sd/hosts), one ScrapeConfig each.
   workerScrapeConfig:
     enabled: false
     refreshInterval: 30s

@@ -51,6 +51,19 @@ func newHostlink(ctx context.Context, d *Deps) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if d.Registry != nil {
+		if err := d.Registry.Register(srv); err != nil {
+			return nil, fmt.Errorf("host aggregate metrics: %w", err)
+		}
+	}
+	if d.Manager != nil {
+		handler := srv.MetricsHandler(cfg.Namespace)
+		for _, path := range []string{hostlink.HostMetricsDiscoveryPath, hostlink.HostMetricsPath} {
+			if err := d.Manager.AddMetricsServerExtraHandler(path, handler); err != nil {
+				return nil, fmt.Errorf("host metrics route %s: %w", path, err)
+			}
+		}
+	}
 	d.HostFleet = srv
 	return srv, nil
 }
@@ -98,6 +111,13 @@ func findMacHost(ctx context.Context, c client.Client, ns, serial string) (*v1al
 // welcome builds the Welcome a host receives at every connect.
 func welcome(d *Deps) hostlink.WelcomeProvider {
 	cfg := d.Config
+	storage, scheduler := cfg.Endpoints.HostStorage, cfg.Endpoints.HostScheduler
+	if storage == "" {
+		storage = cfg.Endpoints.WorkerStorage
+	}
+	if scheduler == "" {
+		scheduler = cfg.Endpoints.WorkerScheduler
+	}
 	return func(serial string) *cucinav1.Welcome {
 		w := &cucinav1.Welcome{
 			Protocol:          &cucinav1.ProtocolVersion{Major: cucinaproto.Major, Minor: cucinaproto.Minor},
@@ -105,8 +125,8 @@ func welcome(d *Deps) hostlink.WelcomeProvider {
 			HeartbeatInterval: durationpb.New(max(cfg.Hosts.StaleAfter.Duration/4, 5*time.Second)),
 			Settings: &cucinav1.HostSettings{
 				LogLevel:                cfg.Observability.LogLevel,
-				CentralEndpoint:         cfg.Endpoints.WorkerStorage,
-				SchedulerEndpoint:       cfg.Endpoints.WorkerScheduler,
+				CentralEndpoint:         storage,
+				SchedulerEndpoint:       scheduler,
 				MaximumMessageSizeBytes: cfg.Worker.MaximumMessageSizeBytes,
 			},
 		}

@@ -164,6 +164,7 @@ type journalVM struct {
 	ClonedImage      string           `json:"clonedImage,omitempty"`
 	ClonedGeneration string           `json:"clonedGeneration,omitempty"`
 	ClonedAt         time.Time        `json:"clonedAt,omitempty"`
+	MetricsPort      uint32           `json:"metricsPort,omitempty"`
 }
 
 type journal struct {
@@ -194,6 +195,7 @@ func (m *Manager) Load() error {
 	}
 	m.host.Cordoned = j.Cordoned
 	for _, v := range j.VMs {
+		m.ports[v.Name] = v.MetricsPort
 		m.host.VMs = append(m.host.VMs, lifecycle.VM{
 			Name: v.Name, Pool: v.Pool, Node: v.Node, Intent: v.Intent, Image: v.Image, Generation: v.Generation,
 			CPU: v.CPU, MemoryGiB: v.MemoryGiB, DiskGiB: v.DiskGiB, MaxAge: v.MaxAge, Reimage: v.Reimage,
@@ -213,7 +215,7 @@ func (m *Manager) saveLocked() {
 		j.VMs = append(j.VMs, journalVM{Name: v.Name, Pool: v.Pool, Node: v.Node, Intent: v.Intent, Image: v.Image,
 			Generation: v.Generation, CPU: v.CPU, MemoryGiB: v.MemoryGiB, DiskGiB: v.DiskGiB, MaxAge: v.MaxAge,
 			Reimage: v.Reimage, StopReason: v.StopReason, ClonedImage: v.ClonedImage,
-			ClonedGeneration: v.ClonedGeneration, ClonedAt: v.ClonedAt})
+			ClonedGeneration: v.ClonedGeneration, ClonedAt: v.ClonedAt, MetricsPort: m.ports[v.Name]})
 	}
 	b, _ := json.MarshalIndent(j, "", "  ")
 	if err := m.o.FS.WriteFileAtomic(m.o.JournalPath, b, 0o600); err != nil {
@@ -396,6 +398,27 @@ func (m *Manager) infoLocked(vm lifecycle.VM) *cucinav1.VMInfo {
 	return info
 }
 
+// MetricsTarget is a running, managed VM's locally reachable worker endpoint.
+// It is resolved from runtime state, never from controller-provided scrape URLs.
+type MetricsTarget struct {
+	Name string
+	IP   netip.Addr
+	Port uint32
+}
+
+// MetricsTargets returns a snapshot for hostd's outbound metrics relay.
+func (m *Manager) MetricsTargets() []MetricsTarget {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []MetricsTarget
+	for _, vm := range m.host.VMs {
+		if ip, ok := m.ips[vm.Name]; vm.Phase == lifecycle.Running && ok && m.ports[vm.Name] > 0 {
+			out = append(out, MetricsTarget{Name: vm.Name, IP: ip, Port: m.ports[vm.Name]})
+		}
+	}
+	return out
+}
+
 // Inventory returns the VMs for Hello/Heartbeat.
 func (m *Manager) Inventory() []*cucinav1.VMInfo {
 	m.mu.Lock()
@@ -567,6 +590,12 @@ func (m *Manager) adopt(ctx context.Context, name string) {
 	tn := m.tartName(name)
 	res, err := m.o.Runtime.GuestExec(ctx, tn, guest.WorkerStatusCmd())
 	ip, ipErr := m.o.Runtime.IP(ctx, tn, 5*time.Second)
+	m.mu.Lock()
+	metricsPort := m.ports[name]
+	m.mu.Unlock()
+	if metricsPort == 0 && err == nil && guest.ParseRunning(res) {
+		metricsPort = m.adoptMetricsPort(ctx, tn)
+	}
 	now := m.o.Clock.Now()
 	m.mu.Lock()
 	i := m.host.Find(name)
@@ -579,6 +608,8 @@ func (m *Manager) adopt(ctx context.Context, name string) {
 		vm.Phase = lifecycle.Running
 		vm.StartedAt, vm.LastActive, vm.LastUpstreamOK = now, now, now
 		m.ips[name] = ip
+		m.ports[name] = metricsPort
+		m.saveLocked()
 		m.mu.Unlock()
 		m.o.Log.Info("adopted running vm", "vm", name, "ip", ip)
 		m.emit(name, "ready", "adopted after hostd restart")
@@ -600,6 +631,38 @@ func (m *Manager) adopt(ctx context.Context, name string) {
 	}
 	m.mu.Unlock()
 	m.Kick()
+}
+
+// Legacy journals lack the metrics port. Recover only the port from the
+// root-owned worker configuration; the scrape address remains the runtime's VM
+// IP, never a hostname supplied by guest data. Missing evidence stays absent.
+func (m *Manager) adoptMetricsPort(ctx context.Context, tartName string) uint32 {
+	res, err := m.o.Runtime.GuestExec(ctx, tartName, ports.Command{Path: "/bin/cat", Args: []string{guest.ConfigRoot + "/bb/worker.json"}})
+	if err != nil || res.ExitCode != 0 || len(res.Stdout) > 128<<10 {
+		return 0
+	}
+	var cfg struct {
+		Global struct {
+			Diagnostics struct {
+				Servers []struct {
+					Addresses []string `json:"listenAddresses"`
+				} `json:"httpServers"`
+			} `json:"diagnosticsHttpServer"`
+		} `json:"global"`
+	}
+	if json.Unmarshal(res.Stdout, &cfg) != nil {
+		return 0
+	}
+	for _, server := range cfg.Global.Diagnostics.Servers {
+		for _, addr := range server.Addresses {
+			if _, port, err := net.SplitHostPort(addr); err == nil {
+				if n, err := strconv.ParseUint(port, 10, 16); err == nil && n > 0 {
+					return uint32(n)
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func (m *Manager) vm(name string) (lifecycle.VM, bool) {

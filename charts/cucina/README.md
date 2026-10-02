@@ -115,8 +115,11 @@ test profiles: [`ci/`](ci).
 | `endpoints.client.port` | integer | External port of the remote-execution endpoint. |
 | `endpoints.hosts.host` | see schema | Address Mac hosts use for the HostService. Default the enrollment host. |
 | `endpoints.hosts.port` | integer | External port of the HostService. |
+| `endpoints.hosts.schedulerHost` | see schema | Scheduler hostname/IP reachable from Mac sites; uses worker.schedulerPort. Default: explicit hosts.host, else the worker scheduler host. Does not change EC2 endpoints. |
+| `endpoints.hosts.storageHost` | see schema | Storage hostname/IP reachable from Mac sites; uses worker.storagePort. Default: explicit hosts.host, else the worker storage host. Does not change EC2 endpoints. |
 | `endpoints.management.host` | see schema | Host of the management API. Default endpoints.client.host. |
 | `endpoints.management.port` | integer | External port of the management API. |
+| `endpoints.sts.aliases` | array | Allowed HTTPS transport origins for the STS; discovery token/JWKS URLs may use them, but the canonical JWT issuer stays sts.url. Their hostname/IP SANs are included in STS certificates. |
 | `endpoints.sts.port` | integer | External port of the STS. |
 | `endpoints.sts.url` | string | Issuer URL of Cucina JWTs (no trailing slash needed). Default https://<client.host>:<sts.port>. |
 | `endpoints.worker.enrollmentHost` | see schema | Host of the enrollment API when it has its own load balancer. |
@@ -208,7 +211,7 @@ test profiles: [`ci/`](ci).
 | `monitoring.pushgateway.resources` | object |  |
 | `monitoring.serviceMonitors.enabled` | boolean |  |
 | `monitoring.serviceMonitors.interval` | string |  |
-| `monitoring.workerScrapeConfig.enabled` | boolean | ScrapeConfig over the controller's HTTP-SD endpoint for EC2 workers. |
+| `monitoring.workerScrapeConfig.enabled` | boolean | ScrapeConfigs using the leader's HTTP discovery for EC2 workers and Mac host/VM metrics relayed through HostService. |
 | `monitoring.workerScrapeConfig.refreshInterval` | string |  |
 | `nameOverride` | string | Replaces the chart name in object names. |
 | `networkPolicy.enabled` | boolean | Restrict the in-cluster-only ports (storage gRPC, scheduler client and BuildQueueState). |

@@ -22,11 +22,60 @@ A Kubernetes Service selects one set of pods, so each endpoint is several Servic
 | `<release>-api-management` | 8444 (`endpoints.management.port`) | **leader** controller `:8444` | gRPC, TLS + JWT | `cucinactl` |
 | `<release>-worker-storage` | 8981 (`endpoints.worker.storagePort`) | frontend `:8981` | gRPC, mTLS | workers, Mac host L2 caches |
 | `<release>-worker-scheduler` | 8983 (`endpoints.worker.schedulerPort`) | scheduler `:8983` | gRPC, mTLS | workers (Mac VMs through their host's relay) |
-| `<release>-worker-controller` | 8445 / 8446 (`endpoints.worker.enrollmentPort`, `endpoints.hosts.port`) | controller `:8445`, `:8446` | gRPC TLS (enrollment), mTLS (hosts) | EC2 workers at boot, Mac hosts |
+| `<release>-worker-controller` | 8445 / 8446 (`endpoints.worker.enrollmentPort`, `endpoints.hosts.port`) | **leader** controller `:8445`, `:8446` | gRPC TLS (enrollment), mTLS (hosts) | EC2 workers at boot, Mac hosts |
+| `<release>-controller-leader` | 9090 (in-cluster only) | **leader** controller metrics listener | HTTP service discovery | Prometheus `/sd/workers`, `/sd/hosts` |
 
 `exposure.client.type` (LoadBalancer, NodePort, ClusterIP, Ingress, Gateway) applies to `client`;
 `exposure.api.type` and `exposure.worker.type` (LoadBalancer, NodePort, ClusterIP) to the others. The addresses the
 controller hands to workers and clients come from `endpoints.*` (set them to the load balancers' names or IPs).
+
+With multiple controllers, host/enrollment traffic and HTTP discovery select `cucina.sloper.ai/leader=true`: the
+scaler's HostFleet sessions live in that process, not on standbys. A single controller needs no leader label for these
+Services. The existing worker-controller load balancer is reused; controller-leader is ClusterIP only. The latter has
+an endpoint label so the component ServiceMonitor does not scrape the same controller a second time.
+
+## Mac sites outside the VPC
+
+Keep `endpoints.worker.{host,storageHost,schedulerHost,enrollmentHost}` private: those are the addresses EC2 workers
+receive. Mac hosts can use separate, already-routed hostname/IP aliases without changing EC2 traffic:
+
+```yaml
+endpoints:
+  worker:
+    host: worker.internal.example.com
+  hosts:
+    host: hosts.example.com
+    # Optional when one hosts.host address routes all three ports:
+    storageHost: storage.example.com
+    schedulerHost: scheduler.example.com
+```
+
+`hosts.storageHost` and `hosts.schedulerHost` default to an explicitly set `hosts.host`, otherwise to their respective
+worker hosts. They use `worker.storagePort` and `worker.schedulerPort`. The controller advertises these Mac-specific
+addresses in the HostService welcome; the chart adds their DNS/IP SANs to the frontend-worker and scheduler
+certificates. Existing-Secret TLS must carry those SANs too. EC2 storage/scheduler addresses are never replaced.
+
+Aliases do not provision a network path. Publish the existing mTLS listener ports through the deployment's L4/NAT
+routing, or provide VPN/private connectivity, and restrict sources to the Mac sites. Do not change EC2 endpoints to
+public addresses to make Mac access work: that causes avoidable public-IP/NAT traffic.
+
+## STS transport aliases
+
+`endpoints.sts.url` remains the canonical JWT issuer. Set `endpoints.sts.aliases` to an explicit allowlist of alternative
+HTTPS origins when clients inside the VPC must exchange tokens without a public-endpoint round trip:
+
+```yaml
+endpoints:
+  sts:
+    url: https://auth.example.com:8443
+    aliases: [https://auth.internal.example.com:8443]
+```
+
+Only HTTPS origins are accepted (an optional trailing `/`, but no credentials, other path, query or fragment). The
+chart adds each alias hostname/IP to STS TLS SANs, including the controller's STS listener; existing Secrets must
+already cover them. Discovery contacted through an allowlisted inbound Host returns token/JWKS URLs on that origin;
+the discovery issuer and signed JWT issuer do not change. Proxies must preserve Host: forwarded-host headers do not
+select an alias. Empty aliases leave the previous configuration unchanged.
 
 **Idle timeouts.** Workers long-poll the scheduler for up to 2 minutes and Bazel keeps Execute streams open for the
 whole action; every load balancer, NAT and proxy on these paths must allow idle connections longer than 2 minutes (AWS NLB:

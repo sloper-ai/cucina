@@ -55,6 +55,7 @@ pub mod __buffa {
         reg.register_json_any(super::__ENROLL_HOST_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__HOST_FACTS_JSON_ANY);
         reg.register_json_any(super::__HOST_MESSAGE_JSON_ANY);
+        reg.register_json_any(super::__METRICS_SNAPSHOT_JSON_ANY);
         reg.register_json_any(super::__HELLO_JSON_ANY);
         reg.register_json_any(super::__HEARTBEAT_JSON_ANY);
         reg.register_json_any(super::__HOST_METRICS_JSON_ANY);
@@ -218,6 +219,10 @@ pub use self::__buffa::view::HostFactsOwnedView;
 pub use self::__buffa::view::HostMessageView;
 #[doc(inline)]
 pub use self::__buffa::view::HostMessageOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::MetricsSnapshotView;
+#[doc(inline)]
+pub use self::__buffa::view::MetricsSnapshotOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::HelloView;
 #[doc(inline)]

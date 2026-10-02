@@ -231,7 +231,6 @@ func ActivationScript(c, worker Console, dirs []Dir) (string, error) {
 	lines := []string{
 		"set -eu",
 		"mdutil -a -i off >/dev/null 2>&1 || true",
-		"install -d -o " + uid + " -g " + gid + " -m 0755 /var/log/cucina",
 	}
 	for _, d := range dirs {
 		if !safePath.MatchString(d.Path) || strings.Contains(d.Path, "..") {
@@ -243,7 +242,30 @@ func ActivationScript(c, worker Console, dirs []Dir) (string, error) {
 		}
 		lines = append(lines, fmt.Sprintf("mkdir -p '%s' && chown %s '%s' && chmod %o '%s'", d.Path, owner, d.Path, d.Mode&0o7777, d.Path))
 	}
+	// The parent belongs to root even when both daemons are unprivileged:
+	// actions must never replace paths that launchd subsequently opens as root.
+	// Lock the parent first; reject planted links/non-files instead of opening,
+	// truncating or changing ownership of their targets (including hardlinks).
 	lines = append(lines,
+		`[ ! -L /var/log/cucina ] || { printf '%s\n' 'unsafe log directory' >&2; exit 1; }`,
+		"install -d -o 0 -g 0 -m 0755 /var/log/cucina",
+		"chmod -N /var/log/cucina", // ownership/mode do not remove macOS ACL grants
+		`prepare_log() {
+  if [ -L "$2" ] || { [ -e "$2" ] && [ ! -f "$2" ]; }; then
+    printf 'unsafe log file: %s\n' "$2" >&2
+    return 1
+  fi
+  if [ -e "$2" ]; then
+    [ "$(stat -f %l "$2")" = 1 ] || { printf 'hardlinked log file: %s\n' "$2" >&2; return 1; }
+  else
+    (umask 077; set -C; : > "$2")
+  fi
+  chmod -N "$2"
+  chown "$1" "$2"
+  chmod 0644 "$2"
+}`,
+		"prepare_log "+wowner+" /var/log/cucina/bb_worker.log",
+		"prepare_log "+uid+":"+gid+" /var/log/cucina/bb_runner.log",
 		"launchctl bootout gui/"+uid+"/"+RunnerLabel+" 2>/dev/null || true",
 		"launchctl bootout system/"+WorkerLabel+" 2>/dev/null || true",
 		"n=0; until launchctl bootstrap gui/"+uid+" "+RunnerPlist+"; do n=$((n+1)); [ $n -lt 10 ] || exit 1; sleep 1; done",

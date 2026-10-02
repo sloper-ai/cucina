@@ -77,6 +77,7 @@ type Link struct {
 	lastContact time.Time
 	welcome     *cucinav1.Welcome
 	outbox      []*cucinav1.HostMessage
+	metrics     map[string]queuedMetric
 	notify      chan struct{}
 	commands    *dedup
 	sessions    int
@@ -267,11 +268,13 @@ func (l *Link) session(ctx context.Context) error {
 	l.conn, l.connected, l.welcome = conn, true, w
 	l.lastContact = l.o.Clock.Now()
 	l.sessions++
+	sessionID := l.sessions
 	l.mu.Unlock()
 	defer func() {
 		l.mu.Lock()
 		l.connected = false
 		l.conn = nil
+		l.metrics = nil // raw samples never survive a session
 		l.mu.Unlock()
 	}()
 	l.o.Log.Info("connected to controller", "endpoint", addr, "cluster", w.GetClusterId())
@@ -286,7 +289,7 @@ func (l *Link) session(ctx context.Context) error {
 		interval = l.o.DefaultHeartbeat
 	}
 	sendErr := make(chan error, 1)
-	go func() { sendErr <- l.sender(sctx, stream, interval) }()
+	go func() { sendErr <- l.sender(sctx, stream, interval, sessionID) }()
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
@@ -311,7 +314,7 @@ func (l *Link) session(ctx context.Context) error {
 	}
 }
 
-func (l *Link) sender(ctx context.Context, stream cucinav1.HostService_ConnectClient, interval time.Duration) error {
+func (l *Link) sender(ctx context.Context, stream cucinav1.HostService_ConnectClient, interval time.Duration, session int) error {
 	hb := l.o.Clock.After(0)
 	for {
 		select {
@@ -342,6 +345,11 @@ func (l *Link) sender(ctx context.Context, stream cucinav1.HostService_ConnectCl
 				l.outbox = l.outbox[1:]
 			}
 			l.mu.Unlock()
+		}
+		for _, message := range l.takeMetrics(session) {
+			if err := stream.Send(message); err != nil {
+				return err // deliberately drop, never replay a stale scrape
+			}
 		}
 	}
 }

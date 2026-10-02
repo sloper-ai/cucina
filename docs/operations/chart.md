@@ -13,7 +13,8 @@ certificates, keys, storage, Buildbarn upgrades. Values are documented in
 | `<release>-frontend` | Deployment (bb_storage) | client listener `:8980` (TLS + Cucina JWT), worker/host listener `:8981` (mTLS), diagnostics `:9980` |
 | `<release>-storage` | StatefulSet (bb_storage), headless Service | one PVC per shard; CAS, AC, ISCC, FSAC `local` with persistent state |
 | `<release>-scheduler` | Deployment (bb_scheduler), 1 replica, `Recreate` | client `:8982` (forwarded JWT), worker `:8983` (mTLS), BuildQueueState `:8984` (controller mTLS) |
-| `<release>-controller` | Deployment, leader election | probes `:8081`, metrics + `/sd/workers` `:9090`, STS `:8443`, management `:8444`, enrollment `:8445`, host API `:8446` |
+| `<release>-controller` | Deployment, leader election | probes `:8081`, metrics + `/sd/workers` + `/sd/hosts` `:9090`, STS `:8443`, management `:8444`, enrollment `:8445`, host API `:8446` |
+| `<release>-controller-leader` | ClusterIP Service, metrics port only | HTTP discovery uses the leader's fleet/session state, not a randomly selected standby |
 | `<release>-sts` | Deployment (`cucina-controller sts`) | STS `:8443` |
 | exposure Services | `client`, `api-sts`, `api-management` (leader only), `worker-storage`, `worker-scheduler`, `worker-controller` | see [exposure.md](exposure.md) |
 | CRDs | WorkerPool, MacHost, TrustPolicy | `crds/` (created by `helm install`), re-applied from the controller image by the `crds` hook ([ADR 0406](../adr/0406-crds-directory-and-apply-hook.md)); never deleted |
@@ -119,6 +120,20 @@ kubectl delete crd workerpools.cucina.sloper.ai machosts.cucina.sloper.ai trustp
 * **JWT signing keys** rotate in the controller (R-AUTH-9: publish ≥ 10 min before use). A compromised key: remove it from
   the JWKS and restart the frontends and the scheduler (Buildbarn caches validated tokens).
 * **Revocation**: `cucinactl` adds the sid/sub to the deny-list ConfigMap; every authorizer reads it (≤ 2–3 min).
+
+## Worker and Mac metrics discovery
+
+`monitoring.workerScrapeConfig.enabled` creates two ScrapeConfigs. Both poll the internal
+`<release>-controller-leader:9090` Service: `/sd/workers` lists EC2 workers, while `/sd/hosts` lists connected Mac
+hosts' fresh hostd, L2 and VM-worker metric snapshots. Host metrics already cross the outbound HostService stream;
+no inbound connection to a Mac site is needed.
+
+Each Mac target names the owning controller Pod and its separate `/metrics/hosts/...` path. The chart preserves those
+addresses/paths and the discovery's authoritative `namespace`, `serial`, `pool`, `node` and `cucina_component` labels;
+`honorLabels: false` prevents scraped payload labels from replacing them. A handoff has a telemetry gap until hosts
+reconnect and send new snapshots. The ordinary ServiceMonitor still scrapes every controller's component metrics;
+the discovery-only Service is excluded to prevent double scraping. Host/enrollment connections also follow the
+leader when multiple controllers run, using the existing external Service and load balancer.
 
 ## Buildbarn upgrades (R-OPS-1)
 
