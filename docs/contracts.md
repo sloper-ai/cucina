@@ -142,6 +142,6 @@ recording rule `cucina:cas_retention_seconds` defined in `slo/` and `charts/cuci
 1. ADR 0001 — Buildbarn dual-schema pins (above).
 2. ADR 0002 — Queue declaration is chart-rendered from `values.pools`; CR-only pools need a declared queue (above).
 3. `go.mod` module `github.com/sloper-ai/cucina`, Go 1.27.1; deps are added with `lockf $CUCINA_DEV_STORAGE/gomod.lock go get …` (never concurrent `go mod tidy`).
-4. Generated code is checked in: Go protobufs next to the `.proto` files (`api/proto/cucina/v1/*.pb.go`), Rust protobufs under `cli/cucina-api/src/gen/`,
+4. Generated code is checked in: Go protobufs next to the `.proto` files (`api/proto/cucina/v1/*.pb.go`), Rust protobufs (buffa) and service stubs/clients (connect-rust, ADR 0003) under `cli/cucina-api/src/gen/{buffa,connect}/`,
    CRDs in `api/crds/`, deepcopy in `api/v1alpha1/zz_generated.deepcopy.go` (regenerate: `controller-gen object paths=./api/v1alpha1/...`,
    `controller-gen crd paths=./api/v1alpha1/... output:crd:dir=api/crds`).
