@@ -57,7 +57,10 @@ while [ $# -gt 0 ]; do
 	*) die "unknown argument: $1" ;;
 	esac
 done
-[ "$(id -u)" = 0 ] || die "run as root inside the test VM"
+[ "$(/usr/bin/id -u)" = 0 ] || die "run as root inside the test VM"
+case $(/usr/sbin/sysctl -n hw.model) in VirtualMac*) ;; *) die "refusing to change trust or preferences outside a macOS VM" ;; esac
+[ "$(/usr/bin/stat -f '%u:%Lp' /var/db/cucina-t14-throwaway 2>/dev/null)" = 0:600 ] ||
+	die "missing root-owned T14 throwaway sentinel (/var/db/cucina-t14-throwaway, mode 0600)"
 [ -f "$signer" ] || die "--signer-cert FILE is required"
 
 # DER SHA-1 of the signer (works for PEM and DER input).
@@ -70,7 +73,7 @@ fi
 if [ "$undo" = 1 ]; then
 	security remove-trusted-cert -d "$signer" 2>/dev/null || true
 	security delete-certificate -Z "$signer_sha1" "$SYSTEM_KEYCHAIN" 2>/dev/null || true
-	rm -f "$MP_DIR/$HOSTD_DOMAIN.plist" "$MP_DIR/$SETUP_DOMAIN.plist" "/Library/Preferences/$HOSTD_DOMAIN.plist"
+	rm -f "$MP_DIR/$HOSTD_DOMAIN.plist" "$MP_DIR/$SETUP_DOMAIN.plist" "/Library/Preferences/$HOSTD_DOMAIN.plist" "/Library/Preferences/$SETUP_DOMAIN.plist"
 	rm -f "$MARKER"
 	log "removed simulated trust and preferences (the cucina user, if any, is left in place)"
 	exit 0
@@ -81,18 +84,13 @@ case $controller_url in https://*) ;; *) die "--controller-url must be https://"
 [ -n "$ca_cert" ] || [ -n "$ca_pin" ] || die "pass --ca-cert FILE or --ca-pin HEX"
 [ -z "$ca_cert" ] || [ -f "$ca_cert" ] || die "no such file: $ca_cert"
 case $autologin in postinstall | preset) ;; *) die "--autologin must be postinstall or preset" ;; esac
+codec=$(dirname -- "$0")/../payload/cucina-kcpassword
+[ "$autologin" != preset ] || [ -x "$codec" ] || die "preset mode requires the complete kit (missing kcpassword codec)"
 
 # --- 01-cucina-trust: trusted root in the System keychain (what a com.apple.security.root payload does) ----------
-# Admin trust settings need an authorization right that normally requires a GUI prompt; allow it for this one
-# command and restore the previous rule (throwaway VM only).
-rule=$(mktemp)
-security authorizationdb read com.apple.trust-settings.admin >"$rule" 2>/dev/null
-restore_rule() { security authorizationdb write com.apple.trust-settings.admin <"$rule" >/dev/null 2>&1 || true; rm -f "$rule"; }
-trap restore_rule EXIT INT TERM
-security authorizationdb write com.apple.trust-settings.admin allow >/dev/null 2>&1
+# Root on the throwaway macOS 27 VM can add administrator trust directly. Never rewrite authorizationdb:
+# macOS rejects that policy edit, and weakening a global right is unnecessary even in this simulation.
 security add-trusted-cert -d -r trustRoot -k "$SYSTEM_KEYCHAIN" "$signer"
-restore_rule
-trap - EXIT INT TERM
 log "trusted package signer $signer_sha1 in the System keychain"
 
 # --- 02-cucina-hostd-preferences ------------------------------------------------------------------------------
@@ -144,6 +142,10 @@ else
 	plutil -insert RestartAfterFirstInstall -bool NO "$setup"
 fi
 install -o root -g wheel -m 0644 "$setup" "$MP_DIR/$SETUP_DOMAIN.plist"
+if [ "$local_copy" = 1 ]; then
+	# Hand-written managed preferences may be purged at reboot; retain the no-auto-restart setting too.
+	install -o root -g wheel -m 0600 "$setup" "/Library/Preferences/$SETUP_DOMAIN.plist"
+fi
 rm -f "$setup"
 log "wrote $MP_DIR/$SETUP_DOMAIN.plist (RestartAfterFirstInstall=$([ "$allow_restart" = 1 ] && echo true || echo false))"
 
@@ -155,8 +157,15 @@ if [ "$autologin" = preset ]; then
 		pw=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32)
 		sysadminctl -addUser cucina -fullName "Cucina VM runner" -shell /bin/zsh -home /Users/cucina -password "$pw" >/dev/null 2>&1
 		createhomedir -c -u cucina >/dev/null 2>&1 || true
-		sysadminctl -autologin set -userName cucina -password "$pw" >/dev/null 2>&1
-		(umask 077 && printf '%s\n' "$pw" >/var/root/cucina-simulated-password)
+		dscl . -authonly cucina "$pw" >/dev/null 2>&1 || die "created account password does not authenticate"
+		install -d -o cucina -g staff -m 0700 /Users/cucina/Library/Keychains
+		sudo -H -u cucina security create-keychain -p "$pw" /Users/cucina/Library/Keychains/login.keychain-db
+		sudo -H -u cucina security default-keychain -d user -s /Users/cucina/Library/Keychains/login.keychain-db
+		sudo -H -u cucina security set-keychain-settings /Users/cucina/Library/Keychains/login.keychain-db
+		encoded=$(mktemp /private/etc/kcpassword.cucina.XXXXXX)
+		printf '%s' "$pw" | "$codec" >"$encoded"
+		chown root:wheel "$encoded" && chmod 0600 "$encoded" && mv -f "$encoded" /etc/kcpassword
+		defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser -string cucina
 		pw=''
 		log "created cucina (standard user) with auto-login, as an MDM-created account would be"
 	fi

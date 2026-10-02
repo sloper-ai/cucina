@@ -14,7 +14,7 @@
 #   --out DIR                      output directory (default: ~/.config/cucina/profiles, created 0700). Rendered
 #                                  profiles contain the site enrollment token (02) and maybe a password (05):
 #                                  refused inside a git work tree unless --allow-repo-output (tests only)
-#   --signer-cert FILE             package-signing certificate (PEM or DER); give twice during a rotation
+#   --signer-cert FILE             installer/application certificate (PEM or DER); up to four for dual-role rotation
 #   --ca-cert FILE                 Cucina CA (PEM or DER): hostd CACertificate and, unless --no-trust-ca, a root
 #                                  payload in 01-cucina-trust
 #   --token-file FILE              site enrollment token (else CUCINA_SITE_ENROLLMENT_TOKEN)
@@ -39,7 +39,7 @@ die() {
 }
 
 out=${CUCINA_PROFILES_OUT:-$HOME/.config/cucina/profiles}
-only='' allow_repo=0 signer1='' signer2='' ca_cert='' trust_ca=1 token_file='' pw_file=''
+only='' allow_repo=0 signer1='' signer2='' signer3='' signer4='' ca_cert='' trust_ca=1 token_file='' pw_file=''
 
 # set_var NAME VALUE — records a setting given on the command line or in a config file.
 set_var() {
@@ -69,7 +69,8 @@ while [ $# -gt 0 ]; do
 	--only) only=$2 && shift 2 ;;
 	--allow-repo-output) allow_repo=1 && shift ;;
 	--signer-cert)
-		if [ -z "$signer1" ]; then signer1=$2; elif [ -z "$signer2" ]; then signer2=$2; else die "at most two --signer-cert"; fi
+		if [ -z "$signer1" ]; then signer1=$2; elif [ -z "$signer2" ]; then signer2=$2;
+		elif [ -z "$signer3" ]; then signer3=$2; elif [ -z "$signer4" ]; then signer4=$2; else die "at most four --signer-cert"; fi
 		shift 2
 		;;
 	--ca-cert) ca_cert=$2 && shift 2 ;;
@@ -105,6 +106,13 @@ if [ -n "$signer2" ]; then
 	set_var CUCINA_SIGNER2_CERT_B64 "$(cert_b64 "$signer2")"
 	set_var CUCINA_SIGNER2_CERT_NAME "$(cert_cn "$signer2")"
 fi
+for n in 3 4; do
+	eval 'cert=$signer'"$n"
+	[ -n "$cert" ] || continue
+	[ -f "$cert" ] || die "no such file: $cert"
+	set_var "CUCINA_SIGNER${n}_CERT_B64" "$(cert_b64 "$cert")"
+	set_var "CUCINA_SIGNER${n}_CERT_NAME" "$(cert_cn "$cert")"
+done
 if [ -n "$ca_cert" ]; then
 	[ -f "$ca_cert" ] || die "no such file: $ca_cert"
 	set_var CUCINA_CA_CERT_B64 "$(cert_b64 "$ca_cert")"
@@ -146,7 +154,7 @@ case $(v CUCINA_LOG_LEVEL) in '' | debug | info | warn | error) ;; *) die "CUCIN
 case $(v CUCINA_CONTROLLER_URL) in '' | https://*) ;; *) die "CUCINA_CONTROLLER_URL must start with https://" ;; esac
 case $(v CUCINA_RUN_AS_USER)$(v CUCINA_AUTOLOGIN_USER) in *[!a-z0-9_.-]*) die "user names must be lowercase short names" ;; esac
 case $(v CUCINA_TART_PATH) in '' | /*) ;; *) die "CUCINA_TART_PATH must be an absolute path" ;; esac
-for b64 in CUCINA_SIGNER_CERT_B64 CUCINA_SIGNER2_CERT_B64 CUCINA_CA_CERT_B64; do
+for b64 in CUCINA_SIGNER_CERT_B64 CUCINA_SIGNER2_CERT_B64 CUCINA_SIGNER3_CERT_B64 CUCINA_SIGNER4_CERT_B64 CUCINA_CA_CERT_B64; do
 	case $(v "$b64") in *[!A-Za-z0-9+/=]*) die "$b64 is not base64" ;; esac
 done
 

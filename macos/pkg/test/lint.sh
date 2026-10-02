@@ -36,6 +36,9 @@ for f in $scripts; do
 	(cd "$ROOT" && "$SHELLCHECK" -s sh -x -P pkg/scripts "$f") || bad "shellcheck $f"
 done
 
+# The small kcpassword codec uses system Perl, not shell (no non-system runtime at install time).
+perl -c "$ROOT/pkg/payload/cucina-kcpassword" >/dev/null 2>&1 || bad "kcpassword Perl syntax"
+
 # Property lists (templates are valid plists by construction: placeholders live in strings, data and comments).
 for f in $(cd "$ROOT" && find . -type f \( -name '*.mobileconfig' -o -name '*.plist' \) ! -path '*/build/*' | sort); do
 	plutil -lint "$ROOT/$f" >/dev/null || bad "plutil -lint $f"

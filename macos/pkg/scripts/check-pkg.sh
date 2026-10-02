@@ -7,7 +7,8 @@
 #
 # usage: check-pkg.sh PKG [--version X.Y.Z] [--signed] [--cert-sha1 HEX] [--uninstaller]
 #   --signed          require a product signature and signed Mach-O binaries
-#   --cert-sha1 HEX   require that signer certificate (SHA-1 of the DER, as in anchor = H"...")
+#   --cert-sha1 HEX   require that product signer certificate (also binaries unless --app-cert-sha1 is given)
+#   --app-cert-sha1 HEX  require this separate Mach-O signer (private application identity, ADR 0752)
 #   --uninstaller     PKG is the payload-free uninstaller
 set -eu
 
@@ -18,12 +19,13 @@ cucina_load_pins "$PKG_DIR/pins.env"
 [ $# -ge 1 ] || cucina_die "usage: check-pkg.sh PKG [--version X.Y.Z] [--signed] [--cert-sha1 HEX] [--uninstaller]"
 pkg=$1
 shift
-want_version='' signed=0 cert_sha1='' uninstaller=0
+want_version='' signed=0 cert_sha1='' app_cert_sha1='' uninstaller=0
 while [ $# -gt 0 ]; do
 	case $1 in
 	--version) want_version=$2 && shift 2 ;;
 	--signed) signed=1 && shift ;;
 	--cert-sha1) cert_sha1=$(printf '%s' "$2" | tr 'a-f' 'A-F' | tr -d ': ') && shift 2 ;;
+	--app-cert-sha1) app_cert_sha1=$(printf '%s' "$2" | tr 'a-f' 'A-F' | tr -d ': ') && shift 2 ;;
 	--uninstaller) uninstaller=1 && shift ;;
 	*) cucina_die "unknown argument: $1" ;;
 	esac
@@ -97,7 +99,7 @@ if find "$P" -name '._*' | grep -q .; then bad "payload contains AppleDouble ._ 
 
 for f in "/Library/LaunchDaemons/$CUCINA_LABEL.plist" /private/etc/newsyslog.d/ai.sloper.cucina.conf \
 	/usr/local/cucina/bin/cucina-hostd /usr/local/cucina/bin/bb_storage /usr/local/cucina/bin/tart \
-	/usr/local/cucina/bin/cucina-host-setup /usr/local/cucina/bin/cucina-host-uninstall \
+	/usr/local/cucina/bin/cucina-host-setup /usr/local/cucina/bin/cucina-host-uninstall /usr/local/cucina/bin/cucina-kcpassword \
 	/usr/local/cucina/share/doc/LICENSE.md /usr/local/cucina/share/doc/THIRD_PARTY_NOTICES.md \
 	/usr/local/cucina/share/doc/tart/LICENSE /usr/local/cucina/tart.app/Contents/MacOS/tart; do
 	check "payload has $f" test -e "$P$f"
@@ -119,6 +121,7 @@ expect_eq "ProgramArguments[0]" "$(plutil -extract ProgramArguments.0 raw -o - "
 expect_eq "ProgramArguments[1]" "$(plutil -extract ProgramArguments.1 raw -o - "$plist" 2>/dev/null)" run
 expect_eq "KeepAlive" "$(plutil -extract KeepAlive raw -o - "$plist" 2>/dev/null)" true
 expect_eq "RunAtLoad" "$(plutil -extract RunAtLoad raw -o - "$plist" 2>/dev/null)" true
+expect_eq "VM processes survive daemon restart" "$(plutil -extract AbandonProcessGroup raw -o - "$plist" 2>/dev/null)" true
 expect_eq "runs as root (no UserName)" "$(plutil -extract UserName raw -o - "$plist" 2>/dev/null || echo root)" root
 
 # --- tart.app exactly as released ---------------------------------------------------------------------------
@@ -146,10 +149,10 @@ for bin in cucina-hostd bb_storage; do
 	if printf '%s\n' "$binfo" | grep -q '^CodeDirectory .*flags=.*runtime'; then ok "$bin hardened runtime"; else bad "$bin lacks hardened runtime"; fi
 	case $bin in cucina-hostd) ident=ai.sloper.cucina.hostd ;; *) ident=ai.sloper.cucina.bb_storage ;; esac
 	if has_line "$binfo" "Identifier=$ident"; then ok "$bin identifier $ident"; else bad "$bin identifier (want $ident)"; fi
-	if [ -n "$cert_sha1" ]; then
+	if [ -n "${app_cert_sha1:-$cert_sha1}" ]; then
 		(cd "$work" && codesign -d --extract-certificates="$bin.cert" "$f" >/dev/null 2>&1) || true
 		got=$(shasum -a 1 "$work/$bin.cert0" 2>/dev/null | cut -d ' ' -f 1 | tr 'a-f' 'A-F')
-		expect_eq "$bin signer certificate" "$got" "$cert_sha1"
+		expect_eq "$bin signer certificate" "$got" "${app_cert_sha1:-$cert_sha1}"
 	fi
 done
 if [ "$(cucina_sha256 "$P/usr/local/cucina/bin/bb_storage")" = "$BB_STORAGE_SHA256" ]; then

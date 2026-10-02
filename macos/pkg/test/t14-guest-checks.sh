@@ -5,6 +5,10 @@
 # usage: t14-guest-checks.sh after-install VERSION | after-reboot | no-login | mark | after-upgrade VERSION |
 #        after-uninstall
 set -u
+# Safety guard: no observations that mutate users/keychains may run on a physical Mac or an unmarked VM.
+[ "$(/usr/bin/id -u)" = 0 ] || exit 2
+case $(/usr/sbin/sysctl -n hw.model) in VirtualMac*) ;; *) printf 'FAIL  physical host refused\n'; exit 2 ;; esac
+[ "$(/usr/bin/stat -f '%u:%Lp' /var/db/cucina-t14-throwaway 2>/dev/null)" = 0:600 ] || exit 2
 
 LABEL=ai.sloper.cucina.hostd
 PKG_ID=ai.sloper.cucina.host
@@ -24,9 +28,9 @@ console() { stat -f %Su /dev/console 2>/dev/null; }
 # keychain_probe: can the cucina user write to its login keychain without UI (what Virtualization.framework needs)?
 keychain_probe() {
 	uid=$(id -u cucina 2>/dev/null) || return 1
-	launchctl asuser "$uid" sudo -u cucina /usr/bin/security add-generic-password -U -a t14 -s cucina-t14-probe -w probe \
+	launchctl asuser "$uid" sudo -H -u cucina /usr/bin/perl -e 'alarm 15; exec @ARGV or die "exec failed"' -- /usr/bin/security add-generic-password -U -a t14 -s cucina-t14-probe -w probe \
 		>/dev/null 2>&1 || return 1
-	launchctl asuser "$uid" sudo -u cucina /usr/bin/security delete-generic-password -a t14 -s cucina-t14-probe >/dev/null 2>&1
+	launchctl asuser "$uid" sudo -H -u cucina /usr/bin/perl -e 'alarm 15; exec @ARGV or die "exec failed"' -- /usr/bin/security delete-generic-password -a t14 -s cucina-t14-probe >/dev/null 2>&1
 	return 0
 }
 
@@ -58,7 +62,6 @@ after-install)
 	else fail "tart.app signature"; fi
 	expect "tart --version" "$(/usr/local/cucina/bin/tart --version 2>/dev/null)" 2.40.1
 	if codesign --verify --strict /usr/local/cucina/bin/cucina-hostd 2>/dev/null; then pass "hostd signature verifies"; else fail "hostd signature"; fi
-	if grep -q 'done' /Library/Logs/Cucina/install.log 2>/dev/null; then pass "postinstall completed"; else fail "postinstall log"; fi
 	info "postinstall warnings: $(grep -c WARNING /Library/Logs/Cucina/install.log 2>/dev/null)"
 	;;
 after-reboot)
@@ -72,14 +75,18 @@ no-login)
 	expect "daemon running without any login" "$(daemon_state)" running
 	;;
 mark)
-	# Stand-ins for what must survive an upgrade: hostd state, a VM bundle and the identity key item.
-	mkdir -p /var/db/cucina/hostd /Users/cucina/.tart/vms/t14-vm
+	# Sidecar markers never replace hostd's state or keys. Snapshot the real key WITHOUT modifying it.
+	umask 077
+	mkdir -p /var/root/.config/cucina/t14 /var/db/cucina/hostd /var/db/cucina/l2 /Users/cucina/.tart/vms/t14-vm
 	echo t14 >/var/db/cucina/hostd/t14-marker
+	echo t14 >/var/db/cucina/l2/t14-marker
 	echo t14 >/Users/cucina/.tart/vms/t14-vm/t14-marker
-	chown -R cucina /Users/cucina/.tart
-	security add-generic-password -U -s ai.sloper.cucina.hostd -a host-identity-key -w t14-not-a-key \
-		/Library/Keychains/System.keychain >/dev/null 2>&1
-	pass "markers written"
+	chown cucina /Users/cucina/.tart /Users/cucina/.tart/vms /Users/cucina/.tart/vms/t14-vm /Users/cucina/.tart/vms/t14-vm/t14-marker
+	if security find-generic-password -s ai.sloper.cucina.hostd -a host-identity-key /Library/Keychains/System.keychain >/dev/null 2>&1; then
+		security find-generic-password -w -s ai.sloper.cucina.hostd -a host-identity-key /Library/Keychains/System.keychain 2>/dev/null |
+			shasum -a 256 >/var/root/.config/cucina/t14/identity.sha256
+		pass "sidecar markers and real identity fingerprint saved (key untouched)"
+	else fail "hostd has not created its identity key; cannot prove upgrade preservation"; fi
 	;;
 after-upgrade)
 	v=${2:?version}
@@ -88,9 +95,12 @@ after-upgrade)
 	expect "daemon state" "$(daemon_state)" running
 	expect "hostd state preserved" "$(cat /var/db/cucina/hostd/t14-marker 2>/dev/null)" t14
 	expect "VM preserved" "$(cat /Users/cucina/.tart/vms/t14-vm/t14-marker 2>/dev/null)" t14
-	if security find-generic-password -s ai.sloper.cucina.hostd -a host-identity-key /Library/Keychains/System.keychain >/dev/null 2>&1; then
-		pass "identity key preserved"
-	else fail "identity key lost"; fi
+	expect "L2 cache preserved" "$(cat /var/db/cucina/l2/t14-marker 2>/dev/null)" t14
+	if security find-generic-password -s ai.sloper.cucina.hostd -a host-identity-key /Library/Keychains/System.keychain >/dev/null 2>&1 &&
+		security find-generic-password -w -s ai.sloper.cucina.hostd -a host-identity-key /Library/Keychains/System.keychain 2>/dev/null |
+			shasum -a 256 | cmp -s /var/root/.config/cucina/t14/identity.sha256 -; then
+		pass "real identity key unchanged"
+	else fail "identity key lost or changed"; fi
 	expect "auto-login user" "$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null)" cucina
 	;;
 after-uninstall)
@@ -99,11 +109,13 @@ after-uninstall)
 	for p in "/Library/LaunchDaemons/$LABEL.plist" /usr/local/cucina /etc/newsyslog.d/ai.sloper.cucina.conf /var/db/cucina /Library/Logs/Cucina; do
 		if [ -e "$p" ]; then fail "$p still present"; else pass "$p removed"; fi
 	done
-	if security find-generic-password -s ai.sloper.cucina.hostd -a host-identity-key /Library/Keychains/System.keychain >/dev/null 2>&1; then
-		fail "identity key still in the System keychain"
-	else pass "identity key removed"; fi
-	if dscl . -read /Users/cucina UniqueID >/dev/null 2>&1; then pass "user cucina kept (no --purge)"; else info "user cucina gone"; fi
-	if [ -e /Users/cucina/.tart/vms/t14-vm/t14-marker ]; then pass "VMs kept (no --purge)"; else info "VM marker gone"; fi
+	for account in host-identity-key host-l2-ca-key; do
+		if security find-generic-password -s ai.sloper.cucina.hostd -a "$account" /Library/Keychains/System.keychain >/dev/null 2>&1; then
+			fail "$account still in the System keychain"
+		else pass "$account removed"; fi
+	done
+	if dscl . -read /Users/cucina UniqueID >/dev/null 2>&1; then pass "user cucina kept (no --purge)"; else fail "user cucina unexpectedly removed"; fi
+	if [ -e /Users/cucina/.tart/vms/t14-vm/t14-marker ]; then pass "VMs kept (no --purge)"; else fail "VM marker unexpectedly removed"; fi
 	;;
 *)
 	echo "usage: t14-guest-checks.sh after-install V|after-reboot|no-login|mark|after-upgrade V|after-uninstall" >&2

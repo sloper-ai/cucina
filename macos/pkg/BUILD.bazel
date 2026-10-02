@@ -36,6 +36,15 @@ cucina_sh_test(
     tier = "integration",
 )
 
+# §12: credential workspaces are private and unsafe runner inputs have no side effects.
+cucina_sh_test(
+    name = "safety_test",
+    srcs = ["test/safety_test.sh"],
+    data = [":build_inputs"],
+    target_compatible_with = ["@platforms//os:macos"],
+    tier = "integration",
+)
+
 # R-MAC-8/R-MAC-2: the postinstall helper plans every host preparation step and never echoes the generated password.
 cucina_sh_test(
     name = "setup_dryrun_test",

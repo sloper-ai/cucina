@@ -29,9 +29,15 @@ written by provenance-tracked processes (terminal apps, IDEs, Bazel, CI agents):
 * `build-pkg.sh` takes all inputs as files (Bazel genrule friendly), verifies pinned SHA-256s and tart.app's Team ID,
   CDHash and entitlement, and **strips AppleDouble entries** after `pkgbuild` (filter the payload cpio with bsdtar, rebuild
   the BOM with `mkbom -i`, re-flatten with `pkgutil --flatten`), failing if any remain.
+* `pkgbuild` uses macOS system helpers that fail under Bazel's Darwin sandbox. The package build and manifest boundary
+  test therefore use `no-sandbox` on macOS, but not `no-remote-exec`; signing remains local-only. This is a platform-tool
+  constraint, not a skipped test.
 
 ## Consequences
 
 Clean payloads regardless of who builds them. `Scripts` archives may still contain `._` siblings of the two scripts
-(harmless; Installer only runs `preinstall`/`postinstall`). Uninstall semantics differ slightly from the first draft of
-docs/dev/hostd.md §2 (state and identity are removed by default, kept with `--keep-state`); hostd's doc should point here.
+(harmless; Installer only runs `preinstall`/`postinstall`). The hostd contract now agrees that state and identity are
+removed by default and preserved only with `--keep-state` (docs/dev/hostd.md §2).
+For purge, a package-created user must be logged out for deletion. A live console account is left for explicit deletion
+after restart rather than forcibly killing its GUI session; the tool reports this deferred step. MDM erasure remains the
+final decommissioning step before hardware is transferred.

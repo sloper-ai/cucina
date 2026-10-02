@@ -10,12 +10,13 @@ silicon only, startup volume only, macOS 26 or later. It works with both MDM del
 
 | Path on the host | What | Notes |
 | --- | --- | --- |
-| `/Library/LaunchDaemons/ai.sloper.cucina.hostd.plist` | LaunchDaemon (root:wheel 0644) | `cucina-hostd run`, RunAtLoad, KeepAlive (crash-only), ThrottleInterval 10, ExitTimeOut 120 (time for hostd to stop its VMs), NumberOfFiles 65536, stderr to `/Library/Logs/Cucina/hostd.stderr.log` |
+| `/Library/LaunchDaemons/ai.sloper.cucina.hostd.plist` | LaunchDaemon (root:wheel 0644) | `cucina-hostd run`, RunAtLoad, KeepAlive (crash-only), ThrottleInterval 10, AbandonProcessGroup true (VMs survive daemon replacement), ExitTimeOut 120, NumberOfFiles 65536, stderr to `/Library/Logs/Cucina/hostd.stderr.log` |
 | `/usr/local/cucina/bin/cucina-hostd` | host agent | darwin/arm64, cgo; signed with hardened runtime |
 | `/usr/local/cucina/bin/bb_storage` | Buildbarn bb_storage `20260930T153215Z-086b011` (host L2) | pinned release, SHA-256 verified, then signed |
 | `/usr/local/cucina/tart.app` | **Tart 2.40.1, exactly as released** | never re-signed (restricted `com.apple.vm.networking`); not relocatable, not version-checked (the package is authoritative) |
 | `/usr/local/cucina/bin/tart` | wrapper for humans | `exec …/tart.app/Contents/MacOS/tart "$@"` (Homebrew's pattern); hostd calls the binary directly |
 | `/usr/local/cucina/bin/cucina-host-setup` | host preparation (postinstall body) + `status`, `autologin`, `hostname`, `ssh`, `local-network` | POSIX sh, idempotent |
+| `/usr/local/cucina/bin/cucina-kcpassword` | small macOS auto-login format encoder | system Perl; password via stdin, protected atomic write by setup (ADR 0755) |
 | `/usr/local/cucina/bin/cucina-host-uninstall` | uninstaller | `--purge`, `--keep-state`, `--yes`, `--dry-run` |
 | `/usr/local/cucina/share/doc/{LICENSE.md,THIRD_PARTY_NOTICES.md,tart/LICENSE}` | licences | FSL-1.1-ALv2 (Cucina, Tart), notices for Buildbarn and Go modules |
 | `/usr/local/cucina/{VERSION,share/cucina/components}` | versions | package, Tart and bb_storage versions |
@@ -24,12 +25,12 @@ silicon only, startup volume only, macOS 26 or later. It works with both MDM del
 Created at install time (not in the payload, so upgrades never touch them): `/var/db/cucina/{hostd,l2,pkg}` (root 0700:
 identity, enrollment state, L2 cache, package markers), `/Library/Logs/Cucina` (root:admin 0750), the user `cucina` and
 its `~/.tart` (VMs and images). The host identity key lives in the System keychain (service `ai.sloper.cucina.hostd`,
-account `host-identity-key`). Contract with hostd: [docs/dev/hostd.md §2](../dev/hostd.md).
+accounts `host-identity-key` and `host-l2-ca-key`). Contract with hostd: [docs/dev/hostd.md §2](../dev/hostd.md).
 
 ## 2. Scripts
 
 * **preinstall** (root): refuses non-startup volumes and non-arm64 Macs; on upgrade stops the daemon with
-  `launchctl bootout` (hostd stops its VMs on SIGTERM within ExitTimeOut). Never touches VMs, caches or identity.
+  `launchctl bootout`; running VM processes survive for adoption by the replacement daemon. Never touches VM disks, caches or identity.
 * **postinstall** (root): `cucina-host-setup install` — the `cucina` user with an on-device random password and
   auto-login (if missing), `pmset -a sleep 0 womp 1 autorestart 1`, `systemsetup -setrestartfreeze on`, vmnet DHCP lease
   600 s, state/log directories, firewall allowance for hostd, FileVault warning, Local Network escape-hatch note,
@@ -57,6 +58,9 @@ preference domain **`ai.sloper.cucina.host`** (managed or local), kept separate 
   it). `--keep-state` keeps the identity and the L2 cache for a reinstall without a new approval. Managed preferences and
   profiles belong to MDM and are never touched. For MDMs that can only deploy packages, `make -C macos/pkg uninstall-pkg`
   builds a payload-free uninstaller (`ai.sloper.cucina.host.uninstall`; `UNINSTALL_ARGS=--purge` for the purge variant).
+  **For complete user deletion, log the dedicated user out before `--purge`.** If it is still at the console, the tool
+  disables auto-login and removes software/VMs but explicitly leaves account deletion for after logout/restart. Do not
+  interpret that deferred step as a fully erased device; erase through MDM before releasing hardware to another owner.
 * **DDM removal (macOS 27):** with `com.apple.configuration.package` and `UninstallBehavior.Remove = true` set before the
   first install, removing the declaration deletes the files the package installed; it does not run the uninstaller, so
   state under `/var/db/cucina` and the daemon (until the next restart) remain. Prefer the uninstaller for full removal.
@@ -66,7 +70,7 @@ preference domain **`ai.sloper.cucina.host`** (managed or local), kept separate 
 ```sh
 make -C macos/pkg pkg            # unsigned: build/cucina-host-0-1-0-unsigned.pkg (go build of ./cmd/cucina-hostd)
 make -C macos/pkg pkg HOSTD_BIN=/path/to/cucina-hostd VERSION=0.1.1
-make -C macos/pkg sign IDENTITY="Cucina Host Package Signing"     # signed: build/cucina-host-0-1-0.pkg
+make -C macos/pkg sign IDENTITY="Cucina Host Application" INSTALLER_IDENTITY="Cucina Host Installer"
 make -C macos/pkg check          # scripts/check-pkg.sh on what was built
 make -C macos/pkg lint test      # shellcheck, plutil, JSON, SPDX; manifest and profile tests
 ```
@@ -84,34 +88,14 @@ fails if any remain (ADR 0750).
 
 ### Bazel
 
-The unsigned package is built by a genrule on macOS (R-BUILD-1 "macOS pkg"); signing stays a local-only `bazel run`/make
-step. Wiring for the bazel agent: add `include("//macos/pkg:deps.MODULE.bazel")` to the root `MODULE.bazel`, then:
+The release build wires `//release:host_pkg` on macOS to this script with every input supplied as a Bazel file;
+`//release:pkg_sign` is the local signing wrapper. Signing is never a remote action. `pkgbuild` needs system helpers
+outside the Darwin sandbox (ADR 0750), so unsigned package actions use `no-sandbox` but can run on macOS workers.
 
-```python
-genrule(
-    name = "pkg_unsigned",
-    srcs = [
-        "//cmd/cucina-hostd",
-        "@cucina_pkg_bb_storage_darwin_arm64//file",
-        "@cucina_pkg_tart//file",
-        "//:LICENSE.md",
-        "//:THIRD_PARTY_NOTICES.md",
-        ":build_inputs",
-    ],
-    outs = ["cucina-host-unsigned.pkg"],
-    cmd = "$(location :scripts/build-pkg.sh) --hostd $(location //cmd/cucina-hostd)" +
-          " --bb-storage $(location @cucina_pkg_bb_storage_darwin_arm64//file)" +
-          " --tart-tarball $(location @cucina_pkg_tart//file)" +
-          " --license $(location //:LICENSE.md) --notices $(location //:THIRD_PARTY_NOTICES.md)" +
-          " --version 0.1.0 --work $(RULEDIR)/pkg-work --out $@",
-    exec_compatible_with = ["@platforms//os:macos"],
-    target_compatible_with = ["@platforms//os:macos"],
-    tags = ["no-sandbox"],  # pkgbuild writes through system helpers the darwin sandbox denies
-)
-```
-
-The tests `//macos/pkg:manifest_test` and `//macos/profiles:render_test` (tier `integration`, macOS only) are already in
-the tree; `manifest_test` is tagged `no-sandbox` for the same reason.
+The package tests are `//macos/pkg:manifest_test`, `:setup_dryrun_test`, `:safety_test`, and
+`//macos/profiles:render_test` (tier `integration`, macOS only). `manifest_test` has the same `no-sandbox` requirement.
+The safety test exercises private-workspace confinement, failure-path keychain cleanup and tag-checked S3 cleanup
+against local stateful CLI fakes; it never calls real AWS or changes a keychain.
 
 ## 5. Manifest and publishing
 

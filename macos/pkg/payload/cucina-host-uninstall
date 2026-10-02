@@ -31,7 +31,7 @@ PKG_STATE=$STATE_ROOT/pkg
 LOG_DIR=/Library/Logs/Cucina
 HOSTD_DOMAIN=ai.sloper.cucina.hostd
 KEYCHAIN_SERVICE=ai.sloper.cucina.hostd
-KEYCHAIN_ACCOUNT=host-identity-key
+KEYCHAIN_ACCOUNTS='host-identity-key host-l2-ca-key'
 SYSTEM_KEYCHAIN=/Library/Keychains/System.keychain
 FIREWALL=/usr/libexec/ApplicationFirewall/socketfilterfw
 LOCALNET_PLIST=/Library/Preferences/com.apple.network.local-network
@@ -86,7 +86,7 @@ if [ -x "$FIREWALL" ] && [ -e "$PREFIX/bin/cucina-hostd" ]; then
 	run "$FIREWALL" --remove "$PREFIX/bin/cucina-hostd" >/dev/null 2>&1 || true
 fi
 
-# 2. Stop the daemon. hostd stops its VMs on SIGTERM; ExitTimeOut bounds it.
+# 2. Stop the daemon; running VM processes survive (AbandonProcessGroup) and are stopped explicitly below.
 if launchctl print "system/$LABEL" >/dev/null 2>&1; then
 	log "stopping $LABEL"
 	run launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
@@ -129,9 +129,11 @@ run rm -rf "$PREFIX" "$LOG_DIR"
 # 5. Host state and identity (unless --keep-state).
 if [ "$KEEP_STATE" = 0 ]; then
 	run rm -rf "$STATE_ROOT"
-	while security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$KEYCHAIN_ACCOUNT" "$SYSTEM_KEYCHAIN" >/dev/null 2>&1; do
-		run security delete-generic-password -s "$KEYCHAIN_SERVICE" -a "$KEYCHAIN_ACCOUNT" "$SYSTEM_KEYCHAIN" >/dev/null 2>&1 || break
-		[ "$DRY_RUN" = 0 ] || break
+	for account in $KEYCHAIN_ACCOUNTS; do
+		while security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$account" "$SYSTEM_KEYCHAIN" >/dev/null 2>&1; do
+			run security delete-generic-password -s "$KEYCHAIN_SERVICE" -a "$account" "$SYSTEM_KEYCHAIN" >/dev/null 2>&1 || break
+			[ "$DRY_RUN" = 0 ] || break
+		done
 	done
 	log "removed host state and identity (re-enrolling this Mac needs 'cucinactl hosts approve <serial>')"
 else

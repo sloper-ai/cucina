@@ -10,10 +10,16 @@
 	<array>
 		<string>/var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/ai.sloper.cucina.hostd/bin/cucina-hostd</string>
 		<string>run</string>
+		<string>--bb-storage</string>
+		<string>/var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/ai.sloper.cucina.hostd/bin/bb_storage</string>
+		<string>--tart</string>
+		<string>/var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/ai.sloper.cucina.hostd/tart.app/Contents/MacOS/tart</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
+	<true/>
+	<key>AbandonProcessGroup</key>
 	<true/>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>

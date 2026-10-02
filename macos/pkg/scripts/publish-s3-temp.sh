@@ -35,6 +35,15 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+# State and staging contain presigned bearer URLs: never place either on the bulk volume or in a checkout.
+case $state in "$HOME/.config/cucina/"*) ;; *) cucina_die "--state must be under ~/.config/cucina" ;; esac
+case /$state/ in */../* | */./*) cucina_die "--state cannot contain dot path components" ;; esac
+ancestor=$(dirname -- "$state")
+while [ ! -e "$ancestor" ]; do ancestor=$(dirname -- "$ancestor"); done
+physical=$(CDPATH='' cd -- "$ancestor" && pwd -P)
+case $physical in "$HOME" | "$HOME/.config" | "$HOME/.config/cucina" | "$HOME/.config/cucina/"*) ;; *) cucina_die "state directory resolves outside ~/.config/cucina" ;; esac
+[ ! -L "$state" ] || cucina_die "state cannot be a symlink"
+umask 077
 cucina_need aws
 region=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
 [ "$region" = us-west-1 ] || cucina_die "AWS region must be us-west-1 (source .work/env.sh); got '${region:-unset}'"
@@ -47,8 +56,9 @@ redact() { printf '%s' "$1" | sed 's/?.*/?<redacted>/'; }
 # bucket_matches_run BUCKET — true if the bucket's tags say it belongs to this e2e run.
 bucket_matches_run() {
 	aws s3api get-bucket-tagging --region "$region" --bucket "$1" --query 'TagSet[].[Key,Value]' --output text 2>/dev/null |
-		awk -F '\t' -v run="$CUCINA_RUN_ID" '$1 == "cucina:env" && $2 == "e2e" { e = 1 }
-			$1 == "cucina:run" && $2 == run { r = 1 } END { exit !(e && r) }'
+		awk -F '\t' -v run="$CUCINA_RUN_ID" -v expires="$CUCINA_EXPIRES" '$1 == "cucina:env" && $2 == "e2e" { e = 1 }
+			$1 == "cucina:run" && $2 == run { r = 1 }
+			$1 == "cucina:expires" && $2 == expires { x = 1 } END { exit !(e && r && x) }'
 }
 
 delete_bucket() {
@@ -72,8 +82,20 @@ create)
 	cucina_info "creating private bucket $bucket ($region)"
 	aws s3api create-bucket --region "$region" --bucket "$bucket" \
 		--create-bucket-configuration "LocationConstraint=$region" --object-ownership BucketOwnerEnforced >/dev/null
-	cleanup_on_error() { aws s3 rm "s3://$bucket" --recursive --region "$region" --only-show-errors 2>/dev/null || true; aws s3api delete-bucket --region "$region" --bucket "$bucket" 2>/dev/null || true; }
-	trap 'cleanup_on_error' EXIT
+	stage=''
+	cleanup_on_error() {
+		code=$?
+		trap - EXIT
+		[ -z "$stage" ] || rm -rf "$stage"
+		if bucket_matches_run "$bucket"; then
+			delete_bucket "$bucket" || true
+		else
+			# S3 cannot tag atomically with CreateBucket. A tagging failure never grants deletion authority.
+			cucina_warn "cleanup withheld: ownership tags on $bucket could not be verified; operator must inspect it"
+		fi
+		exit "$code"
+	}
+	trap cleanup_on_error EXIT
 	aws s3api put-bucket-tagging --region "$region" --bucket "$bucket" --tagging "$tagset"
 	aws s3api put-public-access-block --region "$region" --bucket "$bucket" --public-access-block-configuration \
 		BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
@@ -82,7 +104,9 @@ create)
 	prefix=cucina-host/$version
 	pkg_url=$(aws s3 presign "s3://$bucket/$prefix/$base.pkg" --region "$region" --expires-in "$expires_in")
 	manifest_url=$(aws s3 presign "s3://$bucket/$prefix/$base.plist" --region "$region" --expires-in "$expires_in")
-	stage=$(mktemp -d "${TMPDIR:-/tmp}/cucina-s3.XXXXXX")
+	mkdir -p "$(dirname -- "$state")"
+	chmod 0700 "$(dirname -- "$state")"
+	stage=$(mktemp -d "$(dirname -- "$state")/staging.XXXXXX")
 	cp "$pkg" "$stage/$base.pkg"
 	"$SCRIPTS/make-manifest.sh" --pkg "$stage/$base.pkg" --version "$version" --url "$pkg_url" \
 		--manifest-url "$manifest_url" --out-dir "$stage" >/dev/null

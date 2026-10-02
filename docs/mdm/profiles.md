@@ -27,7 +27,7 @@ proves all of this (`bazel test //macos/profiles:render_test`).
 
 | # | File | Payload | Content |
 | --- | --- | --- | --- |
-| 01 | `01-cucina-trust` | `com.apple.security.root` ×1–3 | the package-signing certificate; optionally a second signer during rotation and Cucina's CA (`--ca-cert`, unless `--no-trust-ca`). **Deliver first.** |
+| 01 | `01-cucina-trust` | `com.apple.security.root` ×1–5 | installer/application certificates; up to four signers for old/new trust during rotation, plus Cucina's CA (`--ca-cert`, unless `--no-trust-ca`). **Deliver first.** |
 | 02 | `02-cucina-hostd-preferences` | `com.apple.ManagedClient.preferences` | domain `ai.sloper.cucina.hostd` (forced): `ControllerURL`, `CACertificate` (DER data) and/or `CAPinSHA256`, `SiteEnrollmentToken`, optional `ControllerServerName`, `IdentityLabel`, `Site`, `Labels`, `VMSlots` (1–2), `VMCPUCount`, `VMMemoryGiB`, `L2SizeGiB`, `VMMaxAgeHours`, `LogLevel`, `RunAsUser`, `TartPath`; domain `ai.sloper.cucina.host` (forced): the package's install settings (`CreateUser`, `ManageAutoLogin`, `RestartAfterFirstInstall`, `LocalNetworkAllowedEthernetAddresses`). Lands in `/Library/Managed Preferences/<domain>.plist`; hostd reads it with `CFPreferencesCopyAppValue` as root and rejects unknown keys ([hostd.md §3](../dev/hostd.md)). |
 | 03 | `03-cucina-login-items` | `com.apple.servicemanagement` | rule `RuleType = Label`, `RuleValue = ai.sloper.cucina.hostd`: the daemon is managed (cannot be disabled in Login Items). MDM-only payload. A Label rule because the private certificate has no Team ID. |
 | 04 | `04-cucina-energy` | `com.apple.MCX` | `SleepDisabled`; desktop AC power: System/Disk Sleep Timer 0, `Wake on LAN` 1, `Automatic Restart On Power Loss` 1. |
@@ -38,14 +38,15 @@ proves all of this (`bazel test //macos/profiles:render_test`).
 ### Auto-login: default and alternative (ADR 0751)
 
 * **Default — the package does it.** postinstall creates the standard user `cucina` with a 32-character random password
-  that only macOS knows (stored as the auto-login secret `/etc/kcpassword`, root-only), turns on auto-login, and restarts
-  once after the first install so the session exists. No password ever passes through MDM. It works with every MDM,
-  including Apple Business's built-in one, which cannot create local standard users.
+  held in macOS's reversible auto-login secret `/etc/kcpassword` (root-only), prepares an identically password-protected
+  login keychain, turns on auto-login, and restarts once after the first install so the session exists (ADR 0755). No password ever passes through MDM. It works with every MDM,
+  without relying on local-standard-user creation in Apple Business (verify that capability in the Apple Business UI).
 * **Alternative — profile 05.** For MDMs that create local accounts (for example Jamf): create `cucina` there with a
   password, render `--autologin-password-file`, deploy 05, and set `CreateUser=false` in profile 02. The password then
   lives in the MDM and in the profile; rotate it in both places together.
 
-Both survive restarts (verified in T14 for the default path: after `reboot`, the console user is `cucina`).
+T14 tests the package-created account across a restart and probes its unlocked login keychain. The alternative MDM
+loginwindow payload still needs verification on managed hardware (MT-001); a simulation is not MDM enrollment evidence.
 
 ### FileVault (profile 06)
 

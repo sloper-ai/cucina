@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 <!-- cucina-hostd LaunchDaemon (R-MAC-1): root, starts at boot without a login, crash-only (launchd restarts it).
      Installed to /Library/LaunchDaemons/ai.sloper.cucina.hostd.plist (root:wheel 0644).
-     Contract: docs/dev/hostd.md §2. ExitTimeOut gives hostd time to stop its VMs gracefully on upgrade/uninstall. -->
+     Contract: docs/dev/hostd.md §2. VM processes survive daemon restarts/upgrades; uninstall stops them explicitly. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -16,6 +16,8 @@
 	<key>RunAtLoad</key>
 	<true/>
 	<key>KeepAlive</key>
+	<true/>
+	<key>AbandonProcessGroup</key>
 	<true/>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>

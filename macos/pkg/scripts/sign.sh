@@ -3,8 +3,8 @@
 # Local-only signing step (needs keychain access, so it never runs in a Bazel action; `bazel run` or make only).
 # Builds the signed host package from the same inputs as build-pkg.sh, then verifies it (R-MAC-9).
 #
-# Default: Cucina's PRIVATE certificate (scripts/make-signing-cert.sh): codesign --timestamp --options runtime for
-# cucina-hostd and bb_storage, productbuild --sign for the product archive. tart.app is never re-signed.
+# Default: separate PRIVATE application and installer certificates (scripts/make-signing-cert.sh, ADR 0752).
+# codesign --timestamp --options runtime signs hostd/bb_storage; productbuild signs the archive. Never re-sign Tart.
 # Optional, OFF by default: --developer-id (Developer ID Application for binaries, Developer ID Installer for the
 # package, then notarization + stapling via scripts/notarize.sh). It is used only when explicitly requested.
 #
@@ -14,7 +14,7 @@
 #   --no-timestamp           skip secure timestamps (offline test builds only)
 #   --developer-id           use the Developer ID path instead (requires the options below or their env vars)
 #   --app-identity ID        Developer ID Application identity      ($CUCINA_DEVID_APP)
-#   --installer-identity ID  Developer ID Installer identity        ($CUCINA_DEVID_INSTALLER)
+#   --installer-identity ID  private installer ($CUCINA_INSTALLER_IDENTITY), or Developer ID Installer when opted in
 #   --notary-key PATH        App Store Connect API key (.p8)         ($CUCINA_NOTARY_KEY)
 #   --notary-key-id ID       API key ID                              ($CUCINA_NOTARY_KEY_ID)
 #   --notary-issuer UUID     API issuer ID                           ($CUCINA_NOTARY_ISSUER)
@@ -33,7 +33,7 @@ developer-id) devid=1 ;;
 *) cucina_die "CUCINA_SIGNING must be 'private' or 'developer-id'" ;;
 esac
 app_id=${CUCINA_DEVID_APP:-}
-inst_id=${CUCINA_DEVID_INSTALLER:-}
+inst_id=${CUCINA_INSTALLER_IDENTITY:-${CUCINA_DEVID_INSTALLER:-}}
 notary_key=${CUCINA_NOTARY_KEY:-}
 notary_key_id=${CUCINA_NOTARY_KEY_ID:-}
 notary_issuer=${CUCINA_NOTARY_ISSUER:-}
@@ -108,17 +108,25 @@ if [ "$devid" = 0 ]; then
 	*"Developer ID"*) cucina_die "'$identity' is a Developer ID identity; the Developer ID path needs --developer-id" ;;
 	esac
 	sha1=$(cert_sha1 "$identity")
-	cn=$(cert_cn "$identity")
-	cucina_info "signing with private certificate $sha1 '$cn' (tart.app is left untouched)"
-	set -- "$@" --sign-identity "$sha1" --installer-identity "$cn"
+	cn=$(cert_cn "$sha1")
+	case $cn in *"Developer ID"*) cucina_die "Developer ID certificate requires --developer-id (including SHA-1 selection)" ;; esac
+	[ -n "$cn" ] || cucina_die "signer certificate has no common name"
+	[ -n "$inst_id" ] || cucina_die "private signing needs --installer-identity (or CUCINA_INSTALLER_IDENTITY), separate from the application identity; see ADR 0752"
+	inst_sha1=$(cert_sha1 "$inst_id")
+	inst_cn=$(cert_cn "$inst_sha1")
+	case $inst_cn in *"Developer ID"*) cucina_die "Developer ID installer certificate requires --developer-id" ;; esac
+	[ "$inst_sha1" != "$sha1" ] || cucina_die "application and installer certificates must be distinct on macOS"
+	cucina_info "private signing: application $sha1; installer $inst_sha1 (tart.app untouched)"
+	set -- "$@" --sign-identity "$sha1" --installer-identity "$inst_cn"
 	[ -z "$keychain" ] || set -- "$@" --keychain "$keychain"
 	[ "$timestamp" = 1 ] || set -- "$@" --no-timestamp
 	"$SCRIPTS/build-pkg.sh" "$@"
-	"$SCRIPTS/check-pkg.sh" "$out" --signed --cert-sha1 "$sha1"
+	"$SCRIPTS/check-pkg.sh" "$out" --signed --app-cert-sha1 "$sha1" --cert-sha1 "$inst_sha1"
 	cat <<EOF
 signed: $out
   SHA-256: $(cucina_sha256 "$out")
-  signer:  $sha1 (private certificate: devices need the trust profile 01-cucina-trust BEFORE the package)
+  installer signer: $inst_sha1 (devices need this certificate in profile 01 BEFORE the package)
+  application signer: $sha1
 EOF
 	exit 0
 fi

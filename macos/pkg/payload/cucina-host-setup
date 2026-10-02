@@ -175,16 +175,36 @@ step_directories() {
 	ensure_dir "$PKG_STATE" root:wheel 0700
 }
 
+prepare_login_keychain() { # USER PASSWORD — before the first GUI login, or after an explicit password reset.
+	keychain_home=$(dscl . -read "/Users/$1" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }')
+	keychain_home=${keychain_home:-/Users/$1}
+	keychain_file=$keychain_home/Library/Keychains/login.keychain-db
+	[ ! -f "$keychain_file" ] || return 0
+	ensure_dir "$keychain_home/Library/Keychains" "$1:staff" 0700
+	run_secret sudo -H -u "$1" /usr/bin/security create-keychain -p "$2" "$keychain_file" || return 1
+	runq sudo -H -u "$1" /usr/bin/security default-keychain -d user -s "$keychain_file" || return 1
+	runq sudo -H -u "$1" /usr/bin/security set-keychain-settings "$keychain_file" || return 1
+	log "prepared the login keychain for $1 (unlocks with its auto-login password)"
+}
+
 enable_autologin() { # USER PASSWORD
-	run_secret sysadminctl -autologin set -userName "$1" -password "$2" ||
-		{
-			warn "sysadminctl -autologin failed for $1"
-			return 1
-		}
-	[ "$DRY_RUN" = 1 ] || [ "$(autologin_user)" = "$1" ] || {
-		warn "auto-login for $1 did not take effect"
+	# sysadminctl -autologin set silently leaves a stale kcpassword in headless Installer/SSH contexts on macOS 27
+	# (SACSetAutoLoginPassword error:22, exit 0). Use the documented-on-disk format instead (ADR 0755).
+	if [ "$DRY_RUN" = 1 ]; then
+		log "dry-run: verify account password; atomically write /etc/kcpassword root:wheel 0600 (password redacted)"
+		log "dry-run: defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser -string $1"
+		return 0
+	fi
+	run_secret dscl . -authonly "$1" "$2" || { warn "account password verification failed for $1"; return 1; }
+	kc_temp=$(mktemp /private/etc/kcpassword.cucina.XXXXXX) || return 1
+	if ! { printf '%s' "$2" | "$PREFIX/bin/cucina-kcpassword" >"$kc_temp" &&
+		chown root:wheel "$kc_temp" && chmod 0600 "$kc_temp" && mv -f "$kc_temp" /etc/kcpassword; }; then
+		rm -f "$kc_temp"
+		warn "could not prepare the auto-login credential"
 		return 1
-	}
+	fi
+	defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser -string "$1"
+	[ "$(autologin_user)" = "$1" ] || { warn "auto-login setting did not take effect"; return 1; }
 	log "auto-login enabled for $1"
 }
 
@@ -225,8 +245,9 @@ step_user() {
 			>"$PKG_STATE/user-created"
 	fi
 	USER_CREATED=1
+	prepare_login_keychain "$user" "$pw" || die "could not prepare the login keychain for $user"
 	if [ "$(pref_bool "$SETUP_DOMAIN" ManageAutoLogin true)" = true ]; then
-		enable_autologin "$user" "$pw" || true
+		enable_autologin "$user" "$pw" || die "could not enable unattended auto-login for $user"
 	else
 		log "ManageAutoLogin=false: leaving auto-login to MDM"
 	fi
@@ -237,19 +258,21 @@ step_user() {
 reset_autologin() {
 	[ "$(console_user)" != "$1" ] || die "$1 is logged in at the console; log it out (or restart) first"
 	pw=$(random_password)
-	run_secret sysadminctl -resetPasswordFor "$1" -newPassword "$pw" ||
-		{
-			pw=
-			warn "password reset for $1 failed"
-			return 1
-		}
+	# sysadminctl reset requires a secure-token unlock and can exit zero without changing the password.
+	# This dedicated FileVault-off standard account uses a local directory password; verify it before proceeding.
+	if ! run_secret dscl . -passwd "/Users/$1" "$pw" || ! run_secret dscl . -authonly "$1" "$pw"; then
+		pw=
+		warn "password reset for $1 failed"
+		return 1
+	fi
 	kc_home=$(dscl . -read "/Users/$1" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }')
 	kc="${kc_home:-/Users/$1}/Library/Keychains"
 	if [ -d "$kc" ]; then
 		run mv "$kc" "$kc.cucina-reset-$(date +%Y%m%d%H%M%S)"
 		log "moved the old login keychain of $1 aside (it was protected by the previous password)"
 	fi
-	enable_autologin "$1" "$pw" || true
+	prepare_login_keychain "$1" "$pw" || { pw=; return 1; }
+	enable_autologin "$1" "$pw" || { pw=; return 1; }
 	pw=
 }
 

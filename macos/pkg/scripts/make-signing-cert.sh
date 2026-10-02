@@ -3,8 +3,8 @@
 # Creates Cucina's private package-signing identity (R-MAC-9, default signing path) following Apple Business's
 # documented recipe ("Create a package installer for an application": self-signed leaf, RSA-4096/SHA-256,
 # basicConstraints critical CA:false, keyUsage critical digitalSignature, random serial, 1-year validity). One
-# addition to Apple's recipe: extendedKeyUsage codeSigning, so the same identity also signs the Mach-O binaries
-# with codesign (ADR 0752).
+# installer identity follows that recipe without EKU. Use --purpose application for the separate Mach-O identity
+# (codeSigning EKU). macOS rejects a codeSigning certificate for productbuild, even when trusted (ADR 0752).
 #
 # Two destinations (the private key never touches the repository or the unencrypted dev volume):
 #   default        import into a keychain (default: the login keychain) for local signing. The key's access list
@@ -16,7 +16,7 @@
 # The PUBLIC certificate is always written (PEM + DER) for the trust profile (macos/profiles, 01-cucina-trust).
 #
 # usage: make-signing-cert.sh [--name CN] [--days N] [--keychain PATH] [--out-dir DIR] [--extractable]
-#                             [--p12-out FILE] [--dry-run]
+#                             [--purpose installer|application] [--p12-out FILE] [--dry-run]
 #   --name CN       certificate common name (default: "Cucina Host Package Signing"); use a new, unique name per
 #                   rotation (e.g. "... 2027") so codesign identities stay unambiguous
 #   --days N        validity in days (default: 365; re-sign and rotate before expiry, docs/mdm/signing.md)
@@ -32,7 +32,7 @@ name="Cucina Host Package Signing"
 days=365
 keychain=$HOME/Library/Keychains/login.keychain-db
 out_dir=$HOME/.config/cucina/pkg-signing
-extractable=0 dry_run=0 p12_out=''
+extractable=0 dry_run=0 p12_out='' purpose=installer
 while [ $# -gt 0 ]; do
 	case $1 in
 	--name) name=$2 && shift 2 ;;
@@ -41,6 +41,7 @@ while [ $# -gt 0 ]; do
 	--out-dir) out_dir=$2 && shift 2 ;;
 	--extractable) extractable=1 && shift ;;
 	--p12-out) p12_out=$2 && shift 2 ;;
+	--purpose) purpose=$2 && shift 2 ;;
 	--dry-run) dry_run=1 && shift ;;
 	-h | --help) sed -n '2,/^set -eu/p' "$0" | sed '$d' && exit 0 ;;
 	*) cucina_die "unknown argument: $1 (try --help)" ;;
@@ -48,6 +49,7 @@ while [ $# -gt 0 ]; do
 done
 case $days in '' | *[!0-9]*) cucina_die "--days must be a number" ;; esac
 case $name in *[\"/\\=+,\;\<\>#]*) cucina_die "--name must not contain any of \" / \\ = + , ; < > #" ;; esac
+case $purpose in installer | application) ;; *) cucina_die "--purpose must be installer or application" ;; esac
 cucina_need openssl security shasum
 
 if [ "$dry_run" = 0 ] && [ -z "$p12_out" ] && security find-certificate -c "$name" "$keychain" >/dev/null 2>&1; then
@@ -56,7 +58,10 @@ if [ "$dry_run" = 0 ] && [ -z "$p12_out" ] && security find-certificate -c "$nam
 fi
 if [ -n "$p12_out" ] && [ -e "$p12_out" ]; then cucina_die "$p12_out exists"; fi
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/cucina-signing.XXXXXX")
+umask 077
+mkdir -p "$HOME/.config/cucina/pkg-signing"
+chmod 0700 "$HOME/.config/cucina" "$HOME/.config/cucina/pkg-signing"
+tmp=$(mktemp -d "$HOME/.config/cucina/pkg-signing/temporary.XXXXXX")
 chmod 0700 "$tmp"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
@@ -70,9 +75,9 @@ CN = $name
 [ leaf ]
 basicConstraints = critical, CA:false
 keyUsage = critical, digitalSignature
-extendedKeyUsage = critical, codeSigning
 subjectKeyIdentifier = hash
 EOF
+if [ "$purpose" = application ]; then printf 'extendedKeyUsage = critical, codeSigning\n' >>"$tmp/openssl.cnf"; fi
 
 serial=0x01$(openssl rand -hex 8)
 openssl req -x509 -new -newkey rsa:4096 -sha256 -nodes -days "$days" -set_serial "$serial" \
@@ -104,8 +109,11 @@ else
 	[ "$extractable" = 1 ] || set -- "$@" -x
 	security import "$tmp/cert.pem" -k "$keychain" >/dev/null
 	security import "$tmp/key.pem" "$@" >/dev/null
-	security find-identity -p codesigning "$keychain" | grep -q "$sha1" ||
-		cucina_warn "the identity is not listed by 'security find-identity -p codesigning' (check the import)"
+	if [ "$purpose" = application ]; then
+		security find-identity -p codesigning "$keychain" | grep -q "$sha1" || cucina_warn "application identity not found after import"
+	else
+		cucina_warn "installer signing requires this public certificate trusted on the signing machine (Apple's recipe); trust is not changed automatically"
+	fi
 	dest="keychain $keychain (private key $([ "$extractable" = 1 ] && echo extractable || echo non-extractable))"
 fi
 rm -f "$tmp/key.pem"

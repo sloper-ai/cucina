@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
-<!-- Cucina profile 01 (push FIRST, before the package): trusted roots for the private package-signing certificate (R-MAC-9) and, optionally, a second signer during rotation and Cucina's CA. Placeholders ${CUCINA_*} and @if blocks are filled by macos/profiles/render.sh. -->
+<!-- Cucina profile 01 (push FIRST, before the package): trusted roots for the private package-signing certificate (R-MAC-9) and application certificate, optionally their replacements during rotation and Cucina's CA. Placeholders ${CUCINA_*} and @if blocks are filled by macos/profiles/render.sh. -->
 <plist version="1.0">
 <dict>
 	<key>PayloadContent</key>
@@ -31,7 +31,7 @@
 			<key>PayloadContent</key>
 			<data>${CUCINA_SIGNER2_CERT_B64}</data>
 			<key>PayloadDescription</key>
-			<string>Second package-signing certificate, trusted in parallel during a signing-certificate rotation.</string>
+			<string>Additional installer/application signer, including parallel trust during certificate rotation.</string>
 			<key>PayloadDisplayName</key>
 			<string>${CUCINA_SIGNER2_CERT_NAME}</string>
 			<key>PayloadIdentifier</key>
@@ -40,6 +40,42 @@
 			<string>com.apple.security.root</string>
 			<key>PayloadUUID</key>
 			<string>781D30E1-43DF-4AA1-98F0-BDB8E02CAA15</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+		<!-- @endif -->
+		<!-- @if CUCINA_SIGNER3_CERT_B64 -->
+		<dict>
+			<key>PayloadCertificateFileName</key>
+			<string>${CUCINA_SIGNER3_CERT_NAME}.cer</string>
+			<key>PayloadContent</key>
+			<data>${CUCINA_SIGNER3_CERT_B64}</data>
+			<key>PayloadDisplayName</key>
+			<string>${CUCINA_SIGNER3_CERT_NAME}</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.trust.signer3</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadUUID</key>
+			<string>42C012DA-47AE-4811-B56A-1C1C01D5C311</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+		<!-- @endif -->
+		<!-- @if CUCINA_SIGNER4_CERT_B64 -->
+		<dict>
+			<key>PayloadCertificateFileName</key>
+			<string>${CUCINA_SIGNER4_CERT_NAME}.cer</string>
+			<key>PayloadContent</key>
+			<data>${CUCINA_SIGNER4_CERT_B64}</data>
+			<key>PayloadDisplayName</key>
+			<string>${CUCINA_SIGNER4_CERT_NAME}</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.trust.signer4</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadUUID</key>
+			<string>FD2E584A-C0AA-4770-85BC-519A59349260</string>
 			<key>PayloadVersion</key>
 			<integer>1</integer>
 		</dict>

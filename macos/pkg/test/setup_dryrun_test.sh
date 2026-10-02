@@ -32,7 +32,8 @@ if dscl . -read /Users/cucina UniqueID >/dev/null 2>&1; then
 	ok "user cucina exists here: creation path not exercised"
 else
 	has "creates the Tart user" "dry-run: sysadminctl -addUser ... (arguments redacted)"
-	has "enables auto-login" "dry-run: sysadminctl -autologin ... (arguments redacted)"
+	has "enables auto-login" "atomically write /etc/kcpassword root:wheel 0600 (password redacted)"
+	has "prepares login keychain" "prepared the login keychain for cucina"
 fi
 if printf '%s\n' "$out" | grep -q -- '-password\|-newPassword'; then bad "a password argument was echoed"; else ok "no password argument echoed"; fi
 if printf '%s\n' "$out" | grep -Eq '[A-Za-z0-9]{32}'; then bad "a 32-character token appears in the output"; else ok "no password-like string in the output"; fi

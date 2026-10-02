@@ -96,6 +96,12 @@ render --signer-cert "$T/signer-a.pem" --ca-cert "$T/ca.pem" --no-trust-ca --tok
 if [ -e "$O/05-cucina-autologin.mobileconfig" ]; then bad "05 rendered without a password"; else ok "05 is opt-in"; fi
 expect_eq "trust profile without CA" "$(plutil -p "$O/01-cucina-trust.mobileconfig" | grep -c 'com.apple.security.root')" 1
 
+# R-MAC-9: both application and installer identities can rotate with old+new trust in parallel.
+if render --only 01 --signer-cert "$T/signer-a.pem" --signer-cert "$T/signer-b.pem" \
+	--signer-cert "$T/signer-a.pem" --signer-cert "$T/signer-b.pem" --ca-cert "$T/ca.pem" --out "$T/rotation" >/dev/null 2>&1; then
+	expect_eq "dual-role rotation plus CA" "$(plutil -p "$T/rotation/01-cucina-trust.mobileconfig" | grep -c 'com.apple.security.root')" 5
+else bad "dual-role rotation was rejected"; fi
+
 # 3. Fail fast (table): each row must exit non-zero.
 while IFS='|' read -r name args; do
 	[ -n "$name" ] || continue

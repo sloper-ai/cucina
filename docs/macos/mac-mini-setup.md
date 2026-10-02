@@ -9,8 +9,9 @@ decommissioned through MDM (UC20, UC21).
 The primary path is **Apple Business's built-in device management** (Apple Business replaced Apple Business Manager and
 Business Essentials on 2026-04-14; its built-in MDM is free). Other MDMs are covered in [§9](#9-appendix--third-party-mdms).
 Some Apple Business capabilities could not be verified when this guide was written; they are marked
-**verify in the Apple Business UI**. Everything Cucina needs on the host is also done by the package's `postinstall`, so an
-unverified MDM feature never blocks a host.
+**verify in the Apple Business UI**. The package's `postinstall` handles local account creation and host preparation
+without an MDM scripting feature. It cannot replace MDM-delivered trust/configuration, prevent FileVault through policy,
+or guarantee enrollment ordering; verify those prerequisites before fleet rollout.
 
 What runs on a host: the LaunchDaemon `ai.sloper.cucina.hostd` (root) dials **out** to the Cucina control plane, keeps up to
 two Tart VMs (macOS + Xcode) for Buildbarn workers, and runs a host-level cache (L2). Tart runs as the dedicated standard
@@ -64,7 +65,7 @@ cache. hostd sizes each VM at `(cores − 2) / slots` vCPUs and `(RAM − 8 GB) 
   | --- | --- | --- |
   | `CONTROLLER_URL` host | TCP 8445, 8446, 8981, 8983 | enrollment, HostService (mTLS), storage (L2 upstream), scheduler (relayed for VMs) |
   | `ghcr.io`, `pkg-containers.githubusercontent.com` | TCP 443 | golden VM images (private GHCR package; short-lived pull credentials come from the controller) |
-  | Package URL host: `github.com`, `release-assets.githubusercontent.com` (or your S3/CDN host) | TCP 443 | the Cucina package (the device follows GitHub's redirect) |
+  | Package URL host: `github.com`, `release-assets.githubusercontent.com` (or your S3/CDN host) | TCP 443 | the Cucina package (redirect following verified with curl/URLSession, not yet Apple Business) |
   | Apple: device management, push and software update services (`*.apple.com`, `*.push.apple.com`, `*.cdn-apple.com`, `gdmf.apple.com`, `deviceenrollment.apple.com`, `mdmenrollment.apple.com`, `iprofiles.apple.com`, `albert.apple.com`, `time.apple.com`) | TCP 443, 2197, 5223; UDP 123 | ADE, MDM push, OS updates, certificate checks, time. Apple's complete list: "Use Apple products on enterprise networks". |
 
 **Power.** A UPS is recommended. The host restarts by itself when power returns, but an abrupt power cut can still
@@ -152,7 +153,7 @@ The templates live in `macos/profiles/templates/`. Render them on an admin Mac, 
 cp macos/profiles/example.env ~/.config/cucina/site-a.env   # edit CUCINA_CONTROLLER_URL etc.
 printf '%s' '<site enrollment token>' > ~/.config/cucina/site-a.token && chmod 600 ~/.config/cucina/site-a.token
 macos/profiles/render.sh --config ~/.config/cucina/site-a.env \
-  --signer-cert cucina-host-signer-<sha1>.pem --ca-cert cucina-ca.pem \
+  --signer-cert installer.pem --signer-cert application.pem --ca-cert cucina-ca.pem \
   --token-file ~/.config/cucina/site-a.token --out ~/.config/cucina/profiles/site-a
 ```
 
@@ -172,18 +173,18 @@ Every rendered file lints (`plutil -lint`), is far below Apple Business's 1 MB l
    profile 03).
 3. Add the configurations, the Software Update configuration and the package to the hosts' Blueprint.
 
-**Ordering in Apple Business.** Blueprints have no explicit order. With *Await configuration*, configurations are
-delivered while Setup Assistant waits, and packages install afterwards, so the trust certificate is in place first.
-*Verify in the Apple Business UI* on the first host. If a package install fails as untrusted, the configurations arrived
-late: the fix is in [§8](#8-troubleshooting). A conservative alternative is two Blueprints: configurations first, then a
-second Blueprint with the package once the hosts show the configurations as installed.
+**Ordering in Apple Business — verify in the Apple Business UI.** Do not assume *Await configuration* serializes
+Blueprint payloads or guarantees trust before the package. First assign the trust and configuration set; confirm it is
+installed on the device; then assign the package (separate staged Blueprints/configuration assignments if needed).
+Test this sequence on the first host. An untrusted-package failure means trust is missing or invalid; check the signer
+and profile status as described in [§8](#8-troubleshooting) before retrying.
 
 ### 4.3 What the package does on the host
 
 `postinstall` runs `/usr/local/cucina/bin/cucina-host-setup install`, which is idempotent and needs no network:
 
-* creates the standard user **`cucina`** with a random password that never leaves the Mac and turns on auto-login for
-  it, unless the user already exists (then it only checks auto-login) — ADR 0751;
+* creates the standard user **`cucina`** with a random password that never leaves the Mac, prepares its login keychain,
+  and turns on auto-login; existing healthy accounts are preserved (ADRs 0751/0755);
 * `pmset -a sleep 0 womp 1 autorestart 1` and `systemsetup -setrestartfreeze on` (settings no profile can set);
 * vmnet DHCP lease 600 s (Tart's recommendation, avoids lease exhaustion);
 * `/var/db/cucina` (state, L2 cache) and `/Library/Logs/Cucina`;
@@ -279,17 +280,23 @@ Hosts must run a macOS version at least as new as their VM guests (R-VER-3). Use
 * **Rotate a host identity:** hostd renews its short-lived certificate automatically before expiry. To force a new
   identity (suspected compromise): `cucinactl hosts remove <serial>`, run `sudo cucina-host-uninstall --yes` and reinstall
   the package (or wipe the host), then approve it again.
-* **Rotate the package-signing certificate** (yearly, before it expires; parallel trust): create the new identity
-  (`make -C macos/pkg cert CERT_NAME="Cucina Host Package Signing 2027"`), render profile 01 with **both** certificates
-  (`--signer-cert old.pem --signer-cert new.pem`), push it and wait until every host has it, publish the next package
-  version signed with the new identity, and later render profile 01 with only the new certificate. Details and blast
+* **Rotate the private signing certificates** (yearly, before expiry; parallel trust): generate new application and
+  installer identities with their respective `--purpose` values. Render profile 01 with old/new certificates for both
+  roles (four `--signer-cert` arguments), push and wait for every host, then publish a new package signed with the new
+  identities. Later remove the old pair from profile 01. Details and blast
   radius: [docs/mdm/signing.md](../mdm/signing.md).
 * **Upgrade the host agent:** publish the new version (new URL per version), then in Apple Business **macOS Packages >
   the package > Updates > Update Package** with the new URL and hash (other MDMs: new manifest/version). The upgrade stops
   hostd, replaces binaries and Tart, and starts it again; VMs, caches and the host identity are preserved. Drain first if
   you want no running actions to be interrupted.
-* **Add a new Xcode version** (R-VER-3): build and publish the image (`make image-macos XCODE=27.1`), add or roll a pool
-  that uses it; hosts pre-pull it within their disk budget. Hosts must already run a macOS version ≥ the image's.
+* **Add a new Xcode version** (R-VER-3): add the version/build pin and Packer variables in `workers/macos`, then build
+  and smoke-check with `make -C workers/macos image-macos XCODE=<supported-version>` (27.0 is the current checked entry;
+  a 27.1 entry is planned until that version exists in `versions.json`). Use the pinned Cirrus Xcode image when its build
+  matches; otherwise obtain Apple's `.xip` with an authorized Apple Developer account and provide the extracted, licensed
+  app via `XCODE_APP`. Never embed an Apple ID password, session, download credential or Xcode installation in this repository.
+  Review the image's smoke evidence, publish through the operator-controlled image workflow, then add a parallel pool or
+  change its image/generation and drain-roll existing VMs. Hosts pre-pull within their disk budget and must already run
+  a macOS version ≥ the image's. See [the image runbook](../operations/macos-images.md) and ADR 0352.
 * **Change VM size or image:** VM sizing via profile 02 (`VMSlots`, `VMCPUCount`, `VMMemoryGiB`) or the controller's
   host settings; the image via the pool (`WorkerPool` image reference). VMs are re-cloned at their next start.
 * **Decommission a host:**

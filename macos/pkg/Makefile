@@ -3,9 +3,9 @@
 # scripts (see BUILD.bazel and docs/mdm/pkg.md); signing is local-only because it needs keychain access.
 #
 #   make -C macos/pkg pkg                       unsigned package           build/cucina-host-X-Y-Z-unsigned.pkg
-#   make -C macos/pkg sign IDENTITY="..."       signed with the private certificate   build/cucina-host-X-Y-Z.pkg
+#   make -C macos/pkg sign IDENTITY="... Application" INSTALLER_IDENTITY="... Installer"   private signed pkg
 #   make -C macos/pkg sign SIGNING=developer-id DEVID_APP=... DEVID_INSTALLER=... NOTARY_KEY=... NOTARY_KEY_ID=... NOTARY_ISSUER=...
-#   make -C macos/pkg uninstall-pkg [IDENTITY=...]   payload-free uninstaller (UNINSTALL_ARGS=--purge for the purge variant)
+#   make -C macos/pkg uninstall-pkg [INSTALLER_IDENTITY=...]   payload-free uninstaller (UNINSTALL_ARGS=--purge for the purge variant)
 #   make -C macos/pkg manifest [URL=... MANIFEST_URL=...]   MDM manifest + Apple Business values for the signed package
 #   make -C macos/pkg pkg-publish [TARGET=github|s3] [DRY_RUN=1]  versioned, immutable upload + verification
 #   make -C macos/pkg cert CERT_NAME="..."      create the private signing identity in the login keychain
@@ -25,6 +25,8 @@ HOSTD_BIN ?= $(BUILD)/cucina-hostd
 NOTICES ?= $(REPO)/THIRD_PARTY_NOTICES.md
 LICENSE ?= $(REPO)/LICENSE.md
 IDENTITY ?= $(CUCINA_SIGN_IDENTITY)
+INSTALLER_IDENTITY ?= $(CUCINA_INSTALLER_IDENTITY)
+CERT_PURPOSE ?= installer
 SIGNING ?= private
 UNINSTALL_ARGS ?=
 TARGET ?= github
@@ -63,6 +65,7 @@ pkg: hostd
 sign: hostd
 	CUCINA_SIGNING="$(SIGNING)" scripts/sign.sh \
 		$(if $(IDENTITY),--identity "$(IDENTITY)") \
+		$(if $(INSTALLER_IDENTITY),--installer-identity "$(INSTALLER_IDENTITY)") \
 		$(if $(SIGN_KEYCHAIN),--keychain "$(SIGN_KEYCHAIN)") \
 		$(if $(DEVID_APP),--app-identity "$(DEVID_APP)") \
 		$(if $(DEVID_INSTALLER),--installer-identity "$(DEVID_INSTALLER)") \
@@ -72,7 +75,7 @@ sign: hostd
 uninstall-pkg:
 	scripts/build-pkg.sh --uninstall --version "$(VERSION)" --out "$(UNINSTALLER)" \
 		$(if $(UNINSTALL_ARGS),--uninstall-args "$(UNINSTALL_ARGS)") \
-		$(if $(IDENTITY),--installer-identity "$(IDENTITY)") \
+		$(if $(INSTALLER_IDENTITY),--installer-identity "$(INSTALLER_IDENTITY)") \
 		$(if $(SIGN_KEYCHAIN),--keychain "$(SIGN_KEYCHAIN)")
 	scripts/check-pkg.sh "$(UNINSTALLER)" --uninstaller
 
@@ -92,7 +95,7 @@ pkg-publish:
 		$(if $(DRY_RUN),--dry-run)
 
 cert:
-	scripts/make-signing-cert.sh --name "$(CERT_NAME)"
+	scripts/make-signing-cert.sh --name "$(CERT_NAME)" --purpose "$(CERT_PURPOSE)"
 
 lint:
 	test/lint.sh
@@ -101,6 +104,7 @@ test:
 	test/lint.sh
 	test/manifest_test.sh
 	test/setup_dryrun_test.sh
+	test/safety_test.sh
 	../profiles/test/render_test.sh
 
 clean:
