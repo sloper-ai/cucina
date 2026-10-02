@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: trickle
+description: >-
+  One short action every 3 minutes for 2 hours (gaps shorter than idleTimeout). One VM serves everything:
+  launched once on the first action, never scaled in between actions, scaled to zero after the trickle ends.
+seed: 2
+duration: 2h
+fleet:
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+      subnets: [subnet-a, subnet-b]
+workload:
+  arrivals:
+    - {at: 10s, pool: linux-x86-64, count: 40, every: 3m, duration: 5s}
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxLaunches: {linux-x86-64: 1}
+  maxInstances: {linux-x86-64: 1}
+  queueWaitP95: 2s
+  queueWaitMax: 90s

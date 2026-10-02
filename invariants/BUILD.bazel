@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "invariants",
+    srcs = [
+        "invariants.go",
+        "predicates.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/invariants",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+    ],
+)
+
+cucina_go_test(
+    name = "invariants_test",
+    srcs = ["invariants_test.go"],
+    tier = "unit",
+    deps = [
+        ":invariants",
+        "//internal/domain",
+        "//internal/ports",
+        "@com_github_stretchr_testify//require",
+    ],
+)

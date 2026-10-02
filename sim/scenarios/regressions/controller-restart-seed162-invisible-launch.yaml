@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: controller-restart-seed162-invisible-launch
+description: >-
+  Regression (sweep, controller-restart-chaos seed 162): the controller restarted 3 s after four launches whose
+  results it had already recorded, before EC2 Describe listed the new instances. The ledger had committed their
+  seqs, so the new leader saw neither instances nor in-flight launches and launched four more (8 > max 4). Fix:
+  a seq stays uncommitted until its instance is listed (or ConsistencyGrace passes), so after a restart it counts
+  as pending capacity and is reused (EC2 deduplicates the token).
+seed: 162
+duration: 10m
+fleet:
+  compute:
+    visibleMax: 60s
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+      subnets: [subnet-a, subnet-b]
+workload:
+  arrivals:
+    - {at: 30s, pool: linux-x86-64, count: 200, duration: 20s}
+faults:
+  - {at: 33s, kind: controller-restart}
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxLaunches: {linux-x86-64: 4}

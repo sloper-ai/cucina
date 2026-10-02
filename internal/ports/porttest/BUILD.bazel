@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "porttest",
+    srcs = [
+        "buildqueue.go",
+        "compute.go",
+        "local.go",
+        "porttest.go",
+        "tart.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/ports/porttest",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: rollout
+description: >-
+  An image rollout (new generation) arrives while the pool is busy, first lazy, later eager. New launches use the
+  new generation at once; old-generation VMs are drained and replaced without cutting off running actions
+  (R-OPS-2, UC12).
+seed: 13
+duration: 40m
+fleet:
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+      subnets: [subnet-a, subnet-b]
+workload:
+  arrivals:
+    - {at: 30s, pool: linux-x86-64, count: 300, duration: 40s}
+    - {at: 15m, pool: linux-x86-64, count: 300, duration: 40s}
+faults:
+  - {at: 4m, kind: rollout, pool: linux-x86-64, op: g2, type: lazy}
+  - {at: 17m, kind: rollout, pool: linux-x86-64, op: g3, type: eager}
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxInstances: {linux-x86-64: 8}

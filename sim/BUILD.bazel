@@ -1,0 +1,57 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "sim",
+    srcs = [
+        "faults.go",
+        "metrics.go",
+        "replay.go",
+        "runner.go",
+        "scenario.go",
+        "sweep.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/sim",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//internal/domain",
+        "//internal/fakes",
+        "//internal/ports",
+        "//internal/scaling",
+        "//invariants",
+        "@in_yaml_go_yaml_v3//:yaml",
+    ],
+)
+
+# Scenarios with fixed seeds, regressions and shadow mode (R-SCALE-8 smoke).
+cucina_go_test(
+    name = "sim_test",
+    timeout = "short",
+    srcs = ["sim_test.go"],
+    data = glob([
+        "scenarios/**/*.yaml",
+        "traces/*.jsonl",
+    ]),
+    tier = "integration",
+    deps = [":sim"],
+)
+
+# keep
+# Nightly sweep: every scenario over 1,000 seeds with random fault schedules
+# (R-TEST-8c). Write minimised failing seeds with `go test ./sim -run TestSweep
+# -sweep.seeds=N -sweep.write` (the Bazel sandbox discards files).
+cucina_go_test(
+    name = "sim_sweep_test",
+    timeout = "eternal",
+    srcs = ["sim_test.go"],
+    args = [
+        "-test.run=^TestSweep$$",
+        "-sweep.seeds=1000",
+    ],
+    data = glob([
+        "scenarios/**/*.yaml",
+        "traces/*.jsonl",
+    ]),
+    tier = "simulation",
+    deps = [":sim"],
+)

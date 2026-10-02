@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: replay-workday
+description: >-
+  Replays a (synthetic) 4-hour workday queue trace over a Linux and a Windows pool. Used by `simctl replay` to
+  compare autoscaler policies on cost against queue wait (R-TEST-8c); as a scenario it guards that the default
+  policy keeps every action succeeding and returns both pools to zero.
+seed: 21
+duration: 4h
+fleet:
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 6
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+    - name: windows-x86-64
+      provider: ec2
+      platform: windows-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: windows, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 10m
+      startupTimeout: 15m
+      instanceTypes: [c7a.2xlarge, c8i.2xlarge]
+      image: {id: ami-windows, platform: windows}
+      fastLaunch: {targetCount: 4, ready: true}
+workload:
+  trace: ../traces/synthetic-workday.jsonl
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxInstances: {linux-x86-64: 6, windows-x86-64: 4}

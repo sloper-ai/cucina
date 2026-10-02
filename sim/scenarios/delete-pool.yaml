@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: delete-pool
+description: >-
+  The pool is deleted in the middle of a build (uninstall, R-OPS-3). The finalizer path launches nothing more,
+  drains every VM, lets running actions finish (no busy VM is terminated), fails the queued work fast with a clear
+  message, and ends with every instance terminated.
+seed: 17
+duration: 15m
+fleet:
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+workload:
+  arrivals:
+    - {at: 30s, pool: linux-x86-64, count: 300, duration: 45s}
+faults:
+  - {at: 3m, kind: delete, pool: linux-x86-64}
+expectations:
+  minFailed: 50
+  maxLaunches: {linux-x86-64: 4}
+  endAtZero: true

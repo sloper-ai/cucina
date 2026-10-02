@@ -1,0 +1,41 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "scaling",
+    srcs = [
+        "api.go",
+        "backoff.go",
+        "floors.go",
+        "helpers.go",
+        "ledger.go",
+        "plan.go",
+        "state.go",
+        "vm.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/scaling",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+        "//invariants",
+    ],
+)
+
+cucina_go_test(
+    name = "scaling_test",
+    srcs = [
+        "helpers_test.go",
+        "plan_test.go",
+        "world_test.go",
+    ],
+    tier = "unit",
+    deps = [
+        ":scaling",
+        "//internal/domain",
+        "//internal/fakes",
+        "//internal/ports",
+        "@com_github_stretchr_testify//require",
+        "@net_pgregory_rapid//:rapid",
+    ],
+)

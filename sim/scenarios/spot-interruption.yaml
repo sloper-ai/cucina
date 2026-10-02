@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: spot-interruption
+description: >-
+  Two instances are interrupted by EC2 in the middle of a burst (spot reclaim, or an operator terminating them).
+  Their running actions are requeued by the scheduler, the controller notices the vanished VMs (reason external),
+  replaces the capacity and all work completes (UC8, NFR-R1).
+seed: 10
+duration: 30m
+fleet:
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+      subnets: [subnet-a, subnet-b]
+workload:
+  arrivals:
+    - {at: 30s, pool: linux-x86-64, count: 400, duration: 30s}
+faults:
+  - {at: 3m, kind: spot-interruption, pool: linux-x86-64, count: 2}
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxInstances: {linux-x86-64: 4}
+  maxLaunches: {linux-x86-64: 6}

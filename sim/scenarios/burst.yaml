@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: burst
+description: >-
+  A cold build bursts 400 actions onto a Linux pool sitting at zero (UC6). The first queued action launches
+  immediately, booting VMs count as pending capacity (no over-provisioning beyond max), the queue is worked
+  down and the pool returns to zero after idleTimeout (R-SCALE-2/3, NFR-C1).
+seed: 1
+duration: 20m
+fleet:
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+workload:
+  arrivals:
+    - at: 30s
+      pool: linux-x86-64
+      count: 400
+      duration: 20s
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxInstances: {linux-x86-64: 4}
+  maxLaunches: {linux-x86-64: 4}
+  queueWaitMax: 6m
+  maxIdleWithEmptyQueue: 6m

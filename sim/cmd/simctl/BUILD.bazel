@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "simctl_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/sloper-ai/cucina/sim/cmd/simctl",
+    visibility = ["//visibility:private"],
+    deps = ["//sim"],
+)
+
+go_binary(
+    name = "simctl",
+    embed = [":simctl_lib"],
+    visibility = ["//visibility:public"],
+)

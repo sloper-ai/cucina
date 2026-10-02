@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: fail-fast
+description: >-
+  Pools that cannot obtain capacity at all fail their queued work immediately with a clear message instead of
+  letting clients hang (R-RE-2, UC27): one pool has max 0, one is paused, one has no image. A fourth pool's queue
+  is not declared in the scheduler (ADR 0002): Execute is rejected at once and the pool never launches.
+seed: 15
+duration: 10m
+fleet:
+  pools:
+    - name: disabled
+      provider: ec2
+      runners: [{name: native, properties: {OSFamily: linux, ISA: rv64g, cucina-emulation: qemu}, concurrency: 2}]
+      max: 0
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge]
+    - name: paused
+      provider: ec2
+      runners: [{name: native, properties: {OSFamily: linux, ISA: s390x, cucina-emulation: qemu}, concurrency: 2}]
+      max: 2
+      paused: true
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge]
+    - name: no-image
+      provider: ec2
+      runners: [{name: native, properties: {OSFamily: linux, ISA: arm-a32, cucina-emulation: qemu}, concurrency: 2}]
+      max: 2
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge]
+    - name: undeclared
+      provider: ec2
+      runners: [{name: native, properties: {OSFamily: linux, ISA: x86-64, cucina-test: undeclared}, concurrency: 2}]
+      max: 2
+      undeclared: true
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge]
+workload:
+  arrivals:
+    - {at: 10s, pool: disabled, count: 5, duration: 10s}
+    - {at: 10s, pool: paused, count: 5, duration: 10s}
+    - {at: 10s, pool: no-image, count: 5, duration: 10s}
+    - {at: 10s, pool: undeclared, count: 5, duration: 10s}
+faults:
+  - {at: 0s, kind: image-missing, pool: no-image}
+expectations:
+  minFailed: 20
+  maxFailWait: 3s
+  maxLaunches: {disabled: 0, paused: 0, no-image: 0, undeclared: 0}

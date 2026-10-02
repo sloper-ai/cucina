@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: network-faults
+description: >-
+  The controller loses the scheduler for 2 minutes mid-burst, the scheduler later restarts (in-memory state lost;
+  clients retry, workers reconnect), and the launch API returns ambiguous errors for a while. The controller holds
+  its decisions while blind, reuses idempotency tokens for ambiguous launches, and all work completes (UC8).
+seed: 14
+duration: 40m
+fleet:
+  pools:
+    - name: linux-x86-64
+      provider: ec2
+      platform: linux-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: linux, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 5m
+      startupTimeout: 5m
+      instanceTypes: [c8i.2xlarge, c7i.2xlarge]
+      subnets: [subnet-a, subnet-b]
+workload:
+  arrivals:
+    - {at: 30s, pool: linux-x86-64, count: 300, duration: 30s}
+    - {at: 15m, pool: linux-x86-64, count: 200, duration: 30s}
+faults:
+  - {at: 3m, kind: network-cut, duration: 2m}
+  - {at: 9m, kind: scheduler-restart}
+  - {at: 14m50s, kind: api-error, op: Launch, value: 0.7, duration: 3m}
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxInstances: {linux-x86-64: 4}

@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "fakes",
+    srcs = [
+        "buildqueue.go",
+        "clock.go",
+        "compute.go",
+        "doc.go",
+        "faults.go",
+        "hostfleet.go",
+        "idp.go",
+        "local.go",
+        "vmruntime.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/fakes",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+    ],
+)
+
+cucina_go_test(
+    name = "fakes_test",
+    timeout = "short",
+    srcs = ["conformance_test.go"],
+    tier = "integration",
+    deps = [
+        ":fakes",
+        "//internal/domain",
+        "//internal/ports",
+        "//internal/ports/porttest",
+    ],
+)

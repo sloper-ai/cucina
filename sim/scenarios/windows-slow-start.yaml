@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+name: windows-slow-start
+description: >-
+  A Windows pool bursts from zero with only 2 EC2 Fast Launch snapshots pre-provisioned: two VMs boot in about
+  75 s, the others take the slow path (about 4 minutes) but stay well within the 15-minute startupTimeout, so no VM
+  is failed or replaced and all work completes (R-POOL-2 Fast Launch, NFR-P1 slow path).
+seed: 11
+duration: 40m
+fleet:
+  compute:
+    fastLaunchRefill: 30m
+  pools:
+    - name: windows-x86-64
+      provider: ec2
+      platform: windows-x86-64
+      runners:
+        - name: native
+          properties: {OSFamily: windows, ISA: x86-64}
+          concurrency: 8
+      vcpus: 8
+      max: 4
+      idleTimeout: 10m
+      startupTimeout: 15m
+      instanceTypes: [c7a.2xlarge, c8i.2xlarge]
+      image: {id: ami-windows, platform: windows}
+      fastLaunch: {targetCount: 2, ready: true}
+workload:
+  arrivals:
+    - {at: 30s, pool: windows-x86-64, count: 300, duration: 30s}
+expectations:
+  allSucceed: true
+  endAtZero: true
+  maxLaunches: {windows-x86-64: 4}
+  maxInstances: {windows-x86-64: 4}
