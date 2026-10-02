@@ -9,12 +9,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -33,6 +35,8 @@ type scriptHost struct {
 	// bulk, if set, moves files larger than bulkThreshold (SSM port forwarding).
 	bulk          bulkTransfer
 	bulkThreshold int64
+	jobsMu        sync.Mutex
+	jobs          map[string]Job // launch authority survives transport calls, never reconstructed from PID files
 }
 
 type bulkTransfer interface {
@@ -119,17 +123,31 @@ func parseForeground(out string) (rc int, outN, errN int64, stdout, stderr []byt
 func (h *scriptHost) Start(ctx context.Context, script string, o Opts) (Job, error) {
 	id := newJobID()
 	j := Job{ID: id, Dir: h.jobDir(id)}
-	out, rc, err := h.t.exec(ctx, h.d.start(j.Dir, id, script, o), 2*time.Minute)
-	if err != nil {
-		return j, fmt.Errorf("%s: start job: %w", h.name, err)
+	if t, ok := h.t.(jobTransport); ok {
+		return t.startJob(ctx, j, script, o)
 	}
-	if rc != 0 || !strings.Contains(out, "started") {
-		return j, fmt.Errorf("%s: start job: exit %d: %s", h.name, rc, tail(out, 500))
+	h.jobsMu.Lock()
+	if h.jobs == nil {
+		h.jobs = make(map[string]Job)
+	}
+	h.jobs[j.ID] = j
+	h.jobsMu.Unlock()
+	out, rc, err := h.t.exec(ctx, h.d.start(j.Dir, id, script, o), 2*time.Minute)
+	if err != nil || rc != 0 || !strings.Contains(out, "started") {
+		if err == nil {
+			err = fmt.Errorf("exit %d: %s", rc, tail(out, 500))
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		return j, errors.Join(fmt.Errorf("%s: start job: %w", h.name, err), StopJob(cleanup, h, j))
 	}
 	return j, nil
 }
 
 func (h *scriptHost) Status(ctx context.Context, j Job) (JobStatus, error) {
+	if t, ok := h.t.(jobTransport); ok {
+		return t.jobStatus(j)
+	}
 	out, _, err := h.t.exec(ctx, h.d.status(j.Dir), time.Minute)
 	if err != nil {
 		return JobStatus{}, fmt.Errorf("%s: job status: %w", h.name, err)
@@ -322,7 +340,7 @@ func PutPrivate(ctx context.Context, h Host, local, remote, user string) error {
 	if !ok {
 		return fmt.Errorf("%s: private transfer unsupported", h.Name())
 	}
-	if _, isLocal := sh.t.(localTransport); isLocal {
+	if _, isLocal := sh.t.(*localTransport); isLocal {
 		b, err := os.ReadFile(local)
 		if err != nil {
 			return err
@@ -330,10 +348,62 @@ func PutPrivate(ctx context.Context, h Host, local, remote, user string) error {
 		if err := os.MkdirAll(filepath.Dir(remote), 0o700); err != nil {
 			return err
 		}
-		return os.WriteFile(remote, b, 0o600)
+		if err := os.Chmod(filepath.Dir(remote), 0o700); err != nil {
+			return err
+		}
+		if fi, err := os.Lstat(remote); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing a private symlink destination")
+		}
+		f, err := os.OpenFile(remote, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := f.Chmod(0o600); err != nil {
+			_ = f.Close()
+			return err
+		}
+		_, err = f.Write(b)
+		closeErr := f.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
 	}
 	if sh.bulk == nil {
 		return fmt.Errorf("%s: refusing to send a secret inline; configure SSM port forwarding (profile/region)", h.Name())
+	}
+	// Restrict the staging destination BEFORE a receiver writes the first
+	// secret byte. Final chmod alone leaves a window under the default umask.
+	var prepare string
+	if sh.os == Windows {
+		prepare = fmt.Sprintf(`$ErrorActionPreference='Stop'
+$p=%s; $d=Split-Path -Parent $p
+New-Item -ItemType Directory -Force -Path $d | Out-Null
+foreach ($item in @($d,$p,($p+'.part'))) { if ((Test-Path -LiteralPath $item) -and ((Get-Item -Force -LiteralPath $item).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'private destination is a reparse point' } }
+$acl=New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true,$false)
+foreach ($id in @('S-1-5-18','S-1-5-32-544')) {
+  $sid=New-Object System.Security.Principal.SecurityIdentifier($id)
+  $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
+  $acl.AddAccessRule($rule)
+}
+Set-Acl -LiteralPath $d -AclObject $acl
+if (Test-Path ($p+'.part')) { Remove-Item -Force ($p+'.part') }
+$fs=[IO.File]::Create($p+'.part'); $fs.Close()
+`, psQuote(remote))
+	} else {
+		prepare = fmt.Sprintf(`set -eu
+umask 077
+p=%s; d=$(dirname "$p")
+[ ! -L "$d" ] && [ ! -L "$p" ] && [ ! -L "$p.part" ] || exit 1
+mkdir -p "$d"; chmod 0700 "$d"
+: > "$p.part"; chmod 0600 "$p.part"
+`, shQuote(remote))
+	}
+	if _, rc, err := sh.t.exec(ctx, prepare, time.Minute); err != nil {
+		return fmt.Errorf("prepare private transfer: %w", err)
+	} else if rc != 0 {
+		return fmt.Errorf("prepare private transfer exited %d", rc)
 	}
 	if err := sh.bulk.put(ctx, sh, local, remote); err != nil {
 		return err

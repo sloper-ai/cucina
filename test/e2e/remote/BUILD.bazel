@@ -7,11 +7,19 @@ go_library(
     name = "remote",
     srcs = [
         "forward.go",
+        "forward_process_other.go",
+        "forward_process_posix.go",
+        "forward_process_windows.go",
         "host.go",
         "local.go",
+        "local_job.go",
+        "process_notice_darwin.go",
+        "process_notice_linux.go",
+        "process_owner.go",
         "remote.go",
         "scripts.go",
         "ssm.go",
+        "windows_job.go",
     ],
     importpath = "github.com/sloper-ai/cucina/test/e2e/remote",
     visibility = ["//test/e2e:__subpackages__"],
@@ -20,12 +28,48 @@ go_library(
         "@com_github_aws_aws_sdk_go_v2_config//:config",
         "@com_github_aws_aws_sdk_go_v2_service_ssm//:ssm",
         "@com_github_aws_aws_sdk_go_v2_service_ssm//types",
+    ] + select({
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_sys//windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# gazelle:exclude windows_ownership_test.go
+
+cucina_go_test(
+    name = "windows_ownership_test",  # keep
+    srcs = ["windows_ownership_test.go"],  # keep
+    target_compatible_with = ["@platforms//os:windows"],
+    tier = "integration",
+    deps = [
+        ":remote",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_service_ssm//:ssm",
+        "@com_github_aws_aws_sdk_go_v2_service_ssm//types",
+        "@com_github_stretchr_testify//require",
     ],
 )
 
 cucina_go_test(
     name = "remote_test",
-    srcs = ["remote_test.go"],
+    srcs = [
+        "forward_test.go",
+        "remote_test.go",
+    ],
     embed = [":remote"],
     # This suite exercises the documented POSIX local transport, not PowerShell.
     target_compatible_with = select({
@@ -33,5 +77,52 @@ cucina_go_test(
         "//conditions:default": [],
     }),
     tier = "integration",
-    deps = ["@com_github_stretchr_testify//require"],
+    deps = select({
+        "@rules_go//go/platform:aix": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:android": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:js": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:osx": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "@com_github_stretchr_testify//require",
+        ],
+        "//conditions:default": [],
+    }),
 )

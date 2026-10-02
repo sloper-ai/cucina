@@ -7,9 +7,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,7 +28,7 @@ import (
 // dies without an exit code), and SHA-256-verified chunked file transfer.
 
 func localHost(t *testing.T) *scriptHost {
-	return &scriptHost{name: "local", os: "darwin", workDir: t.TempDir(), t: localTransport{}, d: sh{}, putChunk: 7000}
+	return &scriptHost{name: "local", os: "darwin", workDir: t.TempDir(), t: &localTransport{}, d: sh{}, putChunk: 7000}
 }
 
 // busyPoll re-polls immediately: the jobs below finish in milliseconds, and
@@ -79,6 +83,93 @@ func TestBackgroundJobs(t *testing.T) {
 	st, err := h.Status(ctx, j)
 	require.NoError(t, err)
 	require.Contains(t, []string{JobExited, JobLost}, st.State, "cancelled workload must no longer run")
+}
+
+// Guards: cancellation ownership — stale on-disk PID/group data must never
+// target a different process after the original job is lost. Replacing the
+// recorded identity models PID reuse without churning global OS process IDs.
+func TestLostJobDoesNotUseRecycledIdentity(t *testing.T) {
+	h := localHost(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	j, err := h.Start(ctx, "kill -9 $PPID", Opts{})
+	require.NoError(t, err)
+	_, err = Wait(ctx, h, j, time.Millisecond, busyPoll)
+	require.ErrorIs(t, err, ErrJobLost)
+
+	unrelated := exec.Command("/bin/sh", "-c", "read -r release")
+	unrelated.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	input, err := unrelated.StdinPipe()
+	require.NoError(t, err)
+	require.NoError(t, unrelated.Start())
+	t.Cleanup(func() {
+		_ = input.Close()
+		_ = unrelated.Process.Kill()
+		_ = unrelated.Wait() // the test holds this identity unreaped until cleanup
+	})
+	require.NoError(t, os.WriteFile(filepath.Join(j.Dir, "group"), fmt.Appendf(nil, "%d\n", unrelated.Process.Pid), 0o600))
+	_ = StopJob(ctx, h, j) // stale/unowned cleanup may fail, but must not signal it
+	fresh := NewLocal("new harness", h.WorkDir())
+	require.Error(t, StopJob(ctx, fresh, j), "a new harness cannot recover kill authority from a PID file")
+	_, err = input.Write([]byte("release\n"))
+	require.NoError(t, err, "a different process must remain untouched by stale job cleanup")
+	require.NoError(t, unrelated.Wait(), "the unrelated control process must exit normally")
+}
+
+// privateTransport exercises the SSM-side scripts on localhost without an
+// AWS connection; the bulk fake observes filesystem state before any bytes.
+type privateTransport struct{ *localTransport }
+
+type privateBulk struct{ secure bool }
+
+func (b *privateBulk) put(_ context.Context, _ *scriptHost, local, dst string) error {
+	d, err := os.Stat(filepath.Dir(dst))
+	if err != nil {
+		return err
+	}
+	p, err := os.Stat(dst + ".part")
+	if err != nil {
+		return err
+	}
+	b.secure = d.Mode().Perm() == 0o700 && p.Mode().Perm() == 0o600
+	if !b.secure {
+		return errors.New("secret transfer started before permissions were private")
+	}
+	data, err := os.ReadFile(local)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(dst+".part", data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(dst+".part", dst)
+}
+func (*privateBulk) get(context.Context, *scriptHost, string, string) error {
+	return errors.New("not a download")
+}
+
+// Guards §12: private destination permissions apply before transfer, including
+// retrying over a pre-existing world-readable staging file, not just afterwards.
+func TestPutPrivateBeforeTransfer(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			root := t.TempDir()
+			src := filepath.Join(root, "fixture")
+			require.NoError(t, os.WriteFile(src, []byte("not-a-real-key"), 0o600))
+			dst := filepath.Join(root, "secrets", "key")
+			if existing {
+				require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+				require.NoError(t, os.WriteFile(dst+".part", nil, 0o644))
+			}
+			bulk := &privateBulk{}
+			h := &scriptHost{name: "private-test", os: Linux, workDir: root, t: privateTransport{&localTransport{}}, d: sh{}, bulk: bulk}
+			require.NoError(t, PutPrivate(context.Background(), h, src, dst, ""))
+			require.True(t, bulk.secure)
+			st, err := os.Stat(dst)
+			require.NoError(t, err)
+			require.Equal(t, os.FileMode(0o600), st.Mode().Perm())
+		})
+	}
 }
 
 func TestTransferRoundTrip(t *testing.T) {

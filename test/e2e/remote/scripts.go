@@ -104,16 +104,16 @@ func (d sh) start(dir, id, script string, o Opts) string {
 	// never read a half-written file.
 	runner := fmt.Sprintf("echo $$ > %s/pid.tmp && mv %s/pid.tmp %s/pid\n%s </dev/null >%s/stdout 2>%s/stderr\necho $? > %s/exit.tmp && mv %s/exit.tmp %s/exit\n",
 		q, q, q, run, q, q, q, q, q)
-	// systemd-run puts the job in its own unit (it survives the SSM agent and
-	// its cgroup); elsewhere nohup + background is enough.
+	// Remote Linux owns the job through systemd. Local hosts use their retained
+	// process owner instead; there is no unsafe PID-based detached fallback.
 	return write + fmt.Sprintf(`printf '%%s' %s | base64 -d > %s/run.sh || exit 98
 if command -v systemd-run >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
   systemd-run --quiet --collect --unit=cucina-e2e-%s /bin/sh %s/run.sh || exit 99
 else
-  nohup /bin/sh %s/run.sh >/dev/null 2>&1 </dev/null &
+  printf 'detached jobs require owned systemd units\n' >&2; exit 99
 fi
 echo started
-`, shQuote(b64(runner)), q, id, q, q)
+`, shQuote(b64(runner)), q, id, q)
 }
 
 func (sh) status(dir string) string {
@@ -215,31 +215,10 @@ Get-Head64 (Join-Path %s 'stderr') %d
 }
 
 func (d ps) start(dir, id, script string, o Opts) string {
-	q := psQuote(dir)
-	runner := fmt.Sprintf("Set-Content -Path (Join-Path %s 'pid.tmp') -Value $PID\nMove-Item -Force (Join-Path %s 'pid.tmp') (Join-Path %s 'pid')\n%s\nSet-Content -Path (Join-Path %s 'exit.tmp') -Value $p.ExitCode\nMove-Item -Force (Join-Path %s 'exit.tmp') (Join-Path %s 'exit')\n",
-		q, q, q, psRunCmd(dir), q, q, q)
-	return d.cmdFile(dir, script, o) + fmt.Sprintf(`[IO.File]::WriteAllText((Join-Path %s 'run.ps1'), [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
-$cl = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path %s 'run.ps1') + '"'
-$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cl }
-if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create failed: $($r.ReturnValue)" }
-"started"
-`, q, psQuote(b64(runner)), q)
+	return psStartOwnedJob(dir, id, d.cmdFile(dir, script, o))
 }
 
-func (ps) status(dir string) string {
-	q := psQuote(dir)
-	// Same ordering as the sh variant: liveness, then exit file, then sizes.
-	return fmt.Sprintf(`$J = %s
-function Len($n) { $f = Join-Path $J $n; if (Test-Path $f) { (Get-Item $f).Length } else { 0 } }
-$alive = $false
-if (Test-Path (Join-Path $J 'pid')) { $alive = [bool](Get-Process -Id ([int](Get-Content (Join-Path $J 'pid') -Raw).Trim()) -ErrorAction SilentlyContinue) }
-if (Test-Path (Join-Path $J 'exit')) { $st = "exited $((Get-Content (Join-Path $J 'exit') -Raw).Trim())" }
-elseif (-not (Test-Path (Join-Path $J 'pid'))) { $st = 'starting 0' }
-elseif ($alive) { $st = 'running 0' }
-else { $st = 'lost 0' }
-"$st $(Len 'stdout') $(Len 'stderr')"
-`, q)
-}
+func (ps) status(dir string) string { return psOwnedJobStatus(dir) }
 
 func (ps) read(file string, off int64, max int) string {
 	return fmt.Sprintf(`$fs = [IO.File]::Open(%s, 'Open', 'Read', 'ReadWrite'); try { [void]$fs.Seek(%d, 'Begin'); $b = New-Object byte[] %d; $n = $fs.Read($b, 0, %d); [Convert]::ToBase64String($b, 0, $n) } finally { $fs.Close() }

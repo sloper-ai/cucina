@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+package remote
+
+import "fmt"
+
+// The remote CIM supervisor and its stopper share a private, unpredictable job
+// name and mutex. Neither cleanup nor liveness opens a numeric PID for killing.
+const psOwnedJob = `if (-not ('CucinaOwnedJob' -as [type])) { Add-Type -TypeDefinition @'
+// SPDX-License-Identifier: FSL-1.1-ALv2
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class CucinaOwnedJob {
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr attr,string name);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr OpenJobObject(uint access,bool inherit,string name);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job,IntPtr process);
+ [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job,uint code);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int kind,out Accounting info,uint length,IntPtr returned);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,int pid);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool member);
+ [StructLayout(LayoutKind.Sequential)] struct Accounting {
+  public long User,Kernel,PeriodUser,PeriodKernel;
+  public uint PageFaults,Total,Active,Terminated;
+ }
+ public static IntPtr Create(string name) {
+  IntPtr h=CreateJobObject(IntPtr.Zero,name);int e=Marshal.GetLastWin32Error();
+  if(h==IntPtr.Zero) throw new Win32Exception(e);
+  if(e==183) {CloseHandle(h);throw new InvalidOperationException("owned job name already exists");}
+  return h;
+ }
+ public static IntPtr Open(string name) {return OpenWithAccess(name,12);}
+ public static IntPtr OpenForAssignment(string name) {return OpenWithAccess(name,1);}
+ static IntPtr OpenWithAccess(string name,uint access) {
+  IntPtr h=OpenJobObject(access,false,name);int e=Marshal.GetLastWin32Error();
+  if(h==IntPtr.Zero && e!=2) throw new Win32Exception(e);
+  return h;
+ }
+ public static void AssignSelf(IntPtr h) {
+  if(!AssignProcessToJobObject(h,GetCurrentProcess())) throw new Win32Exception(Marshal.GetLastWin32Error());
+ }
+ public static void Stop(IntPtr h) {
+  if(!TerminateJobObject(h,1)) throw new Win32Exception(Marshal.GetLastWin32Error());
+ }
+ public static uint Active(IntPtr h) {
+  Accounting info;
+  if(!QueryInformationJobObject(h,1,out info,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error());
+  return info.Active;
+ }
+ public static bool Contains(IntPtr h,int pid) {
+  IntPtr p=OpenProcess(4096,false,pid);int e=Marshal.GetLastWin32Error();
+  if(p==IntPtr.Zero) {if(e==87) return false;throw new Win32Exception(e);}
+  try {bool member;if(!IsProcessInJob(p,h,out member)) throw new Win32Exception(Marshal.GetLastWin32Error());return member;}
+  finally {CloseHandle(p);}
+ }
+ public static void Close(IntPtr h) {if(h!=IntPtr.Zero && !CloseHandle(h)) throw new Win32Exception(Marshal.GetLastWin32Error());}
+}
+'@ }
+function Lock-OwnedGate($gate) {
+ try { if (-not $gate.WaitOne(5000)) { throw 'owned job gate timeout' } }
+ catch [Threading.AbandonedMutexException] { }
+}
+function New-OwnedGate([string]$name) {
+ $acl=New-Object Security.AccessControl.MutexSecurity
+ foreach($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')) {
+  $identity=New-Object Security.Principal.SecurityIdentifier($sid)
+  $acl.AddAccessRule((New-Object Security.AccessControl.MutexAccessRule($identity,'FullControl','Allow')))
+ }
+ $created=$false
+ $gate=New-Object Threading.Mutex($false,($name+'.gate'),[ref]$created,$acl)
+ return $gate
+}
+function Protect-OwnedDirectory([string]$path) {
+ New-Item -ItemType Directory -Force -Path $path | Out-Null
+ if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'owned job directory is a reparse point' }
+ $acl=New-Object Security.AccessControl.DirectorySecurity
+ $acl.SetAccessRuleProtection($true,$false)
+ foreach($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')) {
+  $identity=New-Object Security.Principal.SecurityIdentifier($sid)
+  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
+ }
+ Set-Acl -LiteralPath $path -AclObject $acl
+}
+`
+
+func windowsJobName(id string) string { return `Local\CucinaE2E-` + id }
+
+func psStartOwnedJob(dir, id, prepare string) string {
+	name := psQuote(windowsJobName(id))
+	q := psQuote(dir)
+	runner := "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+$J=%s; $name=%s
+$gate=New-OwnedGate $name
+$h=[IntPtr]::Zero
+try {
+ Lock-OwnedGate $gate
+ try {
+  if (Test-Path -LiteralPath (Join-Path $J 'stop')) { return }
+  $h=[CucinaOwnedJob]::OpenForAssignment($name)
+  if ($h -eq [IntPtr]::Zero) { throw 'owned job missing before payload assignment' }
+  [CucinaOwnedJob]::AssignSelf($h)
+  [IO.File]::WriteAllText((Join-Path $J 'pid'),[string]$PID)
+  [IO.File]::WriteAllText((Join-Path $J 'ready'),'owned')
+ } finally { $gate.ReleaseMutex() }
+ %s
+ Lock-OwnedGate $gate
+ try {
+  if (Test-Path -LiteralPath (Join-Path $J 'stop')) { throw 'job was canceled before completion' }
+  [IO.File]::WriteAllText((Join-Path $J 'exit.tmp'),[string]$p.ExitCode)
+  Move-Item -Force -LiteralPath (Join-Path $J 'exit.tmp') -Destination (Join-Path $J 'exit')
+ } finally { $gate.ReleaseMutex() }
+} catch {
+ [IO.File]::WriteAllText((Join-Path $J 'start-error'),'owned supervisor failed')
+ throw
+} finally { [CucinaOwnedJob]::Close($h);$gate.Dispose() }
+`, q, name, psRunCmd(dir))
+	return "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+$J=%s; $name=%s
+Protect-OwnedDirectory $J
+$gate=New-OwnedGate $name
+$h=[IntPtr]::Zero
+try {
+ Lock-OwnedGate $gate
+ try {
+  if (Test-Path -LiteralPath (Join-Path $J 'stop')) { throw 'job canceled before startup' }
+  $h=[CucinaOwnedJob]::Create($name)
+  [IO.File]::WriteAllText((Join-Path $J 'owner'),$name)
+ } finally { $gate.ReleaseMutex() }
+ %s
+ [IO.File]::WriteAllText((Join-Path $J 'run.ps1'),[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
+ $cl='powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+(Join-Path $J 'run.ps1')+'"'
+ $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$cl}
+ if ($r.ReturnValue -ne 0) { throw 'owned supervisor creation failed' }
+ $deadline=[DateTime]::UtcNow.AddSeconds(20)
+ while (-not (Test-Path -LiteralPath (Join-Path $J 'ready'))) {
+  if ((Test-Path -LiteralPath (Join-Path $J 'start-error')) -or (Test-Path -LiteralPath (Join-Path $J 'stop'))) { throw 'owned supervisor did not start' }
+  if ([DateTime]::UtcNow -ge $deadline) { throw 'owned supervisor startup timeout' }
+  Start-Sleep -Milliseconds 25
+ }
+ 'started'
+} catch {
+ Lock-OwnedGate $gate
+ try {
+  [IO.File]::WriteAllText((Join-Path $J 'stop'),'startup failed')
+  if ($h -ne [IntPtr]::Zero) { [CucinaOwnedJob]::Stop($h) }
+ } finally { $gate.ReleaseMutex() }
+ throw
+} finally { [CucinaOwnedJob]::Close($h);$gate.Dispose() }
+`, q, name, prepare, psQuote(b64(runner)))
+}
+
+func psOwnedJobStatus(dir string) string {
+	return "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+$J=%s
+$name='Local\CucinaE2E-'+(Split-Path -Leaf $J)
+function Len($n) { $f=Join-Path $J $n; if (Test-Path -LiteralPath $f) { (Get-Item -LiteralPath $f).Length } else { 0 } }
+$gate=New-OwnedGate $name
+$h=[IntPtr]::Zero
+try {
+ Lock-OwnedGate $gate
+ try {
+  if (Test-Path -LiteralPath (Join-Path $J 'exit')) { $st='exited '+(Get-Content -LiteralPath (Join-Path $J 'exit') -Raw).Trim() }
+  elseif (Test-Path -LiteralPath (Join-Path $J 'stopped')) { $st='lost 0' }
+  elseif (-not (Test-Path -LiteralPath (Join-Path $J 'pid'))) { $st='starting 0' }
+  else {
+   $h=[CucinaOwnedJob]::Open($name)
+   if ($h -ne [IntPtr]::Zero -and [CucinaOwnedJob]::Contains($h,[int](Get-Content -LiteralPath (Join-Path $J 'pid') -Raw).Trim())) { $st='running 0' } else { $st='lost 0' }
+  }
+  "$st $(Len 'stdout') $(Len 'stderr')"
+ } finally { $gate.ReleaseMutex() }
+} finally { [CucinaOwnedJob]::Close($h);$gate.Dispose() }
+`, psQuote(dir))
+}
+
+func psStopOwnedJob(j Job) string {
+	return "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+$J=%s; $name=%s
+Protect-OwnedDirectory $J
+$gate=New-OwnedGate $name
+$h=[IntPtr]::Zero
+try {
+ Lock-OwnedGate $gate
+ try {
+  if (Test-Path -LiteralPath (Join-Path $J 'exit')) { return }
+  [IO.File]::WriteAllText((Join-Path $J 'stop'),'requested')
+  if (Test-Path -LiteralPath (Join-Path $J 'owner')) {
+   if ((Get-Content -LiteralPath (Join-Path $J 'owner') -Raw) -ne $name) { throw 'owned job identity mismatch' }
+   $h=[CucinaOwnedJob]::Open($name)
+  }
+  if ($h -ne [IntPtr]::Zero) {
+   [CucinaOwnedJob]::Stop($h)
+   $deadline=[DateTime]::UtcNow.AddSeconds(5)
+   while ([CucinaOwnedJob]::Active($h) -ne 0) {
+    if ([DateTime]::UtcNow -ge $deadline) { throw 'owned job processes did not stop' }
+    Start-Sleep -Milliseconds 25
+   }
+  }
+  # An early cancellation leaves a marker checked under this SAME gate before
+  # CIM assignment/payload launch. No future payload can start after this stop.
+  [IO.File]::WriteAllText((Join-Path $J 'stopped'),'confirmed')
+ } finally { $gate.ReleaseMutex() }
+} finally { [CucinaOwnedJob]::Close($h);$gate.Dispose() }
+`, psQuote(j.Dir), psQuote(windowsJobName(j.ID)))
+}

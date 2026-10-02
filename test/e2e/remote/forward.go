@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -109,62 +110,83 @@ func (p *portForward) receiver(ctx context.Context, h *scriptHost, path, mode, t
 
 // session opens `aws ssm start-session` port forwarding and waits until the
 // plugin reports it is listening.
-func (p *portForward) session(ctx context.Context, remotePort int) (int, func(), error) {
+func (p *portForward) session(ctx context.Context, remotePort int) (int, func() error, error) {
 	lport, err := freeLocalPort()
 	if err != nil {
 		return 0, nil, err
 	}
 	params := fmt.Sprintf(`{"portNumber":["%d"],"localPortNumber":["%d"]}`, remotePort, lport)
-	sctx, cancel := context.WithCancel(ctx)
-	cmd := exec.CommandContext(sctx, "aws", "ssm", "start-session", "--target", p.instanceID,
+	cmd := exec.Command("aws", "ssm", "start-session", "--target", p.instanceID,
 		"--document-name", "AWS-StartPortForwardingSession", "--parameters", params,
 		"--profile", p.profile, "--region", p.region)
 	cmd.Env = append(os.Environ(), "AWS_PAGER=")
-	pr, pw := io.Pipe()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return 0, nil, err
+	}
 	cmd.Stdout, cmd.Stderr = pw, pw
-	if err := cmd.Start(); err != nil {
-		cancel()
+	owner, err := startOwned(cmd)
+	_ = pw.Close() // only the owned children retain the writer
+	if err != nil {
+		_ = pr.Close()
 		return 0, nil, fmt.Errorf("aws ssm start-session: %w", err)
 	}
 	ready := make(chan struct{})
-	var once sync.Once
+	scanned := make(chan error, 1)
+	var readyOnce, stopOnce sync.Once
+	var stopErr error
 	go func() {
 		sc := bufio.NewScanner(pr)
 		for sc.Scan() {
 			if strings.Contains(sc.Text(), "Waiting for connections") {
-				once.Do(func() { close(ready) })
+				readyOnce.Do(func() { close(ready) })
 			}
 		}
+		scanned <- sc.Err()
 	}()
-	stop := func() {
-		cancel()
-		_ = cmd.Wait()
-		_ = pw.Close()
+	stop := func() error {
+		stopOnce.Do(func() {
+			stopErr = owner.finish(true)
+			_ = pr.Close()
+		})
+		return stopErr
 	}
+	readiness := time.NewTimer(90 * time.Second)
+	defer readiness.Stop()
 	select {
 	case <-ready:
 		return lport, stop, nil
-	case <-time.After(90 * time.Second):
-		stop()
-		return 0, nil, fmt.Errorf("ssm port forwarding to %s: not ready after 90s", p.instanceID)
+	case <-owner.exited:
+		return 0, nil, errors.Join(errors.New("ssm port forwarding exited before readiness"), owner.exitErr, stop())
+	case err := <-scanned:
+		return 0, nil, errors.Join(errors.New("ssm port forwarding closed its output before readiness"), err, stop())
+	case <-readiness.C:
+		return 0, nil, errors.Join(fmt.Errorf("ssm port forwarding to %s: not ready after 90s", p.instanceID), stop())
 	case <-ctx.Done():
-		stop()
-		return 0, nil, ctx.Err()
+		return 0, nil, errors.Join(ctx.Err(), stop())
 	}
 }
 
-func (p *portForward) transfer(ctx context.Context, h *scriptHost, remote, mode string, do func(url string) error) error {
+func (p *portForward) transfer(ctx context.Context, h *scriptHost, remote, mode string, do func(url string) error) (err error) {
 	token := randomHex(16)
 	port := 20000 + int(time.Now().UnixNano()%20000)
 	j, err := p.receiver(ctx, h, remote, mode, token, port)
 	if err != nil {
 		return err
 	}
+	receiverExited := false
+	defer func() {
+		if !receiverExited {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			defer cancel()
+			err = errors.Join(err, StopJob(cleanup, h, j))
+		}
+	}()
 	lport, stop, err := p.session(ctx, port)
 	if err != nil {
 		return err
 	}
-	defer stop()
+	defer func() { err = errors.Join(err, stop()) }()
 	url := fmt.Sprintf("http://127.0.0.1:%d/%s", lport, token)
 	var last error
 	for attempt := 0; attempt < 10; attempt++ { // the receiver may still be starting
@@ -179,6 +201,7 @@ func (p *portForward) transfer(ctx context.Context, h *scriptHost, remote, mode 
 		return fmt.Errorf("%s: %s %s via port forwarding: %w", h.name, mode, remote, last)
 	}
 	_, err = Wait(ctx, h, j, 2*time.Second, nil)
+	receiverExited = err == nil
 	return err
 }
 
