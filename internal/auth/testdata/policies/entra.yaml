@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Microsoft Entra ID (v2.0 endpoint) sample. Pin the tenant (`tid`); key the principal on
+# the tenant + object id (`oid`, stable per tenant; `sub` is pairwise per application).
+# Entra's `email` claim is not verified: never use it for decisions. Group grants need the
+# app registration's "groups" claim (security groups, as object ids).
+# Login: Entra ignores the loopback port for `localhost`; register http://127.0.0.1 in the
+# app manifest (no [::1]).
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: entra-contoso
+  namespace: cucina
+spec:
+  type: oidc
+  issuer:
+    url: https://login.microsoftonline.com/7d1c5d4e-0000-4000-8000-00000000c0de/v2.0
+    audiences: ["0b8f1a52-0000-4000-8000-00000000a99e"]
+  claimValidationRules:
+    - expression: "claims.tid == '7d1c5d4e-0000-4000-8000-00000000c0de'"
+      message: the account is not in the Contoso tenant
+  claimMappings:
+    subject:
+      expression: "'entra:' + claims.tid + ':' + claims.oid"
+    displayName:
+      expression: "has(claims.preferred_username) ? claims.preferred_username : claims.oid"
+    groups:
+      expression: "has(claims.groups) ? claims.groups : []"
+  grants:
+    - name: developers
+      condition: "'5e1a0d3c-0000-4000-8000-0000000000de' in groups"
+      instanceNames: ["*"]
+      verbs: [cas-read, cas-write, ac-read, execute]
+    - name: admins
+      condition: "'5e1a0d3c-0000-4000-8000-00000000ad31' in groups"
+      instanceNames: ["*"]
+      verbs: [admin]
+  login:
+    name: entra
+    clientID: 0b8f1a52-0000-4000-8000-00000000a99e
+    scopes: [openid, profile, offline_access]

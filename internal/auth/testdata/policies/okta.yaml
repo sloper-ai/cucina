@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Okta sample (custom authorization server "default"). Okta needs registered redirect
+# ports: list them in login.redirectPorts and register http://127.0.0.1:<port>/ for each.
+# Configure a "groups" claim filter on the authorization server.
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: okta-example
+  namespace: cucina
+spec:
+  type: oidc
+  issuer:
+    url: https://example.okta.com/oauth2/default
+    audiences: ["0oa1cucinaexample0h7"]
+  claimMappings:
+    subject:
+      expression: "'okta:' + claims.sub"
+    displayName:
+      expression: "has(claims.email) ? claims.email : claims.sub"
+    groups:
+      expression: "has(claims.groups) ? claims.groups : []"
+  grants:
+    - name: users
+      condition: "'Cucina Users' in groups"
+      instanceNames: ["*"]
+      verbs: [cas-read, cas-write, ac-read, execute]
+  login:
+    name: okta
+    clientID: 0oa1cucinaexample0h7
+    redirectPorts: [8250, 8251, 8252]

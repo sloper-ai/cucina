@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Google Workspace developers and administrators (R-AUTH-5, R-AUTH-12).
+# Operator inputs (Helm values): the OAuth "Desktop app" client (ID and non-confidential
+# secret), the Workspace domain(s) for `hd`, and the admin e-mail addresses.
+# Trust comes from `hd` + `email_verified`, never from the e-mail domain; the principal is
+# keyed on `sub`, never on the e-mail address.
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: google-workspace
+  namespace: cucina
+spec:
+  type: oidc
+  issuer:
+    url: https://accounts.google.com
+    # Google also emits the scheme-less issuer.
+    additionalIssuers: ["accounts.google.com"]
+    audiences: ["000000000000-cucinaexample.apps.googleusercontent.com"]
+  claimValidationRules:
+    - expression: "claims.email_verified == true || claims.email_verified == 'true'"
+      message: the Google account's e-mail address is not verified
+    - expression: "has(claims.hd) && claims.hd in ['example.com']"
+      message: the Google account is not in an allowed Google Workspace domain
+  claimMappings:
+    subject:
+      expression: "'google:' + claims.sub"
+    displayName:
+      expression: "claims.email"
+  grants:
+    - name: developers
+      instanceNames: ["*"]
+      verbs: [cas-read, cas-write, ac-read, execute]
+    - name: admins
+      # E-mail is safe here only because hd and email_verified are pinned above.
+      condition: "claims.email in ['admin@example.com']"
+      instanceNames: ["*"]
+      verbs: [admin]
+  login:
+    name: google
+    clientID: 000000000000-cucinaexample.apps.googleusercontent.com
+    # Desktop-app client secrets are non-confidential by design (shipped to every client).
+    clientSecret: example-desktop-client-secret
+    hostedDomainHint: example.com

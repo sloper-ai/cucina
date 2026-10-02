@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Generic GitHub Actions sample (R-AUTH-7): replace the ids with your organisation's and
+# repository's numeric ids (`gh api repos/<owner>/<repo> --jq '.owner.id, .id'`).
+# Shows a pinned reusable workflow and action-cache writes gated on a reviewer-protected
+# environment or a protected branch.
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: github-example-org-app
+  namespace: cucina
+spec:
+  type: oidc
+  issuer:
+    # GitHub Enterprise Cloud with a custom issuer: https://token.actions.githubusercontent.com/<enterprise-slug>
+    url: https://token.actions.githubusercontent.com
+    audiences: ["cucina"]
+  subjectTokenType: urn:ietf:params:oauth:token-type:jwt
+  requireUniqueJTI: true
+  claimValidationRules:
+    - expression: "claims.repository_owner_id == '1000001' && claims.repository_id == '2000002'"
+      message: the token was not issued to example-org/app
+    - expression: "claims.event_name != 'pull_request_target'"
+      message: pull_request_target workflows are never trusted
+    - expression: "claims.event_name in ['push', 'merge_group', 'schedule', 'workflow_dispatch', 'pull_request']"
+      message: the workflow event is not allowed
+    # The repository's own workflows, or the organisation's pinned reusable build workflow.
+    - expression: >-
+        claims.job_workflow_ref.startsWith('example-org/app/.github/workflows/') ||
+        claims.job_workflow_ref.startsWith('example-org/shared-workflows/.github/workflows/bazel.yml@refs/tags/v')
+      message: the job's workflow is not allowed
+  claimMappings:
+    subject:
+      expression: "'github:' + claims.repository_id + ':' + claims.workflow"
+    displayName:
+      expression: "claims.job_workflow_ref"
+  grants:
+    - name: cache-read
+      instanceNames: [main]
+      verbs: [cas-read, ac-read]
+    - name: build
+      condition: "claims.event_name in ['push', 'merge_group', 'schedule', 'workflow_dispatch']"
+      instanceNames: [main]
+      verbs: [cas-write, execute]
+    - name: ac-write-protected
+      condition: >-
+        claims.event_name in ['push', 'merge_group'] &&
+        (claims.ref_protected == true || claims.ref_protected == 'true')
+      instanceNames: [main]
+      verbs: [ac-write]
+    - name: ac-write-release-environment
+      # `environment` is present only for jobs that target a (reviewer-gated) environment.
+      condition: "has(claims.environment) && claims.environment == 'release' && claims.event_name != 'pull_request'"
+      instanceNames: [main]
+      verbs: [ac-write]

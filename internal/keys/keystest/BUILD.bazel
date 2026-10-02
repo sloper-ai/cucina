@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "keystest",
+    srcs = ["keystest.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/keys/keystest",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/keys",
+        "@io_k8s_api//core/v1:core",
+    ],
+)

@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Keycloak sample: a public client with redirect URI http://127.0.0.1/* and a "groups"
+# client-scope mapper (full group paths). The principal is keyed on the user id (`sub`).
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: keycloak-engineering
+  namespace: cucina
+spec:
+  type: oidc
+  issuer:
+    url: https://keycloak.example.com/realms/engineering
+    audiences: ["cucina"]
+  claimValidationRules:
+    - expression: "claims.email_verified == true"
+      message: the Keycloak account's e-mail address is not verified
+  claimMappings:
+    subject:
+      expression: "'keycloak:' + claims.sub"
+    displayName:
+      expression: "claims.preferred_username"
+    groups:
+      expression: "has(claims.groups) ? claims.groups : []"
+  grants:
+    - name: developers
+      condition: "'/cucina/users' in groups"
+      instanceNames: ["*"]
+      verbs: [cas-read, cas-write, ac-read, execute]
+    - name: admins
+      condition: "'/cucina/admins' in groups"
+      instanceNames: ["*"]
+      verbs: [admin]
+  login:
+    name: keycloak
+    clientID: cucina

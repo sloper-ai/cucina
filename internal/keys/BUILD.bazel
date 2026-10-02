@@ -1,0 +1,54 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "keys",
+    srcs = [
+        "bootstrap.go",
+        "buildbarn.go",
+        "claims.go",
+        "denylist.go",
+        "doc.go",
+        "keyset.go",
+        "manager.go",
+        "objects.go",
+        "rotation.go",
+        "servicekeys.go",
+        "token.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/keys",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/config",
+        "//internal/ports",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/errors",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_client_go//kubernetes",
+    ],
+)
+
+cucina_go_test(
+    name = "keys_test",
+    srcs = [
+        "denylist_test.go",
+        "helpers_test.go",
+        "rotation_test.go",
+        "servicekeys_test.go",
+        "token_test.go",
+    ],
+    tier = "unit",
+    deps = [
+        ":keys",
+        "//internal/config",
+        "//internal/keys/keystest",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_jmespath_go_jmespath//:go-jmespath",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@net_pgregory_rapid//:rapid",
+    ],
+)

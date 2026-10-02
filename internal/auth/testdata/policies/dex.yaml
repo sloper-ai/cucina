@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Dex sample (any loopback port works). Dex's `sub` is an opaque encoding of the upstream
+# user id and connector; `federated_claims` names the connector. Here only the GitHub
+# connector is trusted and grants follow GitHub team membership ("org:team" groups).
+apiVersion: cucina.sloper.ai/v1alpha1
+kind: TrustPolicy
+metadata:
+  name: dex-github-teams
+  namespace: cucina
+spec:
+  type: oidc
+  issuer:
+    url: https://dex.example.com
+    audiences: ["cucina"]
+  claimValidationRules:
+    - expression: "claims.email_verified == true"
+      message: the e-mail address is not verified
+    - expression: "has(claims.federated_claims) && claims.federated_claims.connector_id == 'github'"
+      message: only the GitHub connector is trusted
+  claimMappings:
+    subject:
+      expression: "'dex:' + claims.sub"
+    displayName:
+      expression: "claims.name"
+    groups:
+      expression: "has(claims.groups) ? claims.groups : []"
+  grants:
+    - name: platform-team
+      condition: "'example-org:platform' in groups"
+      instanceNames: ["*"]
+      verbs: [cas-read, cas-write, ac-read, execute]
+  login:
+    name: dex
+    clientID: cucina
+    scopes: [openid, email, profile, groups, federated:id, offline_access]

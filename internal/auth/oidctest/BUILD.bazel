@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "oidctest",
+    srcs = ["oidctest.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/auth/oidctest",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/v1alpha1",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+    ],
+)
