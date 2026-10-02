@@ -91,9 +91,14 @@ response `{"access_token","issued_token_type":"urn:ietf:params:oauth:token-type:
 
 Cucina JWT claims: `iss` (STS URL), `aud:"buildbarn"` (string), `sub`, `exp`, `iat`, `jti`, `sid`, no `nbf`, and
 `cucina:{"cas_read":[…],"cas_write":[…],"ac_read":[…],"ac_write":[…],"execute":[…],"admin":[…]}` (explicit instance-name lists; `"*"` expanded by the STS).
-Buildbarn `jwt` authenticator: `metadataExtractionJmespathExpression` → `{"public":{"user":payload.sub},"private":payload.cucina}`; authorizers
-`contains(authenticationMetadata.private.ac_write, instanceName)` AND-ed with `!contains(deny_list.sid, authenticationMetadata.private.sid)`-style checks
-against the deny-list file (R-AUTH-4/-9).
+Optional extra claim: `name` (display name from `claimMappings.displayName`, for audit only). Service-account keys are exchanged with
+`subject_token_type=urn:cucina:params:oauth:token-type:service-key`; STS error statuses: 403 `access_denied`, 429 `slow_down` (rate limits).
+Buildbarn `jwt` authenticator: `metadataExtractionJmespathExpression` →
+`{"public": {"user": payload.sub}, "private": merge(payload.cucina, {"sid": payload.sid, "sub": payload.sub})}` (Go constant
+`keys.BuildbarnMetadataExtraction`; the chart renders the `keys.Buildbarn*` expressions); authorizers
+`contains(authenticationMetadata.private.ac_write, instanceName)` AND-ed with the deny-list check on `sid`/`sub` against the deny-list file
+(exact match on quoted prefixed entries, ADR 0600; R-AUTH-4/-9). Worker/host identities (URI SANs `spiffe://cucina/worker/*`,
+`spiffe://cucina/host/*`) may write CAS/AC on the worker listener (the host L2 forwards its VMs' writes).
 
 ### 5.2 EC2 worker boot (R-POOL-3, R-SEC-3)
 Controller `Compute.Launch` with tags `cucina:{managed-by,cluster,pool,generation,image-version,launch-token,role}` + `extraTags`; IMDS exposes tags
