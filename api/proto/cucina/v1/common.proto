@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+syntax = "proto3";
+
+package cucina.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/sloper-ai/cucina/api/proto/cucina/v1;cucinav1";
+
+// ProtocolVersion is the version of the hostd<->controller protocol and of the
+// management API. Both ends send it in their first message; a mismatch in the
+// major component is refused with a precise message (R-TEST-7 handshake).
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+// Constants for the current version live in code (internal/proto/version.go and
+// cli/cucina-api): major 1, minor 0.
+
+// PlatformProperty is one REAPI platform property (name/value).
+message PlatformProperty {
+  string name = 1;
+  string value = 2;
+}
+
+// QueueRef identifies one Buildbarn size class queue.
+message QueueRef {
+  string instance_name_prefix = 1;
+  repeated PlatformProperty platform = 2;
+  uint32 size_class = 3;
+}
+
+// Money is a USD amount in micro-dollars (avoids floats).
+message Money {
+  int64 micros = 1;
+}
+
+// Page controls list paging.
+message Page {
+  uint32 size = 1;
+  string token = 2;
+}
+
+// Alert is a firing (or recently fired) alert shown in `status` and the TUI.
+message Alert {
+  string name = 1;
+  string severity = 2; // info | warning | critical
+  string summary = 3;
+  google.protobuf.Timestamp since = 4;
+  map<string, string> labels = 5;
+}

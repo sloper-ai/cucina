@@ -1,0 +1,220 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+syntax = "proto3";
+
+package cucina.v1;
+
+import "cucina/v1/common.proto";
+import "cucina/v1/enrollment.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/sloper-ai/cucina/api/proto/cucina/v1;cucinav1";
+
+// HostService is served by the controller over mTLS (client certificate = host
+// identity, URI SAN spiffe://cucina/host/<serial>). cucina-hostd always dials OUT
+// (works behind NAT) and reconnects with backoff. Hostd enforces the same safety
+// rules itself (at most 2 running macOS VMs, dead-man switch) even if the controller
+// is gone (R-POOL-7).
+service HostService {
+  // Connect is the long-lived bidirectional stream: hostd reports facts, VM state,
+  // heartbeats and metrics; the controller sends commands (R-MAC-6).
+  rpc Connect(stream HostMessage) returns (stream ControllerMessage);
+  // RenewCertificate issues a fresh host certificate before expiry (key unchanged or rotated by CSR).
+  rpc RenewCertificate(RenewCertificateRequest) returns (RenewCertificateResponse);
+  // IssueVMIdentity issues a short-lived worker identity and settings for one VM. VMs only
+  // ever receive credentials through their host (R-MAC-4).
+  rpc IssueVMIdentity(IssueVMIdentityRequest) returns (IssueVMIdentityResponse);
+  // GetRegistryCredentials returns short-lived (or read-only package) registry credentials
+  // for pre-pulling Tart images; hostd passes them via TART_REGISTRY_* env vars, never the keychain.
+  rpc GetRegistryCredentials(GetRegistryCredentialsRequest) returns (GetRegistryCredentialsResponse);
+}
+
+// ------------------------------------------------------------- hostd -> controller
+
+message HostMessage {
+  oneof message {
+    Hello hello = 1;
+    Heartbeat heartbeat = 2;
+    VMEvent vm_event = 3;
+    CommandResult command_result = 4;
+    LogData log = 5;
+  }
+}
+
+message Hello {
+  ProtocolVersion protocol = 1;
+  string serial_number = 2;
+  HostFacts facts = 3;
+  repeated VMInfo vms = 4;       // VMs present on the host (inventory after restart)
+  repeated string images = 5;    // cached Tart image references
+  string boot_id = 6;
+}
+
+message Heartbeat {
+  google.protobuf.Timestamp time = 1;
+  repeated VMInfo vms = 2;
+  HostMetrics metrics = 3;
+  bool cordoned = 4;
+}
+
+message HostMetrics {
+  uint32 running_vms = 1;
+  uint64 disk_free_bytes = 2;
+  float cpu_load = 3;
+  // L2 cache (host bb_storage) accounting (R-CACHE-4, R-DATA-7).
+  uint64 l2_hits = 4;
+  uint64 l2_misses = 5;
+  uint64 wan_bytes_received = 6;
+  uint64 wan_bytes_sent = 7;
+  uint64 l2_size_bytes = 8;
+}
+
+message VMInfo {
+  string name = 1;
+  string pool = 2;
+  string state = 3;      // cloning | starting | running | stopping | stopped | failed
+  string image = 4;      // OCI reference
+  string generation = 5;
+  string ip = 6;
+  google.protobuf.Timestamp created = 7;
+  google.protobuf.Timestamp started = 8;
+  uint64 disk_bytes = 9;
+  string last_error = 10;
+}
+
+message VMEvent {
+  VMInfo vm = 1;
+  string event = 2; // cloned | started | ready | stopped | deleted | failed | worker-registered
+  string message = 3;
+  google.protobuf.Timestamp time = 4;
+}
+
+message CommandResult {
+  string command_id = 1;
+  bool ok = 2;
+  string error = 3;
+  bytes output = 4; // small outputs only
+}
+
+message LogData {
+  string command_id = 1; // diagnostics streams reuse the command id
+  bytes data = 2;
+  bool last = 3;
+}
+
+// ------------------------------------------------------------- controller -> hostd
+
+message ControllerMessage {
+  oneof message {
+    Welcome welcome = 1;
+    StartVM start_vm = 2;
+    StopVM stop_vm = 3;
+    DeleteVM delete_vm = 4;
+    ReimageVM reimage_vm = 5;
+    PullImage pull_image = 6;
+    SetCordon set_cordon = 7;
+    CollectDiagnostics collect_diagnostics = 8;
+    UpdateHostConfig update_config = 9;
+    Ping ping = 10;
+  }
+  string command_id = 20; // echoed in CommandResult
+}
+
+message Welcome {
+  ProtocolVersion protocol = 1;
+  string cluster_id = 2;
+  google.protobuf.Duration heartbeat_interval = 3;
+  repeated string desired_images = 4;
+  uint32 slots = 5; // VMs per host (1-2)
+  HostSettings settings = 6;
+}
+
+// HostSettings are controller-provided overrides on top of the managed preferences.
+message HostSettings {
+  uint32 l2_size_gib = 1;
+  string log_level = 2;
+  uint32 vm_cpu = 3;       // 0 = derive (cores-2)/slots
+  uint32 vm_memory_gib = 4; // 0 = derive (RAM-8GB)/slots
+  string central_endpoint = 5;     // worker endpoint for the L2 cache upstream
+  string scheduler_endpoint = 6;   // forwarded for VMs through hostd
+}
+
+message StartVM {
+  string vm_name = 1;
+  string pool = 2;
+  string image = 3;      // OCI reference
+  string generation = 4;
+  uint32 cpu = 5;
+  uint32 memory_gib = 6;
+  uint32 disk_gib = 7;
+  string node = 8;       // "<host>/<vm>"
+  uint32 xcode_slot = 9; // runner concurrency hints are in WorkerSettings
+  uint32 max_age_hours = 10;
+}
+
+message StopVM {
+  string vm_name = 1;
+  google.protobuf.Duration timeout = 2; // tart stop --timeout
+  string reason = 3;                    // idle | drain | rollout | maintenance
+}
+
+message DeleteVM {
+  string vm_name = 1;
+}
+
+message ReimageVM {
+  string vm_name = 1; // re-clone from the golden image at next start (or now if stopped)
+  string image = 2;
+}
+
+message PullImage {
+  string image = 1;
+}
+
+message SetCordon {
+  bool cordoned = 1; // true: drain (VMs shut down); false: uncordon
+}
+
+message CollectDiagnostics {
+  bool include_vm_logs = 1;
+}
+
+message UpdateHostConfig {
+  HostSettings settings = 1;
+}
+
+message Ping {}
+
+// ------------------------------------------------------------- unary RPC messages
+
+message RenewCertificateRequest {
+  bytes csr_pem = 1;
+}
+message RenewCertificateResponse {
+  bytes certificate_pem = 1;
+  bytes ca_pem = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message IssueVMIdentityRequest {
+  string vm_name = 1;
+  string pool = 2;
+  bytes csr_pem = 3; // key generated by hostd for the VM
+}
+message IssueVMIdentityResponse {
+  bytes certificate_pem = 1; // URI SAN spiffe://cucina/worker/<pool>/<host>/<vm>, short-lived
+  bytes ca_pem = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  WorkerSettings settings = 4;
+}
+
+message GetRegistryCredentialsRequest {
+  string image = 1;
+}
+message GetRegistryCredentialsResponse {
+  string host = 1;
+  string username = 2;
+  string password = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}

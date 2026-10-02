@@ -1,0 +1,536 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+syntax = "proto3";
+
+package cucina.v1;
+
+import "cucina/v1/common.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/sloper-ai/cucina/api/proto/cucina/v1;cucinav1";
+
+// ManagementService is the controller's management API used by cucinactl
+// (R-CLI-2). It is served on the controller's management port over TLS and
+// authenticated with a Cucina JWT carrying the `admin` verb for mutating calls
+// (R-AUTH-11); read-only calls need any valid Cucina JWT with `execute` or
+// `admin` on at least one instance name. Every mutating call is written to the
+// audit log (principal, method, request summary, result; never secrets).
+//
+// The controller proxies BuildQueueState and Kubernetes state so the CLI never
+// needs kubeconfig or cluster-internal access. Action inspection reads CAS/AC
+// directly through the client endpoint with the user's own credentials; this API
+// only maps operations to their action digest.
+service ManagementService {
+  // --- Overview -----------------------------------------------------------
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  // WatchOverview streams a fresh Overview about every 2 s (TUI).
+  rpc WatchOverview(WatchOverviewRequest) returns (stream Overview);
+
+  // --- Pools --------------------------------------------------------------
+  rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse);
+  rpc GetPool(GetPoolRequest) returns (GetPoolResponse);
+  // SetPoolFloor sets a temporary minRunning override (standing cost; expires).
+  rpc SetPoolFloor(SetPoolFloorRequest) returns (SetPoolFloorResponse);
+  rpc CordonPool(CordonPoolRequest) returns (CordonPoolResponse);
+  // GarbageCollectPool sweeps orphaned volumes/ENIs carrying pool tags.
+  rpc GarbageCollectPool(GarbageCollectPoolRequest) returns (GarbageCollectPoolResponse);
+
+  // --- Workers ------------------------------------------------------------
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse);
+  rpc UndrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse);
+  // StreamWorkerLogs tails a worker's bb_worker/bb_runner logs (EC2: via SSM; Tart: via hostd).
+  rpc StreamWorkerLogs(StreamWorkerLogsRequest) returns (stream LogChunk);
+
+  // --- Hosts (macOS) ------------------------------------------------------
+  rpc ListHosts(ListHostsRequest) returns (ListHostsResponse);
+  rpc DrainHost(HostRef) returns (HostActionResponse);
+  rpc UncordonHost(HostRef) returns (HostActionResponse);
+  rpc ReimageHost(ReimageHostRequest) returns (HostActionResponse);
+  rpc HostDiagnostics(HostRef) returns (stream LogChunk);
+  // RegisterHostSerials pre-registers (and approves) serial numbers, e.g. pasted from Apple Business.
+  rpc RegisterHostSerials(RegisterHostSerialsRequest) returns (RegisterHostSerialsResponse);
+  rpc ApproveHost(ApproveHostRequest) returns (HostActionResponse);
+  rpc RemoveHost(HostRef) returns (HostActionResponse);
+  // Site enrollment tokens (multi-use, expiring, revocable, bound to a site, max host count).
+  rpc CreateEnrollToken(CreateEnrollTokenRequest) returns (CreateEnrollTokenResponse);
+  rpc ListEnrollTokens(ListEnrollTokensRequest) returns (ListEnrollTokensResponse);
+  rpc RevokeEnrollToken(RevokeEnrollTokenRequest) returns (RevokeEnrollTokenResponse);
+
+  // --- Queues and operations ---------------------------------------------
+  rpc ListQueues(ListQueuesRequest) returns (ListQueuesResponse);
+  rpc ListOperations(ListOperationsRequest) returns (ListOperationsResponse);
+  // WatchOperations streams operation changes for a filter (until cancelled).
+  rpc WatchOperations(ListOperationsRequest) returns (stream OperationEvent);
+  rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+  rpc KillOperations(KillOperationsRequest) returns (KillOperationsResponse);
+
+  // --- Identity -----------------------------------------------------------
+  rpc CreateServiceKey(CreateServiceKeyRequest) returns (CreateServiceKeyResponse);
+  rpc ListServiceKeys(ListServiceKeysRequest) returns (ListServiceKeysResponse);
+  rpc RevokeServiceKey(RevokeServiceKeyRequest) returns (RevokeServiceKeyResponse);
+  // RevokePrincipal adds a sid or sub to the deny-list (effective in <= 3 min, R-AUTH-9).
+  rpc RevokePrincipal(RevokePrincipalRequest) returns (RevokePrincipalResponse);
+  rpc ListRevocations(ListRevocationsRequest) returns (ListRevocationsResponse);
+
+  // --- Cost, images, diagnostics ----------------------------------------
+  rpc GetCost(GetCostRequest) returns (GetCostResponse);
+  rpc ListImages(ListImagesRequest) returns (ListImagesResponse);
+  // CollectSupportBundle streams a tar.gz support bundle (secrets redacted).
+  rpc CollectSupportBundle(CollectSupportBundleRequest) returns (stream LogChunk);
+}
+
+// ----------------------------------------------------------------- Overview
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  string cluster_id = 1;
+  string version = 2;
+  ProtocolVersion protocol = 3;
+  repeated ComponentStatus components = 4;
+  repeated PoolSummary pools = 5;
+  uint32 hosts_online = 6;
+  uint32 hosts_total = 7;
+  repeated Alert alerts = 8;
+  // Standing instances: a healthy idle system has zero worker instances.
+  uint32 worker_instances = 9;
+}
+
+message ComponentStatus {
+  string name = 1;  // frontend | storage | scheduler | controller | sts
+  string state = 2; // ready | degraded | down
+  string message = 3;
+  uint32 ready_replicas = 4;
+  uint32 desired_replicas = 5;
+}
+
+message WatchOverviewRequest {
+  google.protobuf.Duration interval = 1; // default 2s, min 1s
+}
+
+message Overview {
+  google.protobuf.Timestamp time = 1;
+  repeated PoolSummary pools = 2;
+  repeated QueueSummary queues = 3;
+  repeated HostSummary hosts = 4;
+  CostSummary cost = 5;
+  repeated Alert alerts = 6;
+  map<string, uint32> workers_by_state = 7; // launching|registered|busy|idle|draining|stopped
+  repeated StartLatency recent_starts = 8;  // cold-start timeline samples
+}
+
+message PoolSummary {
+  string name = 1;
+  string platform = 2;
+  string provider = 3;
+  uint32 min_running = 4;
+  uint32 max = 5;
+  uint32 desired = 6;
+  uint32 launching = 7;
+  uint32 registered = 8;
+  uint32 busy = 9;
+  uint32 idle = 10;
+  uint32 draining = 11;
+  uint32 stopped = 12;
+  string image_generation = 13;
+  bool paused = 14;
+  string condition = 15; // Ready | QueueNotDeclared | NoCapacity | ...
+  string message = 16;
+}
+
+message QueueSummary {
+  QueueRef queue = 1;
+  string pool = 2; // serving pool (empty if none)
+  uint32 queued = 3;
+  uint32 executing = 4;
+  uint32 idle_workers = 5;
+  uint32 total_workers = 6;
+  uint32 drains = 7;
+  google.protobuf.Duration oldest_queued_age = 8;
+  google.protobuf.Duration queue_time_p95 = 9;
+}
+
+message HostSummary {
+  string serial = 1;
+  string name = 2;
+  string site = 3;
+  string phase = 4;
+  uint32 running_vms = 5;
+  uint32 slots = 6;
+  string l2_hit_ratio = 7;
+  int64 wan_bytes_received = 8;
+  google.protobuf.Timestamp last_heartbeat = 9;
+  string agent_version = 10;
+}
+
+message CostSummary {
+  Money today = 1;
+  Money month_to_date = 2;
+  // Standing cost per month projection when every pool is at zero (AMI storage, Fast Launch snapshots, …).
+  Money standing_per_month = 3;
+  repeated PoolCost pools = 4;
+}
+
+message PoolCost {
+  string pool = 1;
+  int64 instance_seconds = 2;
+  Money compute = 3;
+  Money ebs = 4;
+  Money data_transfer = 5;
+  Money standing = 6;
+}
+
+// StartLatency is one VM start: API call -> running -> registered -> first action.
+message StartLatency {
+  string pool = 1;
+  string vm = 2;
+  google.protobuf.Timestamp launched = 3;
+  google.protobuf.Duration to_running = 4;
+  google.protobuf.Duration to_registered = 5;
+  google.protobuf.Duration to_first_action = 6;
+  string path = 7; // e.g. "fast-launch" | "slow" | "tart"
+}
+
+// --------------------------------------------------------------------- Pools
+
+message ListPoolsRequest {}
+message ListPoolsResponse {
+  repeated PoolSummary pools = 1;
+}
+
+message GetPoolRequest {
+  string name = 1;
+}
+message GetPoolResponse {
+  PoolSummary summary = 1;
+  string spec_json = 2;                      // the WorkerPool spec as JSON
+  repeated string conditions = 3;            // "Type=Status reason: message"
+  repeated WorkerSummary workers = 4;
+  repeated PoolEvent events = 5;             // scale timeline (most recent first)
+  repeated StartLatency starts = 6;
+}
+
+message PoolEvent {
+  google.protobuf.Timestamp time = 1;
+  string type = 2;    // launch | register | drain | terminate | fail | ice | scale | rollout
+  string subject = 3; // VM id
+  string message = 4;
+}
+
+message SetPoolFloorRequest {
+  string name = 1;
+  uint32 min_running = 2;
+  google.protobuf.Duration expires_in = 3; // required: standing cost must expire
+}
+message SetPoolFloorResponse {
+  google.protobuf.Timestamp expires_at = 1;
+}
+
+message CordonPoolRequest {
+  string name = 1;
+  bool cordon = 2; // false = uncordon
+}
+message CordonPoolResponse {}
+
+message GarbageCollectPoolRequest {
+  string name = 1; // empty = all pools
+  bool dry_run = 2;
+}
+message GarbageCollectPoolResponse {
+  repeated string deleted = 1; // "volume vol-…", "eni eni-…"
+  repeated string errors = 2;
+}
+
+// ------------------------------------------------------------------- Workers
+
+message WorkerSummary {
+  string node = 1; // EC2 instance ID or "<host>/<vm>"
+  string pool = 2;
+  string state = 3; // launching|registered|busy|idle|draining|stopped|failed
+  string generation = 4;
+  string instance_type = 5;
+  string host = 6;
+  uint32 threads = 7;
+  uint32 busy_threads = 8;
+  bool drained = 9;
+  google.protobuf.Timestamp launched = 10;
+  google.protobuf.Duration idle_for = 11;
+  string private_ip = 12;
+}
+
+message ListWorkersRequest {
+  string pool = 1; // optional filter
+}
+message ListWorkersResponse {
+  repeated WorkerSummary workers = 1;
+}
+
+message DrainWorkerRequest {
+  string node = 1;
+}
+message DrainWorkerResponse {}
+
+message StreamWorkerLogsRequest {
+  string node = 1;
+  string unit = 2; // bb-worker | bb-runner | agent
+  uint32 tail_lines = 3;
+  bool follow = 4;
+}
+
+message LogChunk {
+  bytes data = 1;
+  bool last = 2;
+}
+
+// --------------------------------------------------------------------- Hosts
+
+message HostRef {
+  string serial = 1; // or name
+}
+
+message HostActionResponse {
+  string message = 1;
+}
+
+message ListHostsRequest {}
+message ListHostsResponse {
+  repeated HostDetail hosts = 1;
+}
+
+message HostDetail {
+  HostSummary summary = 1;
+  string macos_version = 2;
+  string tart_version = 3;
+  string chip = 4;
+  uint32 cores = 5;
+  uint32 memory_gib = 6;
+  uint32 disk_free_gib = 7;
+  repeated HostVM vms = 8;
+  repeated string images = 9;
+  bool cordoned = 10;
+  bool approved = 11;
+  map<string, string> labels = 12;
+  google.protobuf.Timestamp cert_expiry = 13;
+  string filevault = 14;
+}
+
+message HostVM {
+  string name = 1;
+  string pool = 2;
+  string state = 3;
+  string image = 4;
+  string generation = 5;
+  bool registered = 6;
+}
+
+message ReimageHostRequest {
+  HostRef host = 1;
+  string vm = 2; // empty = every VM
+}
+
+message RegisterHostSerialsRequest {
+  repeated string serials = 1;
+  string site = 2;
+  map<string, string> labels = 3;
+}
+message RegisterHostSerialsResponse {
+  repeated string registered = 1;
+  repeated string already_present = 2;
+}
+
+message ApproveHostRequest {
+  string serial = 1;
+}
+
+message CreateEnrollTokenRequest {
+  string site = 1;
+  google.protobuf.Duration ttl = 2;
+  uint32 max_hosts = 3;
+  string description = 4;
+}
+message CreateEnrollTokenResponse {
+  string id = 1;
+  // token is shown exactly once; the controller stores only a hash.
+  string token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+message ListEnrollTokensRequest {}
+message ListEnrollTokensResponse {
+  repeated EnrollTokenInfo tokens = 1;
+}
+message EnrollTokenInfo {
+  string id = 1;
+  string site = 2;
+  string description = 3;
+  google.protobuf.Timestamp created = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  uint32 max_hosts = 6;
+  uint32 used_hosts = 7;
+  bool revoked = 8;
+}
+
+message RevokeEnrollTokenRequest {
+  string id = 1;
+}
+message RevokeEnrollTokenResponse {}
+
+// ---------------------------------------------------- Queues and operations
+
+message ListQueuesRequest {}
+message ListQueuesResponse {
+  repeated QueueSummary queues = 1;
+}
+
+message OperationSummary {
+  string name = 1;
+  QueueRef queue = 2;
+  string action_digest = 3; // "<hash>/<size>"
+  string digest_function = 4;
+  string stage = 5; // queued | executing | completed
+  google.protobuf.Timestamp queued_at = 6;
+  string target_id = 7;
+  string invocation_id = 8;
+  string tool_invocation_id = 9;
+  int32 priority = 10;
+  string worker_node = 11;
+  uint32 worker_thread = 12;
+  google.protobuf.Duration expected_duration = 13;
+  google.protobuf.Timestamp timeout = 14;
+}
+
+message ListOperationsRequest {
+  QueueRef queue = 1;      // optional
+  string stage = 2;        // optional
+  string instance_name = 3;
+  string invocation_id = 4;
+  Page page = 5;
+}
+message ListOperationsResponse {
+  repeated OperationSummary operations = 1;
+  string next_page_token = 2;
+}
+
+message OperationEvent {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_ADDED = 1;
+    KIND_CHANGED = 2;
+    KIND_REMOVED = 3;
+  }
+  Kind kind = 1;
+  OperationSummary operation = 2;
+}
+
+message GetOperationRequest {
+  string name = 1;
+}
+message GetOperationResponse {
+  OperationSummary operation = 1;
+}
+
+message KillOperationsRequest {
+  oneof target {
+    string operation_name = 1;
+    QueueRef queue_without_workers = 2;
+  }
+  string message = 3;
+}
+message KillOperationsResponse {}
+
+// ------------------------------------------------------------------ Identity
+
+message CreateServiceKeyRequest {
+  string account = 1; // service account principal name (TrustPolicy type serviceAccount)
+  string description = 2;
+  google.protobuf.Duration ttl = 3; // optional
+}
+message CreateServiceKeyResponse {
+  string key_id = 1;
+  // key is shown exactly once; the controller stores only a hash.
+  string key = 2;
+}
+
+message ListServiceKeysRequest {
+  string account = 1;
+}
+message ListServiceKeysResponse {
+  repeated ServiceKeyInfo keys = 1;
+}
+message ServiceKeyInfo {
+  string key_id = 1;
+  string account = 2;
+  string description = 3;
+  google.protobuf.Timestamp created = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp last_used = 6;
+  bool revoked = 7;
+}
+
+message RevokeServiceKeyRequest {
+  string key_id = 1;
+}
+message RevokeServiceKeyResponse {}
+
+message RevokePrincipalRequest {
+  string sub = 1; // principal (JWT sub)
+  string sid = 2; // or a single session
+  string reason = 3;
+}
+message RevokePrincipalResponse {
+  google.protobuf.Timestamp effective_by = 1; // now + propagation bound (<= 3 min)
+}
+
+message ListRevocationsRequest {}
+message ListRevocationsResponse {
+  repeated Revocation revocations = 1;
+}
+message Revocation {
+  string sub = 1;
+  string sid = 2;
+  string reason = 3;
+  google.protobuf.Timestamp created = 4;
+  string created_by = 5;
+}
+
+// ------------------------------------------------------- Cost, images, diag
+
+message GetCostRequest {
+  string pool = 1; // optional
+  google.protobuf.Timestamp since = 2;
+}
+message GetCostResponse {
+  CostSummary cost = 1;
+  repeated CostLine lines = 2; // itemised
+  string assumptions = 3;      // price list date, 60 s minimum, etc.
+}
+message CostLine {
+  string pool = 1;
+  string category = 2; // compute | ebs | public-ipv4 | ami-storage | fast-launch | data-transfer
+  string detail = 3;   // instance type, volume type, …
+  double quantity = 4;
+  string unit = 5;
+  Money amount = 6;
+}
+
+message ListImagesRequest {}
+message ListImagesResponse {
+  repeated ImageInfo images = 1;
+}
+message ImageInfo {
+  string pool = 1;
+  string reference = 2; // AMI ID or Tart reference
+  string version = 3;
+  string generation = 4;
+  bool current = 5;
+  bool previous = 6; // kept for rollback
+  uint32 workers_running = 7;
+  google.protobuf.Timestamp created = 8;
+  string fast_launch = 9; // enabled/disabled/n-a (+ snapshot count)
+}
+
+message CollectSupportBundleRequest {
+  bool include_logs = 1;
+}
