@@ -143,14 +143,35 @@ func (e *celEnvs) compile(env *cel.Env, expr string, want resultKind) (*program,
 func (p *program) eval(ctx context.Context, vars map[string]any) (ref.Val, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.lim.Timeout)
 	defer cancel()
+	// CEL's interrupts are cooperative: constants and short/non-comprehension
+	// expressions may never check them. Check both boundaries so a canceled or
+	// expired budget cannot grant permissions merely because evaluation succeeds.
+	if err := evaluationContextError(ctx); err != nil {
+		return nil, err
+	}
 	out, _, err := p.prg.ContextEval(ctx, vars)
 	if err != nil {
+		return nil, err
+	}
+	if err := evaluationContextError(ctx); err != nil {
 		return nil, err
 	}
 	if types.IsError(out) || types.IsUnknown(out) {
 		return nil, fmt.Errorf("evaluation failed: %v", out)
 	}
 	return out, nil
+}
+
+// evaluationContextError also checks the deadline directly: a timer's cancellation
+// callback may not have run yet when a short expression finishes after its budget.
+func evaluationContextError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func (p *program) evalBool(ctx context.Context, vars map[string]any) (bool, error) {

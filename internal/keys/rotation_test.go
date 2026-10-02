@@ -292,6 +292,16 @@ func TestRotationStateMachine(t *testing.T) {
 	})
 }
 
+// TestRotationRejectsMultiplePending guards R-AUTH-9's persisted-state invariant:
+// there may be only one pending successor, including when loading stored state.
+func TestRotationRejectsMultiplePending(t *testing.T) {
+	state, err := keys.Bootstrap("active", t0).StartRotation("pending-a", t0)
+	require.NoError(t, err)
+	require.NoError(t, state.Validate())
+	state.Keys = append(state.Keys, keys.KeyRecord{KID: "pending-b", State: keys.KeyPending, CreatedAt: t0, PublishedAt: t0})
+	require.Error(t, state.Validate(), "multiple pending successors must not be admitted")
+}
+
 // TestRotationWaitsForVerification guards the R-AUTH-9 rule that promotion needs proof:
 // without a load verifier a pending key never signs (unless explicitly allowed).
 func TestRotationWaitsForVerification(t *testing.T) {

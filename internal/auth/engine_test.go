@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -95,14 +97,15 @@ func newFixture(t testing.TB, limits auth.CELLimits, policies ...v1alpha1.TrustP
 }
 
 const (
-	celCostIssuer   = "https://cel-cost.example.com"
-	celDynIssuer    = "https://cel-dyn.example.com"
-	celBadIssuer    = "https://cel-compile.example.com"
-	celGrantIssuer  = "https://cel-grant.example.com"
-	celSplitIssuer  = "https://cel-split.example.com"
-	disabledIssuer  = "https://disabled.example.com"
-	keycloakIssuer  = "https://keycloak.example.com/realms/engineering"
-	untrustedIssuer = "https://evil.example.com"
+	celCostIssuer    = "https://cel-cost.example.com"
+	celDynIssuer     = "https://cel-dyn.example.com"
+	celNumericIssuer = "https://cel-numeric.example.com"
+	celBadIssuer     = "https://cel-compile.example.com"
+	celGrantIssuer   = "https://cel-grant.example.com"
+	celSplitIssuer   = "https://cel-split.example.com"
+	disabledIssuer   = "https://disabled.example.com"
+	keycloakIssuer   = "https://keycloak.example.com/realms/engineering"
+	untrustedIssuer  = "https://evil.example.com"
 )
 
 func standardPolicies(t testing.TB) []v1alpha1.TrustPolicy {
@@ -120,6 +123,8 @@ func standardPolicies(t testing.TB) []v1alpha1.TrustPolicy {
 		celPolicy("cel-cost", celCostIssuer, "claims.big.all(x, claims.big.all(y, x <= y || x > y))"),
 		// Type-checks as dyn; the run-time type decides.
 		celPolicy("cel-dyn", celDynIssuer, "claims.flag"),
+		// Numeric identity claims must not round through float64 before CEL comparison.
+		celPolicy("cel-numeric", celNumericIssuer, "claims.repository_id == 9007199254740992"),
 		// A string literal is not a bool: rejected at load time.
 		celPolicy("cel-compile", celBadIssuer, "'yes'"),
 		celPolicy("cel-grant", celGrantIssuer, "",
@@ -242,6 +247,8 @@ func TestExchangeTable(t *testing.T) {
 		{name: "CEL non-bool result at run time fails closed", do: token(celDynIssuer, idTok, simple(celDynIssuer, "flag", "yes")), wantCode: auth.CodeAccessDenied},
 		{name: "CEL non-bool rule rejected at load time", do: token(celBadIssuer, idTok, simple(celBadIssuer)), wantCode: auth.CodeInvalidGrant},
 		{name: "CEL error in a grant condition skips that grant", do: token(celGrantIssuer, idTok, simple(celGrantIssuer)), want: map[auth.Verb][]string{auth.VerbCASRead: mainOnly}},
+		{name: "CEL exact large integer claim matches", do: token(celNumericIssuer, idTok, simple(celNumericIssuer, "repository_id", int64(9007199254740992))), want: map[auth.Verb][]string{auth.VerbCASRead: mainOnly}},
+		{name: "CEL large integer claim never rounds into another identity", do: token(celNumericIssuer, idTok, simple(celNumericIssuer, "repository_id", int64(9007199254740993))), wantCode: auth.CodeAccessDenied},
 		// --- policy combination ---
 		{name: "no grant applies", do: token(keycloakIssuer, idTok, simple(keycloakIssuer, "email_verified", true, "groups", []any{"/other"})), wantCode: auth.CodeAccessDenied},
 		{name: "policies mapping different subjects", do: token(celSplitIssuer, idTok, simple(celSplitIssuer)), wantCode: auth.CodeAccessDenied},
@@ -293,14 +300,85 @@ func TestExchangeTable(t *testing.T) {
 	}
 }
 
-// TestCELTimeoutFailsClosed guards the per-evaluation timeout (R-AUTH-2): an
-// evaluation interrupted by its deadline denies.
+// TestCELTimeoutFailsClosed guards R-AUTH-2: no grants after cancellation or budget
+// expiry, even for expressions too short to reach a cooperative interrupt. Virtual
+// time replaces the old assumption that a three-element rule must exceed 1ns of wall
+// time; the 1ns budget is unchanged, but its expiry is now known rather than raced.
 func TestCELTimeoutFailsClosed(t *testing.T) {
-	limits := auth.CELLimits{Timeout: time.Nanosecond, InterruptCheckFrequency: 1}
-	f := newFixture(t, limits, celPolicy("slow", celCostIssuer, "claims.big.all(x, x >= 0)"))
-	_, err := token(celCostIssuer, auth.TokenTypeIDToken, simple(celCostIssuer, "big", []any{1, 2, 3}))(f)
-	require.Error(t, err)
-	assert.Equal(t, auth.CodeAccessDenied, auth.AsError(err).Code)
+	for name, expression := range map[string]string{
+		"constant":      "true",
+		"comprehension": "claims.big.all(x, x >= 0)",
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, state := range []string{"live", "canceled", "expired parent", "deadline before cancellation delivery", "configured rule deadline"} {
+				t.Run(state, func(t *testing.T) {
+					synctest.Test(t, func(t *testing.T) {
+						limits := auth.CELLimits{Timeout: time.Nanosecond, InterruptCheckFrequency: 1}
+						f := newFixture(t, limits, celPolicy("bounded", celCostIssuer, expression))
+						raw := f.issuer(celCostIssuer).Token(simple(celCostIssuer, "big", []any{1, 2, 3}))
+						ctx := context.Background()
+						switch state {
+						case "canceled":
+							canceled, cancel := context.WithCancel(ctx)
+							cancel()
+							ctx = canceled
+							require.ErrorIs(t, ctx.Err(), context.Canceled)
+						case "expired parent":
+							expired, cancel := context.WithTimeout(ctx, limits.Timeout)
+							defer cancel()
+							<-expired.Done() // advances virtual time, not a wall-clock sleep
+							ctx = expired
+							require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+						case "deadline before cancellation delivery":
+							pending, cancel := context.WithCancel(ctx)
+							defer cancel()
+							ctx = pendingDeadlineContext{Context: pending, at: time.Now().Add(-limits.Timeout)}
+							require.NoError(t, ctx.Err(), "the cancellation callback has not run")
+						case "configured rule deadline":
+							// Pause after WithTimeout chooses the rule's deadline. The parent
+							// has no deadline and remains live: only the configured rule budget
+							// can deny this exchange (removing WithTimeout must fail this row).
+							ctx = delayedDeadlineContext{Context: ctx, delay: 2 * limits.Timeout}
+						}
+						p, err := f.engine.ExchangeToken(ctx, auth.TokenTypeIDToken, raw)
+						if state == "live" {
+							require.NoError(t, err)
+							assert.Equal(t, mainOnly, p.Grants[auth.VerbCASRead])
+							return
+						}
+						if state == "configured rule deadline" {
+							require.NoError(t, ctx.Err(), "parent cancellation is not the cause")
+						}
+						require.Error(t, err)
+						assert.Nil(t, p)
+						assert.Equal(t, auth.CodeAccessDenied, auth.AsError(err).Code)
+					})
+				})
+			}
+		})
+	}
+}
+
+// pendingDeadlineContext models an elapsed deadline whose asynchronous cancellation
+// has not been delivered yet: Err is still nil and Done remains open until cancel.
+type pendingDeadlineContext struct {
+	context.Context
+	at time.Time
+}
+
+func (c pendingDeadlineContext) Deadline() (time.Time, bool) { return c.at, true }
+
+// delayedDeadlineContext models a scheduling pause during deadline lookup, after
+// context.WithTimeout has selected its deadline. Used only inside synctest so the
+// pause advances virtual time. It preserves the parent's cancellation semantics.
+type delayedDeadlineContext struct {
+	context.Context
+	delay time.Duration
+}
+
+func (c delayedDeadlineContext) Deadline() (time.Time, bool) {
+	<-time.After(c.delay)
+	return c.Context.Deadline()
 }
 
 // TestTokenTTLCap guards R-AUTH-3: whatever the configuration says, tokens live at most
@@ -341,8 +419,9 @@ func TestReplayCacheFailsClosed(t *testing.T) {
 	assert.NoError(t, exchange("third"), "expired entries free the cache")
 }
 
-// TestPolicyStatus guards load-time validation (R-AUTH-2): invalid policies get a
-// Valid=False condition with the reason and never match.
+// TestPolicyStatus guards load-time validation (R-AUTH-2): invalid policies, including
+// ones exceeding default or configured CEL size/nesting ceilings, get Valid=False
+// with a reason and never match.
 func TestPolicyStatus(t *testing.T) {
 	bad := []v1alpha1.TrustPolicy{
 		celPolicy("unknown-verb", "https://a.example.com", "", v1alpha1.Grant{InstanceNames: mainOnly, Verbs: []string{"write"}}),
@@ -351,18 +430,29 @@ func TestPolicyStatus(t *testing.T) {
 		celPolicy("ttl-too-long", "https://d.example.com", "", v1alpha1.Grant{InstanceNames: mainOnly, Verbs: []string{"cas-read"}, MaxTTL: &metav1.Duration{Duration: time.Hour}}),
 		celPolicy("http-issuer", "http://e.example.com", ""),
 		celPolicy("rule-uses-subject", "https://f.example.com", "subject == 'x'"),
+		celPolicy("default-expression-size", "https://limits.example.com", "'"+strings.Repeat("x", 4097)+"'.size() > 0"),
+		celPolicy("explicit-expression-size", "https://limits.example.com", "'"+strings.Repeat("x", 64)+"'.size() > 0"),
+		celPolicy("default-nesting", "https://limits.example.com", strings.Repeat("(", 80)+"true"+strings.Repeat(")", 80)),
+		celPolicy("explicit-nesting", "https://limits.example.com", strings.Repeat("(", 8)+"true"+strings.Repeat(")", 8)),
 	}
 	bad[2].Spec.ClaimMappings.Subject.Expression = "claims.sub == 'x'"
 	groupLookup := celPolicy("group-lookup-without-resolver", "https://g.example.com", "")
 	groupLookup.Spec.GroupLookup = &v1alpha1.GroupLookupSpec{Provider: "cloud-identity"}
 	bad = append(bad, groupLookup)
-	f := newFixture(t, auth.CELLimits{}, bad...)
-	require.Len(t, f.statuses, len(bad))
-	for _, s := range f.statuses {
-		c := s.Condition(t0)
-		assert.False(t, s.Valid, s.Name)
-		assert.Equal(t, metav1.ConditionFalse, c.Status, s.Name)
-		assert.NotEmpty(t, c.Message, s.Name)
+	limits := map[string]auth.CELLimits{
+		"explicit-expression-size": {MaxExpressionLen: 32},
+		"explicit-nesting":         {MaxNesting: 4},
+	}
+	for _, p := range bad {
+		t.Run(p.Name, func(t *testing.T) {
+			f := newFixture(t, limits[p.Name], p)
+			require.Len(t, f.statuses, 1)
+			s := f.statuses[0]
+			c := s.Condition(t0)
+			assert.False(t, s.Valid, s.Name)
+			assert.Equal(t, metav1.ConditionFalse, c.Status, s.Name)
+			assert.NotEmpty(t, c.Message, s.Name)
+		})
 	}
 }
 

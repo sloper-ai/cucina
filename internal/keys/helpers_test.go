@@ -3,6 +3,7 @@
 package keys_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/sloper-ai/cucina/internal/config"
 	"github.com/sloper-ai/cucina/internal/keys"
+	"github.com/sloper-ai/cucina/internal/keys/keystest"
 )
 
 func authConfig() config.Auth {
@@ -31,6 +33,94 @@ func secretWith(name string, kv ...string) *corev1.Secret {
 		s.Data[kv[i]] = []byte(kv[i+1])
 	}
 	return s
+}
+
+// conflictingUpdates adds a finite fault stream to the stateful Objects fake.
+// Even an unbounded-retry mutant eventually reaches a successful write, so the
+// tests fail on its observable result instead of hanging or inspecting call counts.
+type conflictingUpdates struct {
+	keys.Objects
+	target    string
+	remaining int
+}
+
+func (o *conflictingUpdates) conflict(target string) bool {
+	if o.target != target || o.remaining == 0 {
+		return false
+	}
+	o.remaining--
+	return true
+}
+
+func (o *conflictingUpdates) UpdateSecret(ctx context.Context, s *corev1.Secret) (*corev1.Secret, error) {
+	if o.conflict("service key") {
+		return nil, keys.ErrConflict
+	}
+	return o.Objects.UpdateSecret(ctx, s)
+}
+
+func (o *conflictingUpdates) UpdateConfigMap(ctx context.Context, cm *corev1.ConfigMap) (*corev1.ConfigMap, error) {
+	if o.conflict("principal") {
+		return nil, keys.ErrConflict
+	}
+	return o.Objects.UpdateConfigMap(ctx, cm)
+}
+
+// TestRevocationConflictBudget guards R-AUTH-9/-10 and the bounded-write invariant:
+// a revocation tolerates transient contention, but reports ErrConflict with no
+// revocation persisted after the initial attempt plus eight conflict retries.
+func TestRevocationConflictBudget(t *testing.T) {
+	for _, target := range []string{"service key", "principal"} {
+		t.Run(target, func(t *testing.T) {
+			for _, tc := range []struct {
+				name       string
+				conflicts  int
+				wantFailed bool
+			}{
+				{"transient contention recovers", 1, false},
+				{"last allowed retry succeeds", 8, false},
+				{"retry budget exhausted", 9, true},
+				{"sustained contention stays bounded", 32, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ctx := context.Background()
+					objs := keystest.NewObjects()
+					store, revocations := newServiceKeys(t, objs, keystest.NewClock(t0))
+					_, key, err := store.Create(ctx, keys.CreateKeyRequest{Account: "nightly-cache"})
+					require.NoError(t, err)
+					faults := &conflictingUpdates{Objects: objs, target: target, remaining: tc.conflicts}
+					store.Objects, revocations.Objects = faults, faults
+					const subject = "google:conflict-test"
+					if target == "service key" {
+						err = store.Revoke(ctx, key.ID, "google:admin")
+					} else {
+						_, _, err = revocations.Revoke(ctx, keys.RevokeRequest{Kind: keys.RevokeSubject, Value: subject})
+					}
+					if tc.wantFailed {
+						require.ErrorIs(t, err, keys.ErrConflict)
+					} else {
+						require.NoError(t, err)
+					}
+					if target == "service key" {
+						rec, err := store.Get(ctx, key.ID)
+						require.NoError(t, err)
+						assert.Equal(t, !tc.wantFailed, rec.Revoked())
+						assert.Equal(t, !tc.wantFailed, revocations.IsDenied(keys.SessionForKey(key.ID), ""))
+					} else {
+						assert.Equal(t, !tc.wantFailed, revocations.IsDenied("", subject))
+						persisted, err := revocations.List(ctx)
+						require.NoError(t, err)
+						if tc.wantFailed {
+							assert.Empty(t, persisted)
+						} else {
+							require.Len(t, persisted, 1)
+							assert.Equal(t, subject, persisted[0].Value)
+						}
+					}
+				})
+			}
+		})
+	}
 }
 
 // TestValidateAuthConfig guards the fail-fast configuration check (R-TEST-7): the
