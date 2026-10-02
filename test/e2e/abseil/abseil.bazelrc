@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina e2e overlay for Abseil LTS 20260817.0 (PROMPT §10.2). Copied to the
+# Abseil checkout as .bazelrc by test/e2e/bazelrun.PrepareAbseil; Abseil ships
+# no .bazelrc of its own. Remote runs add `--bazelrc=cucina.bazelrc` (the
+# output of `cucinactl bazelrc`); the local baseline does not.
+
+common --enable_platform_specific_config
+
+# --- Abseil CI flags (ci/linux_*_bazel.sh, ci/windows_msvc_bazel.bat) --------
+build --define=absl=1
+build --keep_going
+test --test_tag_filters=-benchmark
+test --test_output=errors
+# Relative on purpose: the same value works on every exec platform.
+test --test_env=TZDIR=absl/time/internal/cctz/testdata/zoneinfo
+test --test_env=GTEST_INSTALL_FAILURE_SIGNAL_HANDLER=1
+
+# --- C++17 for target and host ------------------------------------------------
+build:linux --cxxopt=-std=c++17 --host_cxxopt=-std=c++17
+build:macos --cxxopt=-std=c++17 --host_cxxopt=-std=c++17
+build:windows --cxxopt=/std:c++17 --host_cxxopt=/std:c++17
+
+# --- Windows: rules_cc's autodetected MSVC, pinned per host in user.bazelrc ---
+# (BAZEL_VC, BAZEL_VC_FULL_VERSION, BAZEL_WINSDK_FULL_VERSION; startup
+# --output_user_root=C:/b --windows_enable_symlinks). Never PATH/INCLUDE/LIB
+# via --action_env.
+build:windows --enable_runfiles
+build:windows --features=compiler_param_file
+# bazel#19733 workaround, as in bb-deployments.
+build:windows --features=-parse_showincludes --host_features=-parse_showincludes
+
+# --- hermetic-llvm lanes (Linux and cross configurations) --------------------
+common:hermetic --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+
+# Machine-local: repository cache outside the output base (kept by
+# `bazel clean --expunge`), @cucina_platforms injection, Windows pins.
+try-import %workspace%/user.bazelrc

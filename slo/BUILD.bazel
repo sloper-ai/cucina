@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+exports_files(
+    [
+        "rules.json",
+        "sloth.json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+go_library(
+    name = "slo",
+    srcs = ["slo.go"],
+    importpath = "github.com/sloper-ai/cucina/slo",
+    visibility = ["//visibility:public"],
+)
+
+cucina_go_test(
+    name = "slo_test",
+    srcs = ["slo_test.go"],
+    data = [
+        "rules.json",
+        "sloth.json",
+    ],
+    embed = [":slo"],
+    tier = "unit",
+    deps = ["@com_github_stretchr_testify//require"],
+)

@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//test/e2e:__subpackages__"],
+)
+
+go_library(
+    name = "bep",
+    srcs = ["bep.go"],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/collect/bep",
+    visibility = ["//test/e2e:__subpackages__"],
+    deps = [
+        "//test/e2e/third_party/bazel/bespb",
+        "@org_golang_google_protobuf//encoding/protodelim",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
+)
+
+cucina_go_test(
+    name = "bep_test",
+    srcs = ["bep_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":bep"],
+    tier = "unit",
+    deps = ["@com_github_stretchr_testify//require"],
+)

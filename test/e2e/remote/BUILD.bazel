@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "remote",
+    srcs = [
+        "forward.go",
+        "host.go",
+        "local.go",
+        "remote.go",
+        "scripts.go",
+        "ssm.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/remote",
+    visibility = ["//test/e2e:__subpackages__"],
+    deps = [
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_config//:config",
+        "@com_github_aws_aws_sdk_go_v2_service_ssm//:ssm",
+        "@com_github_aws_aws_sdk_go_v2_service_ssm//types",
+    ],
+)
+
+cucina_go_test(
+    name = "remote_test",
+    srcs = ["remote_test.go"],
+    embed = [":remote"],
+    tier = "integration",
+    deps = ["@com_github_stretchr_testify//require"],
+)

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Regenerate: cd test/e2e/third_party/bazel && buf generate
+# (protoc-gen-go v1.36.12 on PATH: go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12)
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: .
+    opt: paths=source_relative

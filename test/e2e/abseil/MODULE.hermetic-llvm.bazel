@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2 (this appended block only)
+# --- Cucina e2e overlay (test/e2e/abseil, PROMPT §10.2) ----------------------
+# Appended to Abseil's MODULE.bazel for the Linux lane and every cross
+# configuration: the hermetic-llvm toolchains (BCR `llvm`, pinned). Abseil's
+# C++/BUILD sources stay unmodified; the Windows (MSVC) and macOS (Xcode)
+# lanes use the autodetected toolchains and do not get this block.
+bazel_dep(name = "llvm", version = "0.8.24")
+
+register_toolchains("@llvm//toolchain:all")

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_scenario")
+
+# The scenario harness entry point (R-TEST-8d) is a cucina_scenario, not a
+# Gazelle-generated go_test:
+#   bazel run //test/e2e:scenario -- --env=aws-e2e --id=T1
+# gazelle:exclude scenario_test.go
+
+cucina_scenario(
+    name = "scenario",  # keep
+    srcs = ["scenario_test.go"],
+    tier = "acceptance",
+    deps = [
+        "//test/e2e/harness",
+        "//test/e2e/infra",
+        "//test/e2e/scenarios",
+    ],
+)

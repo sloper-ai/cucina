@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("@rules_go//go:def.bzl", "go_library")
+
+proto_library(
+    name = "spawnpb_proto",
+    srcs = ["spawn.proto"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@protobuf//:duration_proto",
+        "@protobuf//:timestamp_proto",
+    ],
+)
+
+go_library(
+    name = "spawnpb",
+    srcs = ["spawn.pb.go"],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/third_party/bazel/spawnpb",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

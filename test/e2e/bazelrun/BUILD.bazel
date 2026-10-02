@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "bazelrun",
+    srcs = [
+        "abseil.go",
+        "bazelrun.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/bazelrun",
+    visibility = ["//test/e2e:__subpackages__"],
+    deps = [
+        "//test/e2e/collect/bep",
+        "//test/e2e/collect/execlog",
+        "//test/e2e/collect/profile",
+        "//test/e2e/remote",
+    ],
+)
+
+cucina_go_test(
+    name = "bazelrun_test",
+    srcs = ["bazelrun_test.go"],
+    data = [
+        "//test/e2e/collect/bep:testdata",
+        "//test/e2e/collect/execlog:testdata",
+        "//test/e2e/collect/profile:testdata",
+    ],
+    embed = [":bazelrun"],
+    tier = "integration",
+    deps = [
+        "//test/e2e/remote",
+        "@com_github_stretchr_testify//require",
+    ],
+)

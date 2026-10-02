@@ -1,0 +1,129 @@
+{
+  "version": "prometheus/v1",
+  "service": "cucina",
+  "labels": {
+    "owner": "cucina"
+  },
+  "slos": [
+    {
+      "name": "queue-time",
+      "objective": 99,
+      "description": "Operations wait at most 1 s in the scheduler queue while free slots exist.",
+      "labels": {
+        "requirement": "NFR-P4"
+      },
+      "sli": {
+        "events": {
+          "error_query": "sum(rate(buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_count[{{.window}}])) - sum(rate(buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_bucket{le=\"1\"}[{{.window}}]))",
+          "total_query": "sum(rate(buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_count[{{.window}}]))"
+        }
+      },
+      "alerting": {
+        "name": "CucinaQueueTimeHigh",
+        "annotations": {
+          "summary": "Operations wait at most 1 s in the scheduler queue while free slots exist."
+        },
+        "page_alert": {
+          "labels": {
+            "severity": "critical"
+          }
+        },
+        "ticket_alert": {
+          "labels": {
+            "severity": "warning"
+          }
+        }
+      }
+    },
+    {
+      "name": "cold-start-linux",
+      "objective": 95,
+      "description": "Linux VMs execute their first action within 90 s of launch.",
+      "labels": {
+        "requirement": "NFR-P1"
+      },
+      "sli": {
+        "events": {
+          "error_query": "sum(rate(cucina_vm_start_seconds_count{phase=\"to_first_action\",pool=~\"linux.*\"}[{{.window}}])) - sum(rate(cucina_vm_start_seconds_bucket{phase=\"to_first_action\",pool=~\"linux.*\",le=\"90\"}[{{.window}}]))",
+          "total_query": "sum(rate(cucina_vm_start_seconds_count{phase=\"to_first_action\",pool=~\"linux.*\"}[{{.window}}]))"
+        }
+      },
+      "alerting": {
+        "name": "CucinaColdStartSlow",
+        "annotations": {
+          "summary": "Linux VMs execute their first action within 90 s of launch."
+        },
+        "page_alert": {
+          "labels": {
+            "severity": "critical"
+          }
+        },
+        "ticket_alert": {
+          "labels": {
+            "severity": "warning"
+          }
+        }
+      }
+    },
+    {
+      "name": "cache-canary",
+      "objective": 99.5,
+      "description": "The cache canary (AC/CAS round trip + token mint/verify) succeeds.",
+      "labels": {
+        "requirement": "R-TEST-7"
+      },
+      "sli": {
+        "events": {
+          "error_query": "sum(rate(cucina_canary_runs_total{kind=\"cache\",result=\"failure\"}[{{.window}}]))",
+          "total_query": "sum(rate(cucina_canary_runs_total{kind=\"cache\"}[{{.window}}]))"
+        }
+      },
+      "alerting": {
+        "name": "CucinaCacheCanaryFailing",
+        "annotations": {
+          "summary": "The cache canary (AC/CAS round trip + token mint/verify) succeeds."
+        },
+        "page_alert": {
+          "labels": {
+            "severity": "critical"
+          }
+        },
+        "ticket_alert": {
+          "labels": {
+            "severity": "warning"
+          }
+        }
+      }
+    },
+    {
+      "name": "cache-hit-ratio",
+      "objective": 90,
+      "description": "Action cache lookups hit (alerts on a hit-rate drop).",
+      "labels": {
+        "requirement": "UC16"
+      },
+      "sli": {
+        "events": {
+          "error_query": "sum(rate(grpc_server_handled_total{grpc_service=\"build.bazel.remote.execution.v2.ActionCache\",grpc_method=\"GetActionResult\",grpc_code=\"NotFound\"}[{{.window}}]))",
+          "total_query": "sum(rate(grpc_server_handled_total{grpc_service=\"build.bazel.remote.execution.v2.ActionCache\",grpc_method=\"GetActionResult\",grpc_code=~\"OK|NotFound\"}[{{.window}}]))"
+        }
+      },
+      "alerting": {
+        "name": "CucinaCacheHitRateDrop",
+        "annotations": {
+          "summary": "Action cache lookups hit (alerts on a hit-rate drop)."
+        },
+        "page_alert": {
+          "labels": {
+            "severity": "critical"
+          }
+        },
+        "ticket_alert": {
+          "labels": {
+            "severity": "warning"
+          }
+        }
+      }
+    }
+  ]
+}

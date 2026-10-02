@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "harness",
+    srcs = [
+        "budget.go",
+        "context.go",
+        "env.go",
+        "result.go",
+        "run.go",
+        "scenario.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/harness",
+    visibility = ["//test/e2e:__subpackages__"],
+)
+
+cucina_go_test(
+    name = "harness_test",
+    srcs = ["harness_test.go"],
+    embed = [":harness"],
+    tier = "unit",
+    deps = ["@com_github_stretchr_testify//require"],
+)

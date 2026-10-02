@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "nfr",
+    srcs = ["nfr.go"],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/nfr",
+    visibility = ["//test/e2e:__subpackages__"],
+    deps = ["//test/e2e/harness"],
+)
+
+cucina_go_test(
+    name = "nfr_test",
+    srcs = ["nfr_test.go"],
+    embed = [":nfr"],
+    tier = "unit",
+    deps = [
+        "//test/e2e/harness",
+        "@com_github_stretchr_testify//require",
+    ],
+)

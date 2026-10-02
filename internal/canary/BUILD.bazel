@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "canary",
+    srcs = [
+        "canary.go",
+        "cmd.go",
+        "metrics.go",
+        "probe.go",
+        "token.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/canary",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_spf13_cobra//:cobra",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/durationpb",
+    ],
+)
+
+cucina_go_test(
+    name = "canary_test",
+    srcs = ["canary_test.go"],
+    embed = [":canary"],
+    runfiles_env = {
+        "BB_SCHEDULER": "//tools:bb_scheduler",
+        "BB_STORAGE": "//tools:bb_storage",
+    },
+    tier = "integration",
+    deps = [
+        "//internal/bbtest",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

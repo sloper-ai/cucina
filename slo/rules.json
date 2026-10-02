@@ -1,0 +1,90 @@
+{
+  "groups": [
+    {
+      "name": "cucina-recording",
+      "interval": "30s",
+      "rules": [
+        {
+          "record": "cucina:queue_time_seconds:p95_5m",
+          "expr": "histogram_quantile(0.95, sum by (le, instance_name_prefix, platform, size_class) (rate(buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_bucket[5m])))"
+        },
+        {
+          "record": "cucina:queue_time_seconds:p50_5m",
+          "expr": "histogram_quantile(0.50, sum by (le, instance_name_prefix, platform, size_class) (rate(buildbarn_builder_in_memory_build_queue_tasks_queued_duration_seconds_bucket[5m])))"
+        },
+        {
+          "record": "cucina:queue_depth",
+          "expr": "sum by (platform, size_class, instance) (cucina_queue_queued)"
+        },
+        {
+          "record": "cucina:worker_fetch_inputs_seconds:p50_5m",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(buildbarn_builder_build_executor_duration_seconds_bucket{stage=\"FetchingInputs\"}[5m])))"
+        },
+        {
+          "record": "cucina:worker_fetch_inputs_seconds:p95_5m",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(buildbarn_builder_build_executor_duration_seconds_bucket{stage=\"FetchingInputs\"}[5m])))"
+        },
+        {
+          "record": "cucina:worker_upload_outputs_seconds:p50_5m",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(buildbarn_builder_build_executor_duration_seconds_bucket{stage=\"UploadingOutputs\"}[5m])))"
+        },
+        {
+          "record": "cucina:worker_upload_outputs_seconds:p95_5m",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(buildbarn_builder_build_executor_duration_seconds_bucket{stage=\"UploadingOutputs\"}[5m])))"
+        },
+        {
+          "record": "cucina:cold_start_seconds:p50_1h",
+          "expr": "histogram_quantile(0.50, sum by (le, pool) (rate(cucina_vm_start_seconds_bucket{phase=\"to_first_action\"}[1h])))"
+        },
+        {
+          "record": "cucina:cold_start_seconds:p99_1h",
+          "expr": "histogram_quantile(0.99, sum by (le, pool) (rate(cucina_vm_start_seconds_bucket{phase=\"to_first_action\"}[1h])))"
+        },
+        {
+          "record": "cucina:workers:by_state",
+          "expr": "sum by (pool, state) (cucina_pool_vms)"
+        },
+        {
+          "record": "cucina:idle_instances_with_empty_queue",
+          "expr": "sum by (pool) (cucina_idle_instances_with_empty_queue)"
+        },
+        {
+          "record": "cucina:ac_hit_ratio:rate5m",
+          "expr": "sum(rate(grpc_server_handled_total{grpc_service=\"build.bazel.remote.execution.v2.ActionCache\",grpc_method=\"GetActionResult\",grpc_code=\"OK\"}[5m])) / sum(rate(grpc_server_handled_total{grpc_service=\"build.bazel.remote.execution.v2.ActionCache\",grpc_method=\"GetActionResult\",grpc_code=~\"OK|NotFound\"}[5m]))"
+        },
+        {
+          "record": "cucina:blob_bytes:rate5m",
+          "expr": "sum by (job, storage_type, backend_type, operation) (rate(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum[5m]))"
+        },
+        {
+          "record": "cucina:cas_retention_seconds",
+          "expr": "time() - max by (namespace, pod) (buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds{storage_type=\"CAS\"})"
+        },
+        {
+          "record": "cucina:pod_rss_bytes",
+          "expr": "sum by (namespace, pod) (container_memory_rss{container!=\"\",container!=\"POD\"})"
+        },
+        {
+          "record": "cucina:control_plane_rss_bytes",
+          "expr": "sum by (namespace) (container_memory_rss{container!=\"\",container!=\"POD\"})"
+        },
+        {
+          "record": "cucina:oom_kills:increase1h",
+          "expr": "sum by (namespace) (increase(container_oom_events_total[1h]))"
+        },
+        {
+          "record": "cucina:canary_success:ratio_1h",
+          "expr": "sum by (kind, pool) (increase(cucina_canary_runs_total{result=\"success\"}[1h])) / sum by (kind, pool) (increase(cucina_canary_runs_total[1h]))"
+        },
+        {
+          "record": "cucina:invariant_violations:increase1h",
+          "expr": "sum by (invariant) (increase(cucina_invariant_violations_total[1h]))"
+        },
+        {
+          "record": "cucina:hostd_wan_bytes:rate5m",
+          "expr": "sum by (direction) (rate(cucina_hostd_wan_bytes_total[5m]))"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_binary")
+
+go_binary(
+    name = "e2e",
+    srcs = ["main.go"],
+    pure = "on",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//test/e2e/harness",
+        "//test/e2e/report",
+        "//test/e2e/scenarios",
+    ],
+)

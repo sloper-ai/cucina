@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "slogen_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/sloper-ai/cucina/slo/cmd/slogen",
+    visibility = ["//visibility:private"],
+    deps = ["//slo"],
+)
+
+go_binary(
+    name = "slogen",
+    embed = [":slogen_lib"],
+    visibility = ["//visibility:public"],
+)

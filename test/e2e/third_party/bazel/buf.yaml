@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Vendored Bazel protos (ADR 1001); a separate buf module so the repository's
+# lint/breaking rules (api/proto) do not apply to upstream files.
+version: v2

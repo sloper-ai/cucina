@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+filegroup(
+    name = "testdata",
+    srcs = glob(["testdata/**"]),
+    visibility = ["//test/e2e:__subpackages__"],
+)
+
+go_library(
+    name = "profile",
+    srcs = [
+        "perfetto.go",
+        "profile.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/collect/profile",
+    visibility = ["//test/e2e:__subpackages__"],
+)
+
+cucina_go_test(
+    name = "profile_test",
+    srcs = ["profile_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":profile"],
+    tier = "unit",
+    deps = ["@com_github_stretchr_testify//require"],
+)

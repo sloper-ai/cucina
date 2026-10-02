@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "spend",
+    srcs = ["spend.go"],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/collect/spend",
+    visibility = ["//test/e2e:__subpackages__"],
+    deps = [
+        "//internal/cost",
+        "//test/e2e/collect/awsinv",
+    ],
+)
+
+cucina_go_test(
+    name = "spend_test",
+    srcs = ["spend_test.go"],
+    embed = [":spend"],
+    tier = "unit",
+    deps = [
+        "//internal/cost",
+        "//test/e2e/collect/awsinv",
+        "@com_github_stretchr_testify//require",
+    ],
+)

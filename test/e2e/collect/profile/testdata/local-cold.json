@@ -1,0 +1,28 @@
+{"otherData":{"bazel_version":"release 9.2.0","build_id":"8c95c53b-d48f-4906-8149-aceb59aa554f","output_base":"/redacted/output_base","date":"2026-10-02T08:46:23.408456Z","profile_start_ts":1790930783408},"traceEvents":[
+    {"cat":"build phase marker","name":"Launch Blaze","ph":"X","ts":-2321000,"dur":2321000,"pid":1,"tid":53},
+    {"cat":"build phase marker","name":"Extracting Bazel binary","ph":"X","ts":-2321000,"dur":515000,"pid":1,"tid":53},
+    {"cat":"build phase marker","name":"Initialize command","ph":"i","ts":0,"pid":1,"tid":53},
+    {"cat":"build phase marker","name":"Evaluate target patterns","ph":"i","ts":4131779,"pid":1,"tid":53},
+    {"cat":"build phase marker","name":"Load, analyze dependencies and build artifacts","ph":"i","ts":4735628,"pid":1,"tid":53},
+    {"cat":"action processing","name":"BazelWorkspaceStatusAction stable-status.txt","ph":"X","ts":5294734,"dur":35754,"pid":1,"args":{"mnemonic":"BazelWorkspaceStatusAction"},"tid":268},
+    {"cat":"action processing","name":"Executing genrule //:gen","ph":"X","ts":5374165,"dur":274646,"pid":1,"args":{"mnemonic":"Genrule"},"tid":330},
+    {"cat":"action processing","name":"Creating source manifest for //:t","ph":"X","ts":9085798,"dur":1278,"pid":1,"args":{"mnemonic":"SourceSymlinkManifest"},"tid":494},
+    {"cat":"action processing","name":"Writing repo mapping manifest for //:t","ph":"X","ts":9085802,"dur":2028,"pid":1,"args":{"mnemonic":"RepoMappingManifest"},"tid":330},
+    {"cat":"action processing","name":"Creating symlink t","ph":"X","ts":9086708,"dur":3524,"pid":1,"args":{"mnemonic":"ExecutableSymlink"},"tid":492},
+    {"cat":"action processing","name":"Creating runfiles tree bazel-out/darwin_arm64-fastbuild/bin/t.runfiles","ph":"X","ts":9090139,"dur":3762,"pid":1,"args":{"mnemonic":"SymlinkTree"},"tid":494},
+    {"cat":"action processing","name":"RunfilesTree t.runfiles","ph":"X","ts":9094097,"dur":1936,"pid":1,"args":{"mnemonic":"RunfilesTree"},"tid":494},
+    {"cat":"action processing","name":"Testing //:t","ph":"X","ts":9103585,"dur":355985,"pid":1,"args":{"mnemonic":"TestRunner"},"tid":330},
+    {"cat":"build phase marker","name":"Complete build","ph":"i","ts":9525764,"pid":1,"tid":53},
+    {"cat":"critical path component","name":"action 'Executing genrule //:gen'","ph":"X","ts":5374062,"dur":274567,"pid":1,"args":{"tid":53},"tid":0},
+    {"cat":"critical path component","name":"runfiles for //:t","ph":"X","ts":9094060,"dur":1914,"pid":1,"args":{"tid":53},"tid":0},
+    {"cat":"critical path component","name":"action 'Testing //:t'","ph":"X","ts":9102411,"dur":357014,"pid":1,"args":{"tid":53},"tid":0},
+    {"name":"Network Up usage (total)","pid":1,"tid":53,"cname":"rail_response","ph":"C","ts":90438,"args":{"system network up (Mbps)":1.9834724548951295}},
+    {"name":"Network Up usage (total)","pid":1,"tid":53,"cname":"rail_response","ph":"C","ts":4090438,"args":{"system network up (Mbps)":4.051796589424851}},
+    {"name":"Network Up usage (total)","pid":1,"tid":53,"cname":"rail_response","ph":"C","ts":8090438,"args":{"system network up (Mbps)":3.6398203330678025}},
+    {"name":"Network Down usage (total)","pid":1,"tid":53,"cname":"rail_response","ph":"C","ts":2090438,"args":{"system network down (Mbps)":23.188895943683022}},
+    {"name":"Network Down usage (total)","pid":1,"tid":53,"cname":"rail_response","ph":"C","ts":6090438,"args":{"system network down (Mbps)":116.568094813047}},
+    {"name":"Memory usage (Bazel)","pid":1,"tid":53,"cname":"olive","ph":"C","ts":90438,"args":{"memory":108.77099999999999}},
+    {"name":"Memory usage (Bazel)","pid":1,"tid":53,"cname":"olive","ph":"C","ts":4090438,"args":{"memory":125.365}},
+    {"name":"Memory usage (Bazel)","pid":1,"tid":53,"cname":"olive","ph":"C","ts":8090438,"args":{"memory":216.355}}
+]
+}
