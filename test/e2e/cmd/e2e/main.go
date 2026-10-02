@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sloper-ai/cucina/test/e2e/collect/grpcuploads"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
 	"github.com/sloper-ai/cucina/test/e2e/infra"
 	"github.com/sloper-ai/cucina/test/e2e/report"
@@ -38,6 +39,8 @@ func main() {
 	switch os.Args[1] {
 	case "list":
 		err = list()
+	case "inventory":
+		err = inventoryCmd(os.Args[2:])
 	case "env":
 		err = envCmd(os.Args[2:])
 	case "check":
@@ -74,6 +77,42 @@ func list() error {
 		}
 		fmt.Printf("%-16s %-6s $%-5.1f %-8s %-50s %s\n", s.ID, s.Cost, s.EstimateUSD, s.Timeout, strings.Join(req, ","), s.Title)
 	}
+	return nil
+}
+
+// inventoryCmd pins resolved definitions without evaluating remote actions.
+func inventoryCmd(args []string) error {
+	fs := flag.NewFlagSet("inventory", flag.ContinueOnError)
+	rules := fs.String("rules", "", "file from bazel mod show_repo --all_repos in the prepared workspace")
+	out := fs.String("out", "", "private JSON output, referenced by crossInventoryFile")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *rules == "" || *out == "" {
+		return fmt.Errorf("inventory requires --rules and --out")
+	}
+	b, err := os.ReadFile(*rules)
+	if err != nil {
+		return err
+	}
+	inv, err := grpcuploads.InventoryFromRules(string(b))
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(inv, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(*out), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(*out, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(*out, 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %d explicitly pinned repository variants; inventory digest %s\n", len(inv.Repositories), inv.Fingerprint())
 	return nil
 }
 
@@ -280,6 +319,9 @@ func checkCmd(args []string) error {
 				}
 			}
 		case "T1", "T4":
+			if e.MeasurementScope == harness.ScopeSmallFunctional {
+				break
+			}
 			lane := "linux"
 			if s.ID == "T4" {
 				lane = "windows"
@@ -288,6 +330,8 @@ func checkCmd(args []string) error {
 			if p == nil || p.Status != harness.StatusPass || p.Metrics["baseline."+lane+"-baseline.build_seconds"].Value <= 0 {
 				missing = append(missing, "successful worker-type "+lane+"-baseline measurement required for NFR-P2")
 			}
+		case "T16":
+			file("cross repository/version inventory", e.CrossInventoryFile)
 		case "T11":
 			file("upgrade values", e.Kubernetes.UpgradeValuesFile)
 		case "T12":

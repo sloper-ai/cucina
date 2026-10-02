@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/sloper-ai/cucina/slo"
 	"github.com/sloper-ai/cucina/test/e2e/bazelrun"
 	"github.com/sloper-ai/cucina/test/e2e/collect/awsinv"
+	"github.com/sloper-ai/cucina/test/e2e/collect/grpcuploads"
 	"github.com/sloper-ai/cucina/test/e2e/collect/prom"
 	"github.com/sloper-ai/cucina/test/e2e/collect/spend"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
@@ -63,12 +65,16 @@ func (l Lane) Pool(env *harness.Env) string {
 
 // laneRun bundles what a lane's build needs.
 type laneRun struct {
-	c    *harness.Context
-	svc  *infra.Services
-	lane Lane
-	host remote.Host
-	ws   string // Abseil checkout on the host
-	user string
+	c               *harness.Context
+	svc             *infra.Services
+	lane            Lane
+	host            remote.Host
+	ws              string // Abseil checkout on the host
+	user            string
+	inventoryOnce   sync.Once
+	actualInventory grpcuploads.Inventory
+	inventoryProof  string
+	inventoryErr    error
 }
 
 func sep(h remote.Host) string {
@@ -203,7 +209,11 @@ func credentialHelper(h remote.Host) string {
 	if h.OS() == remote.Windows {
 		name += ".exe"
 	}
-	return hjoin(h, h.WorkDir(), "bin", name)
+	path := hjoin(h, h.WorkDir(), "bin", name)
+	if h.OS() == remote.Windows {
+		path = strings.ReplaceAll(path, `\`, "/")
+	}
+	return path
 }
 
 // installCucinactl puts the right cucinactl build on the host (once per
@@ -384,6 +394,23 @@ func (lr *laneRun) bazel(name string, o BuildOpts) (*bazelrun.Outcome, error) {
 	if o.OutputBase != "" {
 		startup = append(startup, "--output_base="+o.OutputBase)
 	}
+	var rpcPath string
+	var rpcInventory *grpcuploads.Inventory
+	if c.Env.CrossInventoryFile != "" && !o.NoRemoteRC && (o.Command == "build" || o.Command == "test") {
+		i, err := uploadInventory(c)
+		if err != nil {
+			return nil, err
+		}
+		rpcInventory = &i
+		if err := lr.prepareUploadProvenance(); err != nil {
+			return nil, err
+		}
+		rpcPath, err = privateRPCPath(c, lr, c.Scenario.ID+"-"+name)
+		if err != nil {
+			return nil, err
+		}
+		o.Extra = append(append([]string(nil), o.Extra...), "--remote_grpc_log="+rpcPath)
+	}
 	args := append([]string{}, o.Extra...)
 	if o.Command != "clean" {
 		args = append(args, "--")
@@ -405,6 +432,15 @@ func (lr *laneRun) bazel(name string, o BuildOpts) (*bazelrun.Outcome, error) {
 	})
 	if out != nil {
 		recordOutcome(c, lr.lane.Name+"."+name, out)
+	}
+	if err == nil && rpcInventory != nil {
+		cfg := Config{Name: c.Scenario.ID + "@" + lr.lane.Host}
+		path, collectErr := collectUploadTrace(c, lr, cfg, name, rpcPath, out, *rpcInventory)
+		if collectErr != nil {
+			c.Check(harness.CheckResult{Name: "initial repository upload evidence", Kind: "collector", Detail: collectErr.Error()})
+		} else {
+			c.Record("uploadEvidence."+safeName(lr.lane.Host+"-"+name), path)
+		}
 	}
 	if err == nil && o.ForceExecute && o.Command != "clean" {
 		err = requireRemoteExecution(out, name)
@@ -663,6 +699,7 @@ func sampled(c *harness.Context, every time.Duration, fn func() error) (awsinv.U
 	cancel()
 	u := awsinv.Integrate(snaps)
 	if sampleErrs > 0 {
+		c.Result.Cost.Incomplete = true
 		c.Check(harness.CheckResult{Name: "AWS lifecycle sampling complete", Kind: "aws", Pass: false, Detail: fmt.Sprintf("%d describe errors; lifecycle/cost evidence incomplete", sampleErrs)})
 	}
 	c.Record("aws", u)
@@ -680,6 +717,7 @@ func sampled(c *harness.Context, every time.Duration, fn func() error) (awsinv.U
 	c.Result.Cost.EBSGBHours += u.VolumeGiBHours
 	bill := spend.Price(cost.Usage{Launches: spend.Launches(u.Lifecycles)}, c.Now())
 	if len(bill.Unpriced) > 0 {
+		c.Result.Cost.Incomplete = true
 		c.Result.Cost.Unpriced = append(c.Result.Cost.Unpriced, bill.Unpriced...)
 		c.Check(harness.CheckResult{Name: "complete instance pricing", Kind: "cost", Detail: fmt.Sprintf("no verified price for %v; partial cost is not total spend", bill.Unpriced)})
 	}
@@ -936,6 +974,13 @@ func parseAquerySummary(out string) map[string]int {
 	return counts
 }
 
+// workerRSSQuery prefers the native process collector per worker, then the
+// validated Darwin guest process measurement. It never sums two measurements
+// of the same process and never substitutes Go heap bytes for resident memory.
+func workerRSSQuery(selector string) string {
+	return fmt.Sprintf(`max(process_resident_memory_bytes{%s} or on(namespace,pool,node,cucina_component) cucina_worker_resident_memory_bytes{%s,source="guest-ps"})`, selector, selector)
+}
+
 // promSnapshot records the control-plane and worker view of [from, to]
 // (§10.4): queue depth/time per platform, workers by state, worker staging
 // overhead, AC hit ratio, blob bytes per tier, pod and worker memory/CPU,
@@ -950,11 +995,11 @@ func promSnapshot(c *harness.Context, lane string, from, to time.Time) {
 		"fetch_inputs_p50_s":      slo.FetchInputsP50,
 		"upload_outputs_p50_s":    slo.UploadOutputsP50,
 		"ac_hit_ratio":            slo.ACHitRatio,
-		"cas_get_bytes_per_s":     `sum(` + slo.BlobBytesRate + `{storage_type="CAS",operation="Get"})`,
-		"cas_put_bytes_per_s":     `sum(` + slo.BlobBytesRate + `{storage_type="CAS",operation="Put"})`,
+		"cas_get_bytes_per_s":     slo.CASBytesRate("Get"),
+		"cas_put_bytes_per_s":     slo.CASBytesRate("Put"),
 		"control_plane_rss_bytes": fmt.Sprintf(`%s{namespace=%q}`, slo.ControlPlaneRSS, ns),
 		"control_plane_cpu_cores": fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace=%q,container!=""}[5m]))`, ns),
-		"worker_rss_bytes_max":    fmt.Sprintf(`max(process_resident_memory_bytes{%s})`, sel),
+		"worker_rss_bytes_max":    workerRSSQuery(sel),
 		"worker_cpu_cores_max":    fmt.Sprintf(`max(rate(process_cpu_seconds_total{%s}[5m]))`, sel),
 		"cas_retention_s_min":     "min(" + slo.CASRetention + ")",
 	}
@@ -968,9 +1013,9 @@ func promSnapshot(c *harness.Context, lane string, from, to time.Time) {
 			c.Metric("prom."+lane+"."+k, v, "")
 		}
 	}
-	w := int(to.Sub(from).Seconds())
+	window := to.Sub(from)
 	for name, op := range map[string]string{"frontend_cas_get_bytes": "Get", "frontend_cas_put_bytes": "Put"} {
-		q := fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{job=~".*frontend.*",storage_type="CAS",operation=%q}[%ds]))`, op, w)
+		q := slo.CASBytesIncrease(`job=~".*frontend.*"`, "", op, window)
 		if v, ok := promScalar(c, q, to); ok {
 			c.Metric("prom."+lane+"."+name, v, "bytes")
 		}

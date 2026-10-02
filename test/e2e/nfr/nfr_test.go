@@ -58,6 +58,14 @@ func TestCalculators(t *testing.T) {
 	require.True(t, Ratio("NFR-T3", "linux", 90, 100, 90, false, "").Pass)
 	require.False(t, Ratio("NFR-T3", "linux", 0, 0, 90, false, "").Pass)
 
+	// NFR-M2 worker samples cannot be supplied by a different component.
+	require.True(t, WorkerRSS(64<<20, true).Pass)
+	require.False(t, WorkerRSS(2<<30, true).Pass)
+	missingWorker := WorkerRSS(0, false)
+	require.False(t, missingWorker.Pass)
+	require.Equal(t, "bb_worker", missingWorker.Subject)
+	require.NotEmpty(t, missingWorker.Unqualified)
+
 	// NFR-X1: 99 % of compile/link, all tests.
 	require.Equal(t, []bool{true, true}, passes(Routing("x86_64-linux-gnu", 99, 100, 7, 7, true)))
 	require.Equal(t, []bool{false, false}, passes(Routing("x86_64-linux-gnu", 98, 100, 6, 7, true)))

@@ -9,6 +9,7 @@ package nfr
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -178,6 +179,18 @@ func ControlPlaneMemory(idleBytes, loadBytes float64, oomKills int) []harness.NF
 func ComponentLimit(component string, peakBytes, limitBytes float64) harness.NFRResult {
 	return harness.NFRResult{ID: "NFR-M2", Subject: component, Measured: peakBytes / (1 << 20), Unit: "MiB",
 		Target: fmt.Sprintf("≤ %.0f MiB", limitBytes/(1<<20)), Pass: peakBytes > 0 && peakBytes <= limitBytes}
+}
+
+// WorkerRSS qualifies the maximum actually scraped RSS in the requested load
+// window. Missing worker samples remain an explicit subject-level gap even if
+// the same scenario measured hostd/controller memory successfully.
+func WorkerRSS(bytes float64, available bool) harness.NFRResult {
+	if !available || bytes <= 0 || math.IsNaN(bytes) || math.IsInf(bytes, 0) {
+		return harness.NFRResult{ID: "NFR-M2", Subject: "bb_worker", Target: "≤ 1024 MiB", Unqualified: "worker RSS unavailable in the requested load window"}
+	}
+	r := ComponentLimit("bb_worker", bytes, 1<<30)
+	r.Detail = "maximum scraped resident memory during the load window; not an unsampled process high-water mark"
+	return r
 }
 
 // ClientPeakRSS reports NFR-M3.

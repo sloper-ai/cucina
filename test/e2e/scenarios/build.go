@@ -50,7 +50,7 @@ func baselineScenario(id string, lane Lane) *harness.Scenario {
 	}
 	return &harness.Scenario{
 		ID: id, Title: "Local baseline (" + lane.Name + "): Abseil build + test without remote execution",
-		Requires: req, Cost: harness.CostMedium, EstimateUSD: 3, Timeout: 4 * time.Hour, NFRs: []string{"NFR-P2", "NFR-X2"},
+		Requires: req, Cost: harness.CostMedium, EstimateUSD: 3, Timeout: 4 * time.Hour,
 		Run: func(c *harness.Context) error {
 			svc, err := infra.Of(c)
 			if err != nil {
@@ -108,13 +108,22 @@ func baselineScenario(id string, lane Lane) *harness.Scenario {
 				c.Metric(key+".test_exit", float64(b.TestExit), "")
 				c.Metric(key+".cpus", float64(b.CPUs), "")
 				local := filepath.Join(c.Dir(), hn+"-bep.json")
-				if err := h.Get(c, hjoin(h, out, "bep.json"), local); err == nil {
-					if outcomes, err := testOutcomes(local); err == nil {
-						c.Record(key+".tests", outcomes)
-					}
+				if b.BuildExit != 0 || (b.TestExit != 0 && b.TestExit != 3) {
+					return harness.Fail("%s: baseline compiler/invocation failed (build=%d test=%d); timings are not valid benchmark evidence", hn, b.BuildExit, b.TestExit)
 				}
-				if b.BuildExit != 0 {
-					c.Note("%s: local build exited %d (recorded; the baseline is a comparison, not a gate)", hn, b.BuildExit)
+				if err := h.Get(c, hjoin(h, out, "bep.json"), local); err != nil {
+					return err
+				}
+				outcomes, err := testOutcomes(local)
+				if err != nil {
+					return err
+				}
+				if len(outcomes) == 0 {
+					return harness.Fail("%s: baseline produced no native test outcomes", hn)
+				}
+				c.Record(key+".tests", outcomes)
+				if b.TestExit == 3 {
+					c.Note("%s: native baseline has failed tests; retained for explicit per-test X2 comparison", hn)
 				}
 			}
 			return nil
@@ -177,7 +186,7 @@ func coldScenario(id string, lane Lane) *harness.Scenario {
 		ID: id, Title: fmt.Sprintf("%s cold: empty cache, pool at zero, fresh output base; build + test", title(lane.Name)),
 		Requires: []harness.Requirement{harness.RequiresAWS, harness.Requirement(lane.Host), harness.RequiresPrometheus, harness.RequiresCucinactl},
 		Cost:     harness.CostHigh, EstimateUSD: 12, MaxInstances: 6, Essential: true, Timeout: 3 * time.Hour,
-		DependsOn: []string{"T0", "baseline-" + lane.Name},
+		DependsOn: []string{"T0"},
 		NFRs:      []string{"NFR-P1", "NFR-P2", "NFR-T1", "NFR-T4", "NFR-T8", "NFR-M1", "NFR-M2", "NFR-C4"},
 		Post:      append([]harness.Check{ZeroResidueCheck("pool back at zero")}, Guards...),
 		Run:       func(c *harness.Context) error { return runCold(c, lane) },
@@ -186,7 +195,7 @@ func coldScenario(id string, lane Lane) *harness.Scenario {
 
 func runCold(c *harness.Context, lane Lane) error {
 	workerBaseline, clientBaseline := baselineWalls(c, lane)
-	if workerBaseline <= 0 || clientBaseline <= 0 {
+	if c.Env.MeasurementScope != harness.ScopeSmallFunctional && (workerBaseline <= 0 || clientBaseline <= 0) {
 		return harness.Skip("NFR-P2 requires successful baseline-%s on both %s and a %s-baseline worker-type host", lane.Name, lane.Host, lane.Name)
 	}
 	svc, err := infra.Of(c)
@@ -278,8 +287,7 @@ func runCold(c *harness.Context, lane Lane) error {
 					compileInputs += s.InputBytes
 				}
 			}
-			q := fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{%s,storage_type="CAS",backend_type="grpc",operation="Get"}[%ds]))`,
-				workerSelector(c, lane.Name), int(end.Sub(start).Seconds()))
+			q := slo.CASBytesIncrease(workerSelector(c, lane.Name), "grpc", "Get", end.Sub(start))
 			if fetched, ok := promScalar(c, q, end); ok {
 				c.NFR(nfr.Ratio("NFR-T8", lane.Name, fetched, float64(compileInputs), 20, true, "worker CAS Get bytes from L3 vs CppCompile input-root bytes (all remote actions' fetches counted: conservative)"))
 			}
@@ -294,9 +302,8 @@ func runCold(c *harness.Context, lane Lane) error {
 	if v, ok := promMax(c, fmt.Sprintf(`max(%s{namespace=%q,pod=~".*controller.*"})`, slo.PodRSS, ns), start, end); ok {
 		c.NFR(nfr.ComponentLimit("cucina-controller", v, 256<<20))
 	}
-	if v, ok := promMax(c, fmt.Sprintf(`max(process_resident_memory_bytes{%s})`, workerSelector(c, lane.Name)), start, end); ok {
-		c.NFR(nfr.ComponentLimit("bb_worker", v, 1<<30))
-	}
+	workerRSS, workerRSSPresent := promMax(c, workerRSSQuery(workerSelector(c, lane.Name)), start, end)
+	c.NFR(nfr.WorkerRSS(workerRSS, workerRSSPresent))
 	// NFR-T4: the endpoint advertises zstd; Bazel uses --remote_cache_compression.
 	compression(c, lr)
 	// §10.4 control-plane/worker view of the build and §10.2 action counts.
@@ -475,10 +482,10 @@ func l1Scenario(id, dep string, lane Lane) *harness.Scenario {
 				return o, start, c.Now(), err
 			}
 			l1Share := func(from, to time.Time) (float64, float64, bool) {
-				w := int(to.Sub(from).Seconds())
+				window := to.Sub(from)
 				sel := workerSelector(c, lane.Name)
-				local, ok1 := promScalar(c, fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{%s,storage_type="CAS",backend_type="local",operation="Get"}[%ds]))`, sel, w), to)
-				grpcBytes, ok2 := promScalar(c, fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{%s,storage_type="CAS",backend_type="grpc",operation="Get"}[%ds]))`, sel, w), to)
+				local, ok1 := promScalar(c, slo.CASBytesIncrease(sel, "local", "Get", window), to)
+				grpcBytes, ok2 := promScalar(c, slo.CASBytesIncrease(sel, "grpc", "Get", window), to)
 				return local, local + grpcBytes, ok1 && ok2
 			}
 			// First run: the cold build's workers are still up (warm L1).

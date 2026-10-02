@@ -61,6 +61,9 @@ type Env struct {
 	WorkerSelectors map[string]string `json:"workerSelectors,omitempty"`
 	// CLI names disposable, isolated T20 resources, never production fixtures.
 	CLI *CLIFixtures `json:"cli,omitempty"`
+	// CrossInventoryFile pins canonical repository -> component/version/variant
+	// and immutable source identity for NFR-X5; never infer versions from names.
+	CrossInventoryFile string `json:"crossInventoryFile,omitempty"`
 }
 
 // CLIFixtures is the explicit allow-list for T20 destructive CLI coverage.
@@ -364,6 +367,7 @@ func (e *Env) expandPaths() {
 	}
 	exp(&e.ArtifactsDir)
 	exp(&e.RepoDir)
+	exp(&e.CrossInventoryFile)
 	exp(&e.Endpoints.CAFile)
 	exp(&e.Secrets.ServiceKeyFile)
 	exp(&e.Secrets.ReadOnlyKeyFile)

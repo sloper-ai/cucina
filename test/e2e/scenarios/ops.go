@@ -138,6 +138,21 @@ func t7() *harness.Scenario {
 			if err != nil {
 				return err
 			}
+			svc, err := infra.Of(c)
+			if err != nil {
+				return err
+			}
+			capture, err := startScaleInCapture(c, svc)
+			if err != nil {
+				return err
+			}
+			defer func() {
+				capture.close()
+				if err := saveScaleInEvidence(c, capture.snapshot()); err != nil {
+					c.Check(harness.CheckResult{Name: "persist live scale-in evidence", Kind: "collector", Detail: err.Error()})
+				}
+			}()
+			var workEnd time.Time
 			type job struct {
 				name string
 				lr   *laneRun
@@ -162,9 +177,14 @@ func t7() *harness.Scenario {
 					}()
 				}
 				wg.Wait()
-				return errors.Join(errs...)
+				workEnd = c.Now()
+				if err := errors.Join(errs...); err != nil {
+					return err
+				}
+				capture.finish()
+				return nil
 			})
-			end := c.Now()
+			end := workEnd
 			if err != nil {
 				return err
 			}
@@ -200,71 +220,13 @@ func t7() *harness.Scenario {
 
 func t8() *harness.Scenario {
 	return &harness.Scenario{
-		ID: "T8", Title: "Scale-in: every worker drained and terminated within idleTimeout + drain grace",
+		ID: "T8", Title: "Scale-in: every worker drained and provider-confirmed terminated within idle timeout + drain grace",
 		Requires: []harness.Requirement{harness.RequiresAWS, harness.RequiresCucinactl, harness.RequiresKubernetes},
-		Cost:     harness.CostNone, Essential: true, Timeout: 45 * time.Minute, DependsOn: []string{"T7"}, NFRs: []string{"NFR-C1"},
-		Post: append([]harness.Check{ZeroResidueCheck("zero pool instances, volumes, ENIs, public IPs")}, Guards...),
-		Run: func(c *harness.Context) error {
-			svc, err := infra.Of(c)
-			if err != nil {
-				return err
-			}
-			start := c.Now()
-			var took time.Duration
-			var r awsinv.Residue
-			_, err = sampled(c, 10*time.Second, func() error {
-				var err error
-				took, r, err = waitZero(c, scaleInLimit)
-				return err
-			})
-			if err != nil {
-				return err
-			}
-			c.Metric("scale_in_seconds", took.Seconds(), "s")
-			c.NFR(nfr.Residue("after scale-in", r.Instances, r.Volumes, r.ENIs, r.EIPs, r.PublicIPs))
-			// Per-VM: idle → terminated within idleTimeout + drainTimeout, from the pool timelines.
-			var late []string
-			for _, lane := range []Lane{LinuxLane, WindowsLane} {
-				pool := lane.Pool(c.Env)
-				pi, err := describePool(c, svc, pool)
-				if err != nil {
-					return err
-				}
-				timers, _ := field(specOf(pi), "timers").(map[string]any)
-				limit := dur(field(timers, "idle_timeout")) + dur(field(timers, "drain_timeout"))
-				if limit <= 0 {
-					c.Check(harness.CheckResult{Name: pool + " scale-in timeout", Kind: "lifecycle", Skipped: "explicit timers.idleTimeout/drainTimeout not present in pool spec"})
-				}
-				for _, e := range poolEvents(pi) {
-					c.Event(e.Subject, pool+" "+e.Type+": "+e.Message, e.Time)
-				}
-				evidence := idleToTerminated(poolEvents(pi), start)
-				if len(evidence) == 0 {
-					c.Check(harness.CheckResult{Name: pool + " per-VM idle to terminated", Kind: "lifecycle", Skipped: "management timeline lacks paired idle and termination timestamps for this scale-in"})
-				}
-				for vm, d := range evidence {
-					if limit > 0 && d > limit+2*time.Minute {
-						late = append(late, fmt.Sprintf("%s %s took %s (limit %s)", pool, vm, d.Round(time.Second), limit))
-					}
-				}
-			}
-			if evs, err := svc.Kube.Events(c, "WorkerPool", start); err == nil {
-				for _, e := range evs {
-					c.Event(e.Name, "k8s "+e.Reason+": "+e.Message, e.Time)
-				}
-			}
-			idle, ok := promMax(c, `sum(`+slo.IdleInstancesEmptyQueue+`) or vector(0)`, start, c.Now())
-			if ok {
-				c.NFR(nfr.Count("NFR-C1", "idle workers beyond idleTimeout + drain grace", int(idle), "max of "+slo.IdleInstancesEmptyQueue))
-			}
-			if len(late) > 0 {
-				return harness.Fail("scale-in too slow: %s", strings.Join(late, "; "))
-			}
-			if !r.Zero() {
-				return harness.Fail("residue after %s: %s", took, r)
-			}
-			return nil
-		},
+		Cost:     harness.CostNone, Essential: true, Timeout: 45 * time.Minute, NFRs: []string{"NFR-C1"},
+		// A failed T7 can still leave valuable complete lifecycle evidence;
+		// read that evidence explicitly instead of hiding it behind a PASS dependency.
+		Post: append([]harness.Check{ZeroResidueCheck("zero worker instances, volumes, ENIs and IPs")}, Guards...),
+		Run:  runScaleInEvidence,
 	}
 }
 
@@ -299,27 +261,6 @@ func poolEvents(pi PoolInfo) []PoolEvent {
 		out = append(out, PoolEvent{Time: t, Type: str(field(m, "type")), Subject: str(field(m, "subject")), Message: str(field(m, "message"))})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.Before(out[j].Time) })
-	return out
-}
-
-// idleToTerminated pairs each VM's idle event with its terminate event
-// after `since` and returns the time between them.
-func idleToTerminated(evs []PoolEvent, since time.Time) map[string]time.Duration {
-	drain := map[string]time.Time{}
-	out := map[string]time.Duration{}
-	for _, e := range evs {
-		if e.Time.Before(since) {
-			continue
-		}
-		switch e.Type {
-		case "idle":
-			drain[e.Subject] = e.Time
-		case "terminate":
-			if t, ok := drain[e.Subject]; ok {
-				out[e.Subject] = e.Time.Sub(t)
-			}
-		}
-	}
 	return out
 }
 

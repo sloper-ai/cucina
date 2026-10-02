@@ -32,6 +32,16 @@ func TestReadCompactExecutionLog(t *testing.T) {
 	require.Equal(t, int64(6), gen.OutputBytes, `"hello\n"`)
 	require.Equal(t, int64(1), gen.OutputFiles)
 	require.Positive(t, gen.InputBytes)
+	// X5 needs content identities even when SpawnMetrics already has sizes.
+	require.NotEmpty(t, cold.Inputs)
+	found := false
+	for _, f := range cold.Inputs {
+		if !f.Digest.IsZero() {
+			require.NotEmpty(t, f.Path)
+			found = true
+		}
+	}
+	require.True(t, found, "input digests must survive for the RPC upload join")
 	require.Equal(t, time.Date(2026, 10, 2, 8, 46, 28, 750_000_000, time.UTC), gen.Start)
 	require.Equal(t, 181*time.Millisecond, gen.Timings.Execution)
 

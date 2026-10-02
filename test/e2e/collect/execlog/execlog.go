@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
@@ -87,11 +89,22 @@ func (s Spawn) RemoteCacheHit() bool { return s.CacheHit && s.Runner == "remote 
 // construction plus output upload on the worker.
 func (s Spawn) WorkerOverhead() time.Duration { return s.Timings.Setup + s.Timings.ProcessOutputs }
 
+// InputIdentity retains used file identities for X5's RPC/digest join, without
+// expanding the same toolchain inventory into every spawn. Symlink references
+// have no content digest and must not be counted as uploaded SDK bytes.
+type InputIdentity struct {
+	Path          string `json:"path"`
+	Digest        Digest `json:"digest"`
+	Tool          bool   `json:"tool"`
+	SymlinkTarget string `json:"symlinkTarget,omitempty"`
+}
+
 // Log is a parsed compact execution log.
 type Log struct {
-	InvocationID string  `json:"invocationId"`
-	HashFunction string  `json:"hashFunction"`
-	Spawns       []Spawn `json:"spawns"`
+	InvocationID string          `json:"invocationId"`
+	HashFunction string          `json:"hashFunction"`
+	Spawns       []Spawn         `json:"spawns"`
+	Inputs       []InputIdentity `json:"inputs,omitempty"`
 }
 
 // ReadFile parses a compact execution log file.
@@ -115,8 +128,9 @@ func Read(r io.Reader) (*Log, error) {
 }
 
 type fileInfo struct {
-	size  int64
-	files int64
+	size       int64
+	files      int64
+	identities []InputIdentity
 }
 
 type state struct {
@@ -124,6 +138,7 @@ type state struct {
 	sets     map[uint32]*spawnpb.ExecLogEntry_InputSet
 	runfiles map[uint32]uint32 // runfiles tree id -> input set id
 	memo     map[uint32]map[uint32]struct{}
+	used     map[string]InputIdentity
 }
 
 func readEntries(br *bufio.Reader) (*Log, error) {
@@ -132,6 +147,7 @@ func readEntries(br *bufio.Reader) (*Log, error) {
 		sets:     map[uint32]*spawnpb.ExecLogEntry_InputSet{},
 		runfiles: map[uint32]uint32{},
 		memo:     map[uint32]map[uint32]struct{}{},
+		used:     map[string]InputIdentity{},
 	}
 	log := &Log{}
 	opts := protodelim.UnmarshalOptions{MaxSize: 64 << 20}
@@ -149,16 +165,17 @@ func readEntries(br *bufio.Reader) (*Log, error) {
 			log.InvocationID = t.Invocation.GetId()
 			log.HashFunction = t.Invocation.GetHashFunctionName()
 		case *spawnpb.ExecLogEntry_File_:
-			st.files[id] = fileInfo{size: t.File.GetDigest().GetSizeBytes(), files: 1}
+			st.files[id] = fileInfo{size: t.File.GetDigest().GetSizeBytes(), files: 1, identities: []InputIdentity{{Path: strings.ReplaceAll(t.File.GetPath(), `\`, "/"), Digest: Digest{Hash: t.File.GetDigest().GetHash(), SizeBytes: t.File.GetDigest().GetSizeBytes()}}}}
 		case *spawnpb.ExecLogEntry_Directory_:
 			var fi fileInfo
 			for _, f := range t.Directory.GetFiles() {
 				fi.size += f.GetDigest().GetSizeBytes()
 				fi.files++
+				fi.identities = append(fi.identities, InputIdentity{Path: path.Join(strings.ReplaceAll(t.Directory.GetPath(), `\`, "/"), strings.ReplaceAll(f.GetPath(), `\`, "/")), Digest: Digest{Hash: f.GetDigest().GetHash(), SizeBytes: f.GetDigest().GetSizeBytes()}})
 			}
 			st.files[id] = fi
 		case *spawnpb.ExecLogEntry_UnresolvedSymlink_:
-			st.files[id] = fileInfo{files: 1}
+			st.files[id] = fileInfo{files: 1, identities: []InputIdentity{{Path: strings.ReplaceAll(t.UnresolvedSymlink.GetPath(), `\`, "/"), SymlinkTarget: t.UnresolvedSymlink.GetTargetPath()}}}
 		case *spawnpb.ExecLogEntry_InputSet_:
 			st.sets[id] = t.InputSet
 		case *spawnpb.ExecLogEntry_RunfilesTree_:
@@ -167,6 +184,12 @@ func readEntries(br *bufio.Reader) (*Log, error) {
 			log.Spawns = append(log.Spawns, st.spawn(t.Spawn))
 		}
 	}
+	for _, f := range st.used {
+		log.Inputs = append(log.Inputs, f)
+	}
+	sort.Slice(log.Inputs, func(i, j int) bool {
+		return log.Inputs[i].Path+log.Inputs[i].Digest.String() < log.Inputs[j].Path+log.Inputs[j].Digest.String()
+	})
 	return log, nil
 }
 
@@ -207,10 +230,23 @@ func (st *state) spawn(p *spawnpb.ExecLogEntry_Spawn) Spawn {
 		s.Start = ts.AsTime()
 	}
 	s.InputBytes, s.InputFiles = m.GetInputBytes(), m.GetInputFiles()
+	ids, tools := map[uint32]struct{}{}, map[uint32]struct{}{}
+	st.collect(p.GetInputSetId(), ids)
+	st.collect(p.GetToolSetId(), tools)
+	for id := range tools {
+		ids[id] = struct{}{}
+	}
+	for id := range ids {
+		for _, f := range st.files[id].identities {
+			_, f.Tool = tools[id]
+			key := f.Path + "\x00" + f.Digest.String()
+			if previous, ok := st.used[key]; ok {
+				f.Tool = f.Tool || previous.Tool
+			}
+			st.used[key] = f
+		}
+	}
 	if s.InputBytes == 0 && s.InputFiles == 0 {
-		ids := map[uint32]struct{}{}
-		st.collect(p.GetInputSetId(), ids)
-		st.collect(p.GetToolSetId(), ids)
 		for id := range ids {
 			fi := st.files[id]
 			s.InputBytes += fi.size

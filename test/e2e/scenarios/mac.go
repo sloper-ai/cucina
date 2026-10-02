@@ -27,6 +27,7 @@ import (
 	"github.com/sloper-ai/cucina/internal/hostd/sys"
 	"github.com/sloper-ai/cucina/internal/ports"
 	cproto "github.com/sloper-ai/cucina/internal/proto"
+	"github.com/sloper-ai/cucina/slo"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
 	"github.com/sloper-ai/cucina/test/e2e/infra"
 	"github.com/sloper-ai/cucina/test/e2e/nfr"
@@ -146,8 +147,7 @@ func runT13(c *harness.Context) error {
 	// NFR-T4 host↔control plane: zstd wire bytes (hostd WAN counter) against
 	// the raw blob bytes the host L2 fetched from the control plane.
 	if sel := c.Env.WorkerSelectors["macos-l2"]; sel != "" && wanOK {
-		q := fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{%s,storage_type="CAS",backend_type="grpc",operation="Get"}[%ds]))`,
-			sel, int(c.Now().Sub(start).Seconds()))
+		q := slo.CASBytesIncrease(sel, "grpc", "Get", c.Now().Sub(start))
 		if raw, ok := promScalar(c, q, c.Now()); ok && raw > 0 {
 			c.NFR(nfr.Reported("NFR-T4", "host↔control plane (WAN, zstd)", firstVMWAN/raw, "wire/raw bytes", fmt.Sprintf("%.0f wire bytes for %.0f raw", firstVMWAN, raw)))
 		}
@@ -216,6 +216,8 @@ func runT13(c *harness.Context) error {
 	if err := secondVMFromL2(c, svc, lr, pool, firstVMWAN, wanOK); err != nil {
 		return err
 	}
+	workerRSS, workerRSSPresent := promMax(c, workerRSSQuery(workerSelector(c, "macos")), start, c.Now())
+	c.NFR(nfr.WorkerRSS(workerRSS, workerRSSPresent))
 	if p := hostdPeak(); p > 0 {
 		c.NFR(nfr.ComponentLimit("cucina-hostd", p, 100<<20))
 	} else {
@@ -235,10 +237,10 @@ func reexecL1Share(c *harness.Context, lr *laneRun, name string) (l1share, error
 	if err != nil {
 		return l1share{}, err
 	}
-	w := int(c.Now().Sub(s).Seconds())
+	window := c.Now().Sub(s)
 	sel := workerSelector(c, lr.lane.Name)
-	l1, ok1 := promScalar(c, fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{%s,storage_type="CAS",backend_type="local",operation="Get"}[%ds]))`, sel, w), c.Now())
-	rem, ok2 := promScalar(c, fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{%s,storage_type="CAS",backend_type="grpc",operation="Get"}[%ds]))`, sel, w), c.Now())
+	l1, ok1 := promScalar(c, slo.CASBytesIncrease(sel, "local", "Get", window), c.Now())
+	rem, ok2 := promScalar(c, slo.CASBytesIncrease(sel, "grpc", "Get", window), c.Now())
 	if !ok1 || !ok2 || l1 < 0 || rem < 0 || l1+rem <= 0 {
 		return l1share{}, harness.Fail("worker blob metrics for %s missing or have no input bytes (selector %s)", lr.lane.Name, sel)
 	}

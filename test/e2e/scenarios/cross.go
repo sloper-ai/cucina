@@ -4,6 +4,8 @@ package scenarios
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -20,6 +22,7 @@ import (
 
 	"github.com/sloper-ai/cucina/test/e2e/bazelrun"
 	"github.com/sloper-ai/cucina/test/e2e/collect/execlog"
+	"github.com/sloper-ai/cucina/test/e2e/collect/grpcuploads"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
 	"github.com/sloper-ai/cucina/test/e2e/infra"
 	"github.com/sloper-ai/cucina/test/e2e/nfr"
@@ -302,6 +305,9 @@ type Config struct {
 	ExecPool string // compile exec platform; the target's default (first) unless chosen
 	Steps    []Step
 	TestStep string
+	// Reuse is a fresh-output-base replay after the seed matrix; it keeps
+	// normal remote cache reads so X5 measures repeat-configuration payload.
+	Reuse bool
 }
 
 // testTimeouts scales Bazel's default test timeouts (60, 300, 900, 3600 s)
@@ -785,7 +791,8 @@ type ConfigResult struct {
 	RemoteRatio  float64           `json:"remoteRatio"`
 	HitRatio     float64           `json:"hitRatio"`
 	// NetworkBytesSent is the client's upload (BEP), summed over steps (NFR-X5).
-	NetworkBytesSent int64 `json:"networkBytesSent"`
+	NetworkBytesSent int64    `json:"networkBytesSent"`
+	UploadEvidence   []string `json:"uploadEvidence,omitempty"` // sanitized capture files only
 	// RCIssues are `cucinactl bazelrc --cross` contract violations; RCAdded
 	// the lines the harness appended (configuration, overlay, fixes).
 	RCIssues []string `json:"rcIssues,omitempty"`
@@ -819,11 +826,12 @@ type matrixLane struct {
 // matrix runs configurations in concurrent batches, each in its own output
 // base on its client, and records one ConfigResult per configuration.
 type matrix struct {
-	c       *harness.Context
-	targets *Targets
-	props   RunnerProps
-	mu      sync.Mutex
-	lanes   map[string]*matrixLane
+	c         *harness.Context
+	targets   *Targets
+	props     RunnerProps
+	inventory *grpcuploads.Inventory
+	mu        sync.Mutex
+	lanes     map[string]*matrixLane
 }
 
 func newMatrix(c *harness.Context) (*matrix, error) {
@@ -835,7 +843,15 @@ func newMatrix(c *harness.Context) (*matrix, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &matrix{c: c, targets: t, props: props, lanes: map[string]*matrixLane{}}, nil
+	m := &matrix{c: c, targets: t, props: props, lanes: map[string]*matrixLane{}}
+	if c.Env.CrossInventoryFile != "" {
+		inv, err := uploadInventory(c)
+		if err != nil {
+			return nil, err
+		}
+		m.inventory = &inv
+	}
+	return m, nil
 }
 
 // lane opens a client for cross configurations: its Abseil checkout gets
@@ -1011,7 +1027,33 @@ func (m *matrix) one(cfg Config) ConfigResult {
 		inv := base
 		inv.Name, inv.Command, inv.Collect = m.c.Scenario.ID+"-"+safe+"-"+st.Name, st.Command, true
 		// Concurrent servers share the checkout: never race on MODULE.bazel.lock.
-		inv.Args = append(append(append([]string{"--lockfile_mode=off"}, st.Flags...), "--"), st.Patterns...)
+		if m.inventory != nil {
+			if err := lr.prepareUploadProvenance(); err != nil {
+				r.Error = err.Error()
+				break
+			}
+		}
+		var rpcPath string
+		if m.inventory != nil {
+			var err error
+			rpcPath, err = privateRPCPath(m.c, lr, inv.Name)
+			if err != nil {
+				r.Error = err.Error()
+				break
+			}
+		}
+		flags := append([]string{"--lockfile_mode=off"}, st.Flags...)
+		if m.c.Scenario.ID == "T16" && !cfg.Reuse && st.Command == "build" && m.inventory != nil {
+			// A fresh output base plus disabled local repo-contents cache and
+			// remote reads forces a complete FMB manifest for eligible repos.
+			// Warm CAS may still need zero content writes; the ledger does not
+			// relabel that as an observed initial upload. T18/T19 stay cacheable.
+			flags = append(flags, "--repo_contents_cache=", "--noremote_accept_cached", "--remote_upload_local_results=true")
+		}
+		if rpcPath != "" {
+			flags = append(flags, "--remote_grpc_log="+rpcPath)
+		}
+		inv.Args = append(append(flags, "--"), st.Patterns...)
 		o, err := bazelrun.Run(m.c, inv, filepath.Join(m.c.Dir(), safe+"-"+st.Name))
 		if err != nil {
 			r.Error = st.Name + ": " + err.Error()
@@ -1053,6 +1095,14 @@ func (m *matrix) one(cfg Config) ConfigResult {
 		}
 		if st.Command == "test" && len(r.Tests) == 0 {
 			r.Error = "test invocation produced no BEP test outcomes"
+		}
+		if rpcPath != "" {
+			path, err := collectUploadTrace(m.c, lr, cfg, st.Name, rpcPath, o, *m.inventory)
+			if err != nil {
+				r.Error = "required upload evidence: " + err.Error()
+			} else {
+				r.UploadEvidence = append(r.UploadEvidence, path)
+			}
 		}
 		r.Steps = append(r.Steps, sr)
 	}
@@ -1136,6 +1186,9 @@ func t16() *harness.Scenario {
 			if err != nil {
 				return err
 			}
+			if m.inventory == nil {
+				return harness.Skip("T16 needs crossInventoryFile with explicit pinned repository/version inventory for X5")
+			}
 			if err := m.rejectExcluded(LinuxLane); err != nil {
 				return err
 			}
@@ -1143,10 +1196,22 @@ func t16() *harness.Scenario {
 			if err != nil {
 				return err
 			}
-			results, failed, err := runMatrix(c, m, cfgs, 4)
-			if err != nil {
+			// Replay after the entire seed batch, so every pinned variant has
+			// a second observed configuration, without qualifying SDK/CRT from
+			// unrelated LLVM-only reuse. Both phases share lifecycle/cost sampling.
+			var reuse []Config
+			for _, cfg := range cfgs {
+				cfg.Name += "@reuse"
+				cfg.Reuse = true
+				reuse = append(reuse, cfg)
+			}
+			c.Record("plan", planRecord(append(append([]Config(nil), cfgs...), reuse...)))
+			start := c.Now()
+			var results []ConfigResult
+			if _, err := sampled(c, 15*time.Second, func() error { results = m.run(cfgs, 4); results = append(results, m.run(reuse, 4)...); return nil }); err != nil {
 				return err
 			}
+			failed := recordMatrix(c, results, start)
 			outcomesVsBaseline(c, results)
 			toolchainUploads(c, results)
 			if len(failed) > 0 {
@@ -1202,23 +1267,97 @@ func outcomesVsBaseline(c *harness.Context, results []ConfigResult) {
 	}
 }
 
-// toolchainUploads evaluates NFR-X5 from the BEP network counters: after the
-// first configuration of a toolchain, later configurations must not upload
-// the toolchain again (bytes sent stay small).
+// toolchainUploads qualifies X5 from sanitized RPC evidence plus execution-log
+// digest membership, never from whole-NIC/BEP totals or absence of uploads.
 func toolchainUploads(c *harness.Context, results []ConfigResult) {
-	c.Check(harness.CheckResult{Name: "NFR-X5 per-toolchain-version upload attribution", Kind: "coverage", Skipped: "BEP totals do not identify toolchain/SDK/CRT blobs; per-version upload attribution is not implemented (ADR 1006). Totals below are diagnostics, not proof."})
-	var sent []float64
-	for _, r := range results {
-		if r.Error == "" && r.NetworkBytesSent > 0 {
-			sent = append(sent, float64(r.NetworkBytesSent))
-		}
-	}
-	if len(sent) < 2 {
+	inventory, err := uploadInventory(c)
+	if err != nil {
+		c.Check(harness.CheckResult{Name: "X5 repository inventory", Kind: "coverage", Skipped: err.Error()})
 		return
 	}
-	sort.Float64s(sent)
-	c.NFR(nfr.Reported("NFR-X5", "client upload bytes per configuration", sent[len(sent)/2]/1e6, "MB (median)",
-		fmt.Sprintf("max %.0f MB; toolchains come from the repo contents cache and are uploaded once per toolchain version", sent[len(sent)-1]/1e6)))
+	var captures []grpcuploads.Capture
+	var problems []string
+	// Earlier same-run logged builds may hold the first toolchain upload.
+	// Verify their registered artifact hash before using a sanitized capture.
+	var priorResults []*harness.Result
+	for _, p := range c.Prior {
+		if p.RunID == c.Env.RunID {
+			priorResults = append(priorResults, p)
+		}
+	}
+	sort.Slice(priorResults, func(i, j int) bool { return priorResults[i].Started.Before(priorResults[j].Started) })
+	for _, p := range priorResults {
+		for key, value := range p.Values {
+			if !strings.HasPrefix(key, "uploadEvidence.") {
+				continue
+			}
+			path, ok := value.(string)
+			if !ok {
+				continue
+			}
+			if filepath.Dir(path) != filepath.Join(c.Env.ArtifactsDir, c.Env.RunID, p.ID) {
+				problems = append(problems, "prior upload capture path mismatch")
+				continue
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				problems = append(problems, "prior upload evidence unreadable")
+				continue
+			}
+			sum := sha256.Sum256(b)
+			verified := false
+			for _, a := range p.Artifacts {
+				if a.SHA256 == hex.EncodeToString(sum[:]) {
+					verified = true
+				}
+			}
+			if !verified {
+				problems = append(problems, "prior upload evidence hash not registered")
+				continue
+			}
+			var capture grpcuploads.Capture
+			if err := json.Unmarshal(b, &capture); err != nil {
+				problems = append(problems, "prior sanitized evidence invalid")
+				continue
+			}
+			captures = append(captures, capture)
+		}
+	}
+	for _, r := range results {
+		if len(r.UploadEvidence) == 0 {
+			problems = append(problems, r.Config+": no sanitized RPC evidence")
+		}
+		for _, path := range r.UploadEvidence {
+			if filepath.Dir(path) != c.Dir() {
+				problems = append(problems, "upload evidence outside current scenario")
+				continue
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				problems = append(problems, "cannot read upload evidence")
+				continue
+			}
+			var capture grpcuploads.Capture
+			if err := json.Unmarshal(b, &capture); err != nil {
+				problems = append(problems, "invalid sanitized upload evidence")
+				continue
+			}
+			captures = append(captures, capture)
+		}
+	}
+	report := grpcuploads.Evaluate(inventory, captures)
+	report.Unavailable = append(report.Unavailable, problems...)
+	if len(problems) > 0 {
+		report.Pass = false
+	}
+	c.Record("toolchainUploads", report)
+	row := harness.NFRResult{ID: "NFR-X5", Subject: "pinned repository content reuse across configurations", Measured: float64(report.RepeatedConfigurationPayload), Unit: "client-offered payload bytes", Target: "0 repeated content payload across configurations", Pass: report.Pass, Detail: fmt.Sprintf("%d unique logical content bytes; %d offered bytes; %d retry attempts (not socket-byte or newly-stored-byte claims)", report.UniqueContentBytes, report.OfferedBytes, report.RetryAttempts)}
+	if len(report.Violations) > 0 {
+		row.Detail += "; " + strings.Join(report.Violations, "; ")
+	} else if len(report.Unavailable) > 0 {
+		row.Unqualified = strings.Join(report.Unavailable, "; ")
+	}
+	c.NFR(row)
 }
 
 // ---------------------------------------------------------------- T17

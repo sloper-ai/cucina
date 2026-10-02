@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "grpcuploads",
+    srcs = [
+        "evaluate.go",
+        "inventory.go",
+        "read.go",
+        "types.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/test/e2e/collect/grpcuploads",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@org_golang_google_protobuf//encoding/protowire",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+cucina_go_test(
+    name = "grpcuploads_test",
+    srcs = ["uploads_test.go"],
+    tier = "unit",
+    deps = [
+        ":grpcuploads",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//encoding/protowire",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
