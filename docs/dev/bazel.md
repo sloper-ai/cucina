@@ -215,14 +215,24 @@ adapter remain only because hermetic-llvm independently uses them in its prebuil
 
 The repository only allows GitHub-owned actions plus an allow-list (jdx/mise-action, ...),
 pinned to full commit SHAs. Jobs install Bazelisk and other tools with `jdx/mise-action`
-(`install_args`, versions from `mise.toml`) and keep Bazel's repository and disk caches with
-`actions/cache` (the repo contents cache stays out of the saved cache). `--config=ci` sets
+(`install_args`, versions from `mise.toml`). Linux/macOS keep repository and disk caches with
+`actions/cache`; Windows saves repository downloads only. `--config=ci` sets
 `--lockfile_mode=error`: after changing `MODULE.bazel`, `go.mod` or `Cargo.lock`, run a build
 (or `bazel mod deps --lockfile_mode=update`, which records every extension) and commit
-`MODULE.bazel.lock`. Windows runs use `--output_user_root=C:/b` and long paths. `.gitattributes`
-keeps source text LF even with `core.autocrlf=true`, while preserving verbatim upstream licence
-files and the notices aggregate. All three OS lanes build and test `//...`, including the Windows CLI. The pinned LLVM/rules_rust
-compatibility patches are documented in [ADR 0107](../adr/0107-windows-native-toolchain-compatibility.md).
+`MODULE.bazel.lock`. `.gitattributes` keeps source text LF even with `core.autocrlf=true`, while
+preserving verbatim upstream licence files and the notices aggregate. All three OS lanes build
+and test `//...`, including the Windows CLI. The pinned LLVM/rules_rust compatibility patches
+are documented in [ADR 0107](../adr/0107-windows-native-toolchain-compatibility.md).
+
+Windows storage setup measures the fixed system/workspace volumes and selects the one with
+most free bytes. Its short root `<drive>:/b` holds the output tree and repository-download
+cache; hardlinks avoid copies of cached download files. The disk action cache and shared
+extracted-repository cache are disabled for this single-workspace job, not the ordinary action
+cache in the output base. Build and test retain that same output base. Bazel's `4G` disk-cache
+GC option is an **idle-time** policy, not a peak-space bound during a build (ADR 0111). The job
+logs initial, post-restore and final free bytes, plus logical output/cache sizes. Setup refuses
+local/self-hosted contexts and pre-existing storage roots; it deletes no tools, SDKs or data.
+Linux/macOS storage settings and all test targets are unchanged.
 
 Linux frees unused preinstalled SDKs before building. `.bazelrc` clears repository
 `ANDROID_HOME`: Cucina has no Android targets, and a dangling runner SDK path must not affect

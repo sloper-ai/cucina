@@ -82,20 +82,55 @@ jobs:
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
           install_args: bazelisk
-      - name: configure Bazel caches (user.bazelrc)
+      - name: configure Bazel caches (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
-          home="${HOME}"
-          if [ "${RUNNER_OS}" = "Windows" ]; then home="$(cygpath -m "${HOME}")"; fi
           {
-            if [ "${RUNNER_OS}" = "Windows" ]; then echo "startup --output_user_root=C:/b"; fi
-            echo "common --repository_cache=${home}/.cache/bazel-repo"
+            echo "common --repository_cache=${HOME}/.cache/bazel-repo"
             # Extracted repositories stay out of the saved cache (they're large).
-            echo "common --repo_contents_cache=${home}/.cache/bazel-repo-contents"
-            echo "build --disk_cache=${home}/.cache/bazel-disk"
+            echo "common --repo_contents_cache=${HOME}/.cache/bazel-repo-contents"
+            echo "build --disk_cache=${HOME}/.cache/bazel-disk"
             echo "build --experimental_disk_cache_gc_max_size=4G"
           } > user.bazelrc
           cat user.bazelrc
+      - name: configure Bazel storage (Windows)
+        id: windows-storage
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # The disk-cache GC limit applies only while idle, not during a build.
+        # A single-workspace runner needs one output tree, not a second copy of
+        # every action output. Keep only the reusable repository downloads.
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw 'Bazel storage setup requires a disposable GitHub-hosted Windows runner.'
+          }
+          $workspaceDrive = Split-Path -Qualifier $env:GITHUB_WORKSPACE
+          $allowedDrives = @($env:SystemDrive, $workspaceDrive) | Sort-Object -Unique
+          if (@($allowedDrives | Where-Object { $_ -notmatch '^[A-Z]:$' }).Count -ne 0) {
+            throw 'Expected drive-letter roots for the hosted system and workspace.'
+          }
+          $volumes = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' |
+            Where-Object { $_.DeviceID -in $allowedDrives -and $_.FreeSpace -gt 0 })
+          if ($volumes.Count -eq 0) { throw 'No writable fixed system/workspace volume was found.' }
+          $volumes | Select-Object DeviceID, Size, FreeSpace | Format-Table -AutoSize
+          $chosen = $volumes | Sort-Object @{ Expression = 'FreeSpace'; Descending = $true }, DeviceID | Select-Object -First 1
+          $root = "$($chosen.DeviceID)/b"
+          # Never delete preinstalled tools or an earlier caller's directory.
+          if (Test-Path -LiteralPath $root) { throw "Refusing to reuse unexpected storage directory $root" }
+          New-Item -ItemType Directory -Path "$root/o", "$root/r" | Out-Null
+          @(
+            "startup --output_user_root=$root/o"
+            "common --repository_cache=$root/r"
+            'common --experimental_repository_cache_hardlinks'
+            'common --repo_contents_cache='
+            'build --disk_cache='
+          ) | Set-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'user.bazelrc') -Encoding utf8
+          "repository-cache=$root/r" >> $env:GITHUB_OUTPUT
+          "CUCINA_CI_BAZEL_ROOT=$root" >> $env:GITHUB_ENV
+          Write-Host "Bazel storage: $root; initial free bytes: $($chosen.FreeSpace)"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.os != 'Windows'
         with:
           path: |
             ~/.cache/bazel-repo
@@ -103,6 +138,25 @@ jobs:
           key: bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'go.sum', 'Cargo.lock') }}
           restore-keys: |
             bazel-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.os == 'Windows'
+        with:
+          path: ${{ steps.windows-storage.outputs.repository-cache }}
+          # Never restore the old combined repository/action cache onto the new root.
+          key: bazel-repo-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'go.sum', 'Cargo.lock') }}
+          restore-keys: |
+            bazel-repo-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: record free space after cache restore (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw 'Storage diagnostics require a disposable GitHub-hosted Windows runner.'
+          }
+          Write-Host "Bazel storage: $env:CUCINA_CI_BAZEL_ROOT"
+          Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' |
+            Select-Object DeviceID, Size, FreeSpace | Format-Table -AutoSize
       - name: bazel build
         run: bazelisk build --config=ci -- //...
       - name: bazel test
@@ -113,6 +167,26 @@ jobs:
           for triple in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnullvm; do
             bazelisk build --config=ci --platforms="@rules_rs//rs/platforms:${triple}" //cli/cucinactl //tools/hello/rust:hello_rs
           done
+      - name: record final storage usage (Windows)
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw 'Storage diagnostics require a disposable GitHub-hosted Windows runner.'
+          }
+          Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' |
+            Select-Object DeviceID, Size, FreeSpace | Format-Table -AutoSize
+          if ($env:CUCINA_CI_BAZEL_ROOT) {
+            if ($env:CUCINA_CI_BAZEL_ROOT -notmatch '^[A-Z]:/b$') { throw 'Unexpected Bazel storage root.' }
+            foreach ($directory in @('o', 'r')) {
+              $path = "$env:CUCINA_CI_BAZEL_ROOT/$directory"
+              # Logical file bytes, not allocated blocks; do not follow directory links.
+              $bytes = (Get-ChildItem -LiteralPath $path -File -Recurse -Force -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+              Write-Host "$path logical file bytes: $bytes"
+            }
+          }
 
   nightly:
     name: nightly (quarantine + simulation)
