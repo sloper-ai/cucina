@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# --- Private working files (PROMPT.md holds environment details: keep out of the public repo) ---
+/PROMPT.md
+/.work/
+/user.bazelrc
+.claude/
+
+# --- Secrets and environment identifiers: never commit ---
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileconfig.signed
+*.kubeconfig
+kubeconfig*
+**/.kube/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl.bak
+crash.log
+.env
+.env.*
+secrets/
+credentials/
+**/test-credentials*
+**/generated-certs/
+
+# --- Build output ---
+/bazel-*
+/target/
+**/target/debug/
+**/target/release/
+/dist/
+/out/
+*.test
+*.out
+coverage.*
+.packer.d/
+packer_cache/
+*.pkg.unsigned
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
