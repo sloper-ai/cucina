@@ -154,7 +154,9 @@ cucina_proto_rust(name = "gen_update", proto = "//api/proto/cucina/v1:cucinav1_p
 hermetic-llvm 0.8.24 (LLVM 23.1.2) is the only C/C++ toolchain (`.bazelrc` sets
 `BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1`, `BAZEL_NO_APPLE_CPP_TOOLCHAIN=1` and an empty
 `--xcode_version_config`). Load cc rules from `@rules_cc//cc:*.bzl` (Bazel 9 has no autoloads).
-macOS targets currently use hermetic-llvm's downloaded macOS SDK (ADR 0102; R-XPLAT-8 replaces it).
+macOS targets resolve the SDK on the executing Mac through `@cucina_platforms` (R-XPLAT-8;
+this supersedes the downloaded-SDK arrangement recorded in ADR 0102). Native builds use the
+unversioned Xcode SDK; remote pool configurations pin the SDK version.
 
 ## Pinned tool binaries
 
@@ -184,7 +186,10 @@ shell with mise's Go, or wrap it in a `genrule` that puts `@rules_go//go` first 
 `/usr/local/bin/<name>` on `gcr.io/distroless/static-debian13:nonroot` (pinned by digest in
 `MODULE.bazel`) as a linux/amd64 + linux/arm64 `oci_image_index`; `:<name>_push` is an
 `oci_push` (never run by tests). Build output: `bazel-bin/<pkg>/<name>/` is an OCI image layout
-(`oci-layout`, `index.json`, `blobs/sha256/…`).
+(`oci-layout`, `index.json`, `blobs/sha256/…`). Both architectures include `LICENSE.md` and
+`THIRD_PARTY_NOTICES.md` under `/usr/share/doc/cucina` (R-ARTIFACT). The rules_oci 2.3.0
+Windows launcher correction is in `third_party/oci/windows-launchers.patch`; it resolves source
+scripts relative to their generated batch launchers and shares one descriptor launcher per image.
 
 ## Remote execution configs
 
@@ -204,8 +209,9 @@ pinned to full commit SHAs. Jobs install Bazelisk and other tools with `jdx/mise
 `actions/cache` (the repo contents cache stays out of the saved cache). `--config=ci` sets
 `--lockfile_mode=error`: after changing `MODULE.bazel`, `go.mod` or `Cargo.lock`, run a build
 (or `bazel mod deps --lockfile_mode=update`, which records every extension) and commit
-`MODULE.bazel.lock`. Windows runs use `--output_user_root=C:/b` and long paths. All three
-OS lanes build and test `//...`, including the Windows CLI. The pinned LLVM/rules_rust
+`MODULE.bazel.lock`. Windows runs use `--output_user_root=C:/b` and long paths. `.gitattributes`
+keeps source text LF even with `core.autocrlf=true`, while preserving verbatim upstream licence
+files and the notices aggregate. All three OS lanes build and test `//...`, including the Windows CLI. The pinned LLVM/rules_rust
 compatibility patches are documented in [ADR 0107](../adr/0107-windows-native-toolchain-compatibility.md).
 
 Linux frees unused preinstalled SDKs before building. `.bazelrc` clears repository

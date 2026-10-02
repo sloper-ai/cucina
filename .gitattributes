@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Identical source bytes on every client; rustfmt and generated-code checks use LF.
+* text=auto eol=lf
+
+# Preserve verbatim upstream licence bytes (the generated aggregate contains CRLF).
+THIRD_PARTY_NOTICES.md -text
+cli/cucina-api/proto/LICENSE-* -text
+tools/notices/texts/** -text

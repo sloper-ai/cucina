@@ -12,6 +12,9 @@ cucina_envtest_data(
 cucina_go_test(
     name = "envtest_test",
     srcs = ["envtest_test.go"],
+    # Preserve the server's shutdown diagnostics when a hosted runner fails cleanup.
+    # Bazel only prints this captured output on failure; timeouts/assertions stay unchanged.
+    env = {"KUBEBUILDER_ATTACH_CONTROL_PLANE_OUTPUT": "true"},
     envtest = True,
     tier = "integration",
     deps = [
