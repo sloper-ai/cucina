@@ -63,6 +63,18 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
           df -h /
+      - name: short hostname for Kubernetes identity leases (macOS)
+        if: runner.os == 'macOS'
+        # The hosted VM name can exceed the 63-byte Kubernetes label limit.
+        # The pinned API server copies os.Hostname() into its identity Lease;
+        # rejected leases stall shutdown. Keep the full control plane and timeout.
+        run: |
+          if [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_OS:-}" != macOS ] || [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ]; then
+            printf '%s\n' 'Hostname setup requires a disposable GitHub-hosted macOS runner.' >&2
+            exit 2
+          fi
+          sudo /bin/hostname cucina-ci
+          test "$(hostname)" = cucina-ci
       - name: long paths (Windows)
         if: runner.os == 'Windows'
         run: git config --global core.longpaths true
