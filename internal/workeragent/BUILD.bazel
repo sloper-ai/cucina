@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "workeragent",
+    srcs = [
+        "activity.go",
+        "bootstrap.go",
+        "deadman.go",
+        "enroll.go",
+        "host.go",
+        "host_darwin.go",
+        "host_linux.go",
+        "host_other.go",
+        "host_windows.go",
+        "keys.go",
+        "machine.go",
+        "paths.go",
+        "placement.go",
+        "power.go",
+        "probe.go",
+        "render.go",
+        "selftest.go",
+        "state.go",
+        "storage.go",
+        "supervise.go",
+        "sysfs.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/workeragent",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/bbconfig",
+        "//internal/domain",
+        "//internal/ports",
+        "//internal/proto",
+        "//internal/workeragent/bootdata",
+        "//internal/workeragent/imds",
+        "@com_github_cenkalti_backoff_v7//:backoff",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@com_github_prometheus_client_model//go",
+        "@com_github_prometheus_common//expfmt",
+        "@com_github_prometheus_common//model",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//health/grpc_health_v1",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_sys//windows",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+cucina_go_test(
+    name = "workeragent_test",
+    srcs = [
+        "activity_test.go",
+        "deadman_test.go",
+        "disks_test.go",
+        "paths_test.go",
+        "placement_test.go",
+        "render_test.go",
+        "storage_test.go",
+        "supervise_test.go",
+    ],
+    tier = "unit",
+    deps = [
+        ":workeragent",
+        "//api/proto/cucina/v1:cucina",
+        "//internal/bbconfig",
+        "//internal/fakes",
+        "//internal/ports",
+        "//internal/workeragent/agenttest",
+        "//internal/workeragent/imds",
+        "@com_github_stretchr_testify//require",
+        "@net_pgregory_rapid//:rapid",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//types/known/durationpb",
+    ],
+)

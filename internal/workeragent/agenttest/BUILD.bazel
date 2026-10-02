@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "agenttest",
+    testonly = True,
+    srcs = ["agenttest.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/workeragent/agenttest",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/fakes",
+        "//internal/ports",
+        "//internal/workeragent",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//types/known/durationpb",
+    ],
+)

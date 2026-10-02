@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "bootdata",
+    srcs = ["bootdata.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/workeragent/bootdata",
+    visibility = ["//:__subpackages__"],
+)
+
+cucina_go_test(
+    name = "bootdata_test",
+    srcs = ["bootdata_test.go"],
+    tier = "unit",
+    deps = [
+        ":bootdata",
+        "@com_github_stretchr_testify//require",
+        "@net_pgregory_rapid//:rapid",
+    ],
+)

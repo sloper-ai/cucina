@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+cucina_go_test(
+    name = "integration_test",
+    srcs = ["bootstrap_test.go"],
+    tier = "integration",
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/workeragent",
+        "//internal/workeragent/agenttest",
+        "//internal/workeragent/bootdata",
+        "//internal/workeragent/hostos",
+        "//internal/workeragent/imds",
+        "//internal/workeragent/imds/imdsfake",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
