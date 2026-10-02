@@ -1,17 +1,11 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+
 # Generated CRD manifests (controller-gen), consumed by envtest and chart tests.
 exports_files(
     glob(["*.yaml"]),
     visibility = ["//visibility:public"],
 )
-
-filegroup(
-    name = "crds",
-    srcs = glob(["*.yaml"]),
-    visibility = ["//visibility:public"],
-)
-
-load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "crds",
