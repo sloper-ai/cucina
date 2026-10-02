@@ -4,8 +4,10 @@ package infra
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sloper-ai/cucina/test/e2e/remote"
 )
@@ -21,7 +23,7 @@ type ClientLogin struct {
 // LoginClient transfers the key and trust bundle, logs in using --key FILE,
 // and removes the temporary key even if login fails. The CA stays on the
 // client: the profile and Bazel's --tls_certificate reference that path.
-func LoginClient(ctx context.Context, h remote.Host, opts ClientLogin) error {
+func LoginClient(ctx context.Context, h remote.Host, opts ClientLogin) (retErr error) {
 	if opts.KeyFile == "" || opts.CAFile == "" {
 		return fmt.Errorf("client login needs key and CA file paths")
 	}
@@ -31,6 +33,25 @@ func LoginClient(ctx context.Context, h remote.Host, opts ClientLogin) error {
 	}
 	key := strings.TrimRight(h.WorkDir(), `/\`) + sep + "secrets" + sep + "e2e.key"
 	ca := strings.TrimRight(h.WorkDir(), `/\`) + sep + "secrets" + sep + "ca.pem"
+	// Cleanup is registered BEFORE either transfer: a CA/transport failure
+	// can occur before the remote login script has installed its own trap.
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+		script := "rm -f " + q(key) + " " + q(key+".part")
+		if h.OS() == remote.Windows {
+			q = func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+			script = "$ErrorActionPreference='Stop'; foreach ($p in @(" + q(key) + ", " + q(key+".part") + ")) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop }; if (Test-Path -LiteralPath $p) { throw 'private client key still present' } }"
+		}
+		r, err := h.Run(cleanup, script, remote.Opts{})
+		if err == nil {
+			err = r.Err()
+		}
+		if err != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("temporary client key cleanup: %w", err))
+		}
+	}()
 	if err := remote.PutPrivate(ctx, h, opts.KeyFile, key, opts.User); err != nil {
 		return err
 	}
@@ -44,7 +65,11 @@ func LoginClient(ctx context.Context, h remote.Host, opts ClientLogin) error {
 		call = "& "
 	}
 	cli := call + quote(opts.CLI)
-	login := fmt.Sprintf("%s login %s --key %s --ca-file %s --credential-store=file", cli, quote(opts.STS), quote(key), quote(ca))
+	caArg := ca
+	if h.OS() == remote.Windows {
+		caArg = strings.ReplaceAll(caArg, `\`, "/")
+	}
+	login := fmt.Sprintf("%s login %s --key %s --ca-file %s --credential-store=file", cli, quote(opts.STS), quote(key), quote(caArg))
 	var script string
 	if h.OS() == remote.Windows {
 		script = "$ErrorActionPreference='Stop'\ntry {\n" + login + "\nif ($LASTEXITCODE) { exit $LASTEXITCODE }\n"

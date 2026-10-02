@@ -95,12 +95,16 @@ config) test "$2" = set; case $3 in remote-executor) test "$4" = grpcs://192.0.2
 *) exit 92 ;;
 esac
 `), 0o755))
-	for _, exit := range []string{"0", "5"} {
+	for _, exit := range []string{"0", "5", "ca-transfer-failed"} {
 		t.Run(exit, func(t *testing.T) {
 			t.Setenv("LOGIN_EXIT", exit)
 			work := t.TempDir()
 			h := remote.NewLocal("local", work)
-			err := infra.LoginClient(context.Background(), h, infra.ClientLogin{CLI: cli, STS: "https://cucina.example.test:8443", KeyFile: key, CAFile: ca, RemoteExecution: "grpcs://192.0.2.9:443", Management: "192.0.2.9:8444"})
+			caFile := ca
+			if exit == "ca-transfer-failed" {
+				caFile = filepath.Join(root, "missing-ca")
+			}
+			err := infra.LoginClient(context.Background(), h, infra.ClientLogin{CLI: cli, STS: "https://cucina.example.test:8443", KeyFile: key, CAFile: caFile, RemoteExecution: "grpcs://192.0.2.9:443", Management: "192.0.2.9:8444"})
 			if exit == "0" {
 				require.NoError(t, err)
 			} else {
@@ -108,6 +112,9 @@ esac
 			}
 			_, err = os.Stat(filepath.Join(work, "secrets/e2e.key"))
 			require.True(t, os.IsNotExist(err))
+			if exit == "ca-transfer-failed" {
+				return
+			}
 			b, err := os.ReadFile(filepath.Join(work, "secrets/ca.pem"))
 			require.NoError(t, err)
 			require.Equal(t, "fixture-not-a-real-certificate", string(b))
