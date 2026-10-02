@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "ec2",
+    srcs = [
+        "api.go",
+        "bucket.go",
+        "errors.go",
+        "fastlaunch.go",
+        "image.go",
+        "inventory.go",
+        "launch.go",
+        "pricing.go",
+        "provider.go",
+    ],
+    embedsrcs = ["fallback_prices.json"],
+    importpath = "github.com/sloper-ai/cucina/internal/providers/ec2",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2//aws/ratelimit",
+        "@com_github_aws_aws_sdk_go_v2//aws/retry",
+        "@com_github_aws_aws_sdk_go_v2_service_ec2//:ec2",
+        "@com_github_aws_aws_sdk_go_v2_service_ec2//types",
+        "@com_github_aws_aws_sdk_go_v2_service_pricing//:pricing",
+        "@com_github_aws_aws_sdk_go_v2_service_pricing//types",
+        "@com_github_aws_smithy_go//:smithy-go",
+        "@com_github_aws_smithy_go//transport/http",
+        "@com_github_maypok86_otter_v2//:otter",
+    ],
+)
+
+cucina_go_test(
+    name = "ec2_test",
+    srcs = [
+        "bucket_test.go",
+        "conformance_test.go",
+        "fake_test.go",
+        "helpers_test.go",
+        "image_test.go",
+        "inventory_test.go",
+        "launch_test.go",
+        "pricing_test.go",
+    ],
+    embed = [":ec2"],
+    # The adapter against the in-memory SDK fake, incl. the porttest conformance suite.
+    tier = "integration",
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+        "//internal/ports/porttest",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_service_ec2//:ec2",
+        "@com_github_aws_aws_sdk_go_v2_service_ec2//types",
+        "@com_github_aws_aws_sdk_go_v2_service_pricing//:pricing",
+        "@com_github_aws_smithy_go//:smithy-go",
+        "@com_github_aws_smithy_go//transport/http",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real EC2 in us-west-1 (acceptance tier: manual, never remote). Needs AWS credentials, the
+# aws-e2e base outputs and CUCINA_EC2_ACCEPTANCE=1/CUCINA_RUN_ID/CUCINA_EXPIRES; see
+# docs/dev/ec2-provider.md.
+cucina_go_test(
+    # keep
+    name = "ec2_acceptance_test",
+    srcs = [
+        "acceptance_test.go",
+        "bucket_test.go",
+        "conformance_test.go",
+        "fake_test.go",
+        "helpers_test.go",
+        "image_test.go",
+        "inventory_test.go",
+        "launch_test.go",
+        "pricing_test.go",
+    ],
+    args = ["-test.run=TestAcceptance"],
+    embed = [":ec2"],
+    env_inherit = [
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "CUCINA_AWS_BASE_OUTPUTS",
+        "CUCINA_EC2_ACCEPTANCE",
+        "CUCINA_EXPIRES",
+        "CUCINA_RUN_ID",
+        "HOME",
+    ],
+    gotags = ["acceptance"],
+    tier = "acceptance",
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+        "//internal/ports/porttest",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_config//:config",
+        "@com_github_aws_aws_sdk_go_v2_service_ec2//:ec2",
+        "@com_github_aws_aws_sdk_go_v2_service_ec2//types",
+        "@com_github_aws_aws_sdk_go_v2_service_pricing//:pricing",
+        "@com_github_aws_smithy_go//:smithy-go",
+        "@com_github_aws_smithy_go//transport/http",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
