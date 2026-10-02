@@ -33,12 +33,15 @@ func RequestStart(h *Host, r StartRequest) {
 		i = len(h.VMs) - 1
 	}
 	vm := &h.VMs[i]
+	changed := vm.Intent != WantRunning || vm.Image != r.Image || vm.Generation != r.Generation
 	vm.Pool, vm.Node = r.Pool, r.Node
 	vm.Image, vm.Generation = r.Image, r.Generation
 	vm.CPU, vm.MemoryGiB, vm.DiskGiB, vm.MaxAge = r.CPU, r.MemoryGiB, r.DiskGiB, r.MaxAge
 	vm.Intent = WantRunning
 	vm.StopReason = ""
-	vm.RetryAt = time.Time{}
+	if changed {
+		vm.RetryAt = time.Time{}
+	}
 }
 
 // RequestStop sets intent stopped (StopVM). The VM keeps its disk.

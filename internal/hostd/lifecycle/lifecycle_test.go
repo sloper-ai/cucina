@@ -195,6 +195,43 @@ func TestReclone(t *testing.T) {
 	}
 }
 
+// Guards: real VZ startup failure regression — successful delete/clone recovery
+// must not reset launch backoff into an endless five/ten-second retry cycle.
+func TestStartupBackoffSurvivesReclone(t *testing.T) {
+	limits := lifecycle.DefaultLimits()
+	h := lifecycle.Host{Slots: 1}
+	request := lifecycle.StartRequest{Name: "a", Pool: "macos", Image: "image:1", Generation: "g1"}
+	lifecycle.RequestStart(&h, request)
+	now := t0
+	start := func() lifecycle.Action {
+		t.Helper()
+		for range 3 { // at most delete, clone, start
+			plan := lifecycle.Plan(h, limits, now)
+			require.Len(t, plan, 1)
+			lifecycle.Begin(&h, plan[0])
+			if plan[0].Kind == lifecycle.Start {
+				return plan[0]
+			}
+			lifecycle.Complete(&h, plan[0], nil, now)
+		}
+		t.Fatal("recovery did not produce a start")
+		return lifecycle.Action{}
+	}
+	for _, delay := range []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 5 * time.Minute, 5 * time.Minute} {
+		a := start()
+		lifecycle.Complete(&h, a, errors.New("hypervisor rejected startup"), now)
+		lifecycle.RequestStart(&h, request) // an unchanged desired state is not an operator retry
+		require.Empty(t, lifecycle.Plan(h, limits, now.Add(delay-time.Nanosecond)), "failed starts must keep their exponential delay across successful reclones")
+		now = now.Add(delay)
+	}
+	// Only a genuinely healthy start resets the failure streak.
+	a := start()
+	lifecycle.Complete(&h, a, nil, now)
+	lifecycle.Crashed(&h, "a", "later crash", now)
+	require.Empty(t, lifecycle.Plan(h, limits, now.Add(5*time.Second-time.Nanosecond)))
+	require.NotEmpty(t, lifecycle.Plan(h, limits, now.Add(5*time.Second)))
+}
+
 // TestDeadman guards R-POOL-7 for Mac VMs: idle 30 min, scheduler unreachable
 // 10 min and uptime 12 h stop a running VM, independent of the controller.
 func TestDeadman(t *testing.T) {

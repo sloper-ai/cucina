@@ -100,7 +100,8 @@ type VM struct {
 	LastActive       time.Time // last observed worker activity
 	LastUpstreamOK   time.Time // last time the VM's scheduler path worked
 	Busy             bool      // worker executing an action at the last probe
-	Failures         int       // consecutive start failures / crashes
+	Failures         int       // consecutive failures since the last healthy start (survives re-clone)
+	FailuresAtClone  int       // failure count at the last successful clone; health re-clone threshold is per clone
 	RetryAt          time.Time
 	LastError        string
 }
@@ -202,7 +203,7 @@ func (l Limits) NeedsReclone(vm VM, now time.Time) string {
 		return ReasonImageChanged
 	case now.Sub(vm.ClonedAt) >= l.maxAge(vm):
 		return ReasonMaxAge
-	case l.MaxFailures > 0 && vm.Failures >= l.MaxFailures:
+	case l.MaxFailures > 0 && vm.Failures-vm.FailuresAtClone >= l.MaxFailures:
 		return ReasonUnhealthy
 	}
 	return ""
@@ -363,9 +364,9 @@ func Complete(h *Host, a Action, err error, now time.Time) {
 		vm.Phase = Stopped
 		vm.ClonedImage, vm.ClonedGeneration, vm.ClonedAt = vm.Image, vm.Generation, now
 		vm.Reimage = false
-		vm.Failures = 0
-		vm.RetryAt = time.Time{}
-		vm.LastError = ""
+		// A fresh disk is not proof that the hypervisor can start it. Keep
+		// the retry streak/deadline, but reset the per-clone health window.
+		vm.FailuresAtClone = vm.Failures
 	case Start:
 		if err != nil {
 			// The VM manager stops a half-started VM before reporting the failure.
@@ -377,7 +378,8 @@ func Complete(h *Host, a Action, err error, now time.Time) {
 		vm.Phase = Running
 		vm.StartedAt, vm.LastActive, vm.LastUpstreamOK = now, now, now
 		vm.Busy = false
-		vm.Failures = 0
+		vm.Failures, vm.FailuresAtClone = 0, 0
+		vm.RetryAt = time.Time{}
 		vm.LastError = ""
 	case Stop:
 		if err != nil {
@@ -398,8 +400,6 @@ func Complete(h *Host, a Action, err error, now time.Time) {
 		}
 		vm.Phase = Absent
 		vm.ClonedImage, vm.ClonedGeneration, vm.ClonedAt = "", "", time.Time{}
-		vm.Failures = 0
-		vm.RetryAt = time.Time{}
 	}
 }
 

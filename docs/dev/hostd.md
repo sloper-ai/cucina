@@ -287,7 +287,12 @@ stateDiagram-v2
 is planned only while `active + external < min(slots, 2)`. StartVM is refused (`vm-limit`) when the host already wants
 `slots` VMs running, and while cordoned (`cordoned`). VM size: first non-zero of the StartVM request, the controller's
 `HostSettings`, the preference, or `(cores − 2)/slots` vCPUs and `(RAM − 8 GiB)/slots` memory; memory never exceeds the
-derived share.
+derived share. Consecutive startup failures back off 5, 10, 20, 40, 80, 160 seconds and then five minutes.
+Successful delete/clone recovery does not prove a healthy start and therefore does not reset that streak; the
+per-clone failure threshold still triggers reimaging after two failures. Reasserting unchanged StartVM intent does
+not bypass the retry deadline. The streak, per-clone baseline and retry deadline are journaled so a hostd restart
+cannot bypass them. Only a successful worker start resets the streak. This bounds persistent hypervisor
+failure retries; it does not diagnose or repair a Virtualization.framework device-initialization failure.
 
 ### 4.2 Controller link
 

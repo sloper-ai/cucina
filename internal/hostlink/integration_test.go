@@ -332,11 +332,13 @@ func TestHostdRestartAdoptsVMs(t *testing.T) {
 		e := newEnv(t, ef)
 		e.ctrl.Approve(t, serial)
 		e.start(t)
+		defer e.powerOff(t)
 		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
 		require.NoError(t, e.ctrl.Host().StartVM(context.Background(), serial, startReq("vm-1")))
 		advanceUntil(t, "vm-1 registered", 5*time.Minute, func() bool { return e.vmState(t, "vm-1") == domain.VMRegistered })
 		pid := e.tart.VM("cucina-vm-vm-1").RunArgs
 		e.stop(t)
+		synctest.Wait() // observe the old stream's EOF before awaiting the new session
 
 		e.start(t)
 		advanceUntil(t, "online after restart", 2*time.Minute, e.online(t))
@@ -346,7 +348,32 @@ func TestHostdRestartAdoptsVMs(t *testing.T) {
 		ex, calls := e.ctrl.Counter.Exchanges()
 		require.Equal(t, 1, ex)
 		require.Equal(t, 1, calls, "the site token is never re-sent after enrollment")
-		e.powerOff(t)
+
+		// A failed launch must also survive hostd's crash-only restart: a
+		// daemon restart is not a successful VM launch and must not hot-loop.
+		for range 3 {
+			e.tart.FailNext("run", 1, "hypervisor start failure")
+		}
+		require.NoError(t, e.ctrl.Host().StartVM(t.Context(), serial, startReq("vm-2")))
+		var retryAt time.Time
+		advanceUntil(t, "third failed launch", time.Minute, func() bool {
+			for _, vm := range e.agent.VMs().Snapshot().VMs {
+				if vm.Name == "vm-2" && vm.Failures == 3 {
+					retryAt = vm.RetryAt
+					return true
+				}
+			}
+			return false
+		})
+		e.stop(t)
+		synctest.Wait()
+		e.start(t)
+		advanceUntil(t, "online with persisted retry", 10*time.Second, e.online(t))
+		require.True(t, time.Now().Before(retryAt))
+		<-time.After(time.Until(retryAt) - time.Nanosecond)
+		synctest.Wait()
+		require.Equal(t, "stopped", e.tart.VM("cucina-vm-vm-2").State, "restart must not bypass the pending launch backoff")
+		advanceUntil(t, "retry succeeds after its original deadline", time.Minute, func() bool { return e.vmState(t, "vm-2") == domain.VMRegistered })
 	})
 }
 

@@ -165,6 +165,10 @@ type journalVM struct {
 	ClonedGeneration string           `json:"clonedGeneration,omitempty"`
 	ClonedAt         time.Time        `json:"clonedAt,omitempty"`
 	MetricsPort      uint32           `json:"metricsPort,omitempty"`
+	Failures         int              `json:"failures,omitempty"`
+	FailuresAtClone  int              `json:"failuresAtClone,omitempty"`
+	RetryAt          time.Time        `json:"retryAt,omitempty"`
+	LastError        string           `json:"lastError,omitempty"`
 }
 
 type journal struct {
@@ -201,6 +205,7 @@ func (m *Manager) Load() error {
 			CPU: v.CPU, MemoryGiB: v.MemoryGiB, DiskGiB: v.DiskGiB, MaxAge: v.MaxAge, Reimage: v.Reimage,
 			StopReason: v.StopReason, ClonedImage: v.ClonedImage, ClonedGeneration: v.ClonedGeneration,
 			ClonedAt: v.ClonedAt, Phase: lifecycle.Absent,
+			Failures: v.Failures, FailuresAtClone: v.FailuresAtClone, RetryAt: v.RetryAt, LastError: v.LastError,
 		})
 	}
 	return nil
@@ -215,7 +220,8 @@ func (m *Manager) saveLocked() {
 		j.VMs = append(j.VMs, journalVM{Name: v.Name, Pool: v.Pool, Node: v.Node, Intent: v.Intent, Image: v.Image,
 			Generation: v.Generation, CPU: v.CPU, MemoryGiB: v.MemoryGiB, DiskGiB: v.DiskGiB, MaxAge: v.MaxAge,
 			Reimage: v.Reimage, StopReason: v.StopReason, ClonedImage: v.ClonedImage,
-			ClonedGeneration: v.ClonedGeneration, ClonedAt: v.ClonedAt, MetricsPort: m.ports[v.Name]})
+			ClonedGeneration: v.ClonedGeneration, ClonedAt: v.ClonedAt, MetricsPort: m.ports[v.Name],
+			Failures: v.Failures, FailuresAtClone: v.FailuresAtClone, RetryAt: v.RetryAt, LastError: v.LastError})
 	}
 	b, _ := json.MarshalIndent(j, "", "  ")
 	if err := m.o.FS.WriteFileAtomic(m.o.JournalPath, b, 0o600); err != nil {
