@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Generates the checked-in Go protobuf/gRPC code next to the .proto files.
+# Bazel (cucina_proto_go + write_source_files) reproduces the same output and
+# fails a freshness test on drift; this file is the IDE/`go build` path.
+version: v2
+inputs:
+  - directory: api/proto
+plugins:
+  - local: ["go", "run", "google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12"]
+    out: api/proto
+    opt: paths=source_relative
+  - local: ["go", "run", "google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2"]
+    out: api/proto
+    opt: paths=source_relative
