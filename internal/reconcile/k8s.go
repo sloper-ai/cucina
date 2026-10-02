@@ -10,6 +10,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
@@ -198,4 +199,47 @@ func SetFloorOverride(ctx context.Context, c client.Client, ns, pool string, f F
 		return err
 	}
 	return patchAnnotation(ctx, c, ns, pool, AnnFloorOverride, string(b))
+}
+
+// ConfigMapUsage stores the cost usage in a ConfigMap (entry usage.json) so a
+// new leader resumes month-to-date cost figures (R-OBS-5).
+type ConfigMapUsage struct {
+	Client    client.Client
+	Reader    client.Reader // uncached
+	Namespace string
+	Name      string
+}
+
+const usageKey = "usage.json"
+
+// LoadUsage implements UsageStore.
+func (s ConfigMapUsage) LoadUsage(ctx context.Context) ([]byte, error) {
+	var cm corev1.ConfigMap
+	err := s.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Name}, &cm)
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return []byte(cm.Data[usageKey]), nil
+}
+
+// SaveUsage implements UsageStore.
+func (s ConfigMapUsage) SaveUsage(ctx context.Context, b []byte) error {
+	var cm corev1.ConfigMap
+	err := s.Reader.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: s.Name}, &cm)
+	if apierrors.IsNotFound(err) {
+		cm = corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: s.Namespace, Name: s.Name,
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "cucina-controller"}}, Data: map[string]string{usageKey: string(b)}}
+		return s.Client.Create(ctx, &cm)
+	}
+	if err != nil {
+		return err
+	}
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data[usageKey] = string(b)
+	return s.Client.Update(ctx, &cm)
 }

@@ -77,7 +77,16 @@ type Fleet struct {
 	loops  map[domain.PoolName]*poolLoop
 	runCtx context.Context // set while Start runs
 
-	sweepMu sync.Mutex
+	sweepMu     sync.Mutex
+	lastOrphans int
+	lastSweep   time.Time
+}
+
+// Orphans returns the orphan count of the last sweep and when it ran.
+func (f *Fleet) Orphans() (int, time.Time) {
+	f.sweepMu.Lock()
+	defer f.sweepMu.Unlock()
+	return f.lastOrphans, f.lastSweep
 }
 
 // NewFleet returns an idle fleet; pools are added by the WorkerPool reconciler.
@@ -235,6 +244,7 @@ func (f *Fleet) SweepOrphans(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	counts := map[ports.OrphanKind]int{ports.OrphanVolume: 0, ports.OrphanENI: 0}
+	f.lastOrphans, f.lastSweep = len(orphans), f.o.Clock.Now()
 	var old []ports.Orphan
 	for _, o := range orphans {
 		counts[o.Kind]++

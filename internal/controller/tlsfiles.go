@@ -160,8 +160,10 @@ type TLSConfigs struct {
 }
 
 // NewTLSConfigs loads the configured files once (failing fast on errors) and
-// returns configurations that reload them on change.
-func NewTLSConfigs(c *config.Controller) (*TLSConfigs, error) {
+// returns configurations that reload them on change. The scheduler client
+// identity is loaded only in ModeController: the STS never calls the
+// scheduler, and its Pods do not mount the controller's client certificate.
+func NewTLSConfigs(c *config.Controller, mode Mode) (*TLSConfigs, error) {
 	out := &TLSConfigs{}
 	var ca *caBundle
 	if c.TLS.CAFile != "" {
@@ -195,7 +197,7 @@ func NewTLSConfigs(c *config.Controller) (*TLSConfigs, error) {
 			}
 		}
 	}
-	if c.Scheduler.ClientCertFile != "" && ca != nil {
+	if mode == ModeController && c.Scheduler.ClientCertFile != "" && ca != nil {
 		kp, err := newKeyPair(c.Scheduler.ClientCertFile, c.Scheduler.ClientKeyFile)
 		if err != nil {
 			return nil, err

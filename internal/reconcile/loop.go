@@ -41,7 +41,9 @@ type poolLoop struct {
 	attempted map[string]time.Time
 	// pendingTart are VMs started earlier in the current decision.
 	pendingTart []string
-	last        struct {
+	// idleEmptySince: idle VMs while every pool queue is empty, since when.
+	idleEmptySince time.Time
+	last           struct {
 		scale time.Time
 		err   string
 	}
@@ -656,15 +658,21 @@ func (l *poolLoop) publish(now time.Time, rt *PoolRuntime, d scaling.Decision, o
 			counts[metrics.StateFailed]++
 		}
 	}
+	idleWithEmpty := 0
+	if queuesEmpty(obs) {
+		idleWithEmpty = counts[metrics.StateIdle]
+	}
+	switch {
+	case idleWithEmpty == 0:
+		l.idleEmptySince = time.Time{}
+	case l.idleEmptySince.IsZero():
+		l.idleEmptySince = now
+	}
 	if m := l.f.o.Metrics; m != nil {
 		p := string(l.name)
 		m.PoolDesired.WithLabelValues(p).Set(float64(d.Desired))
 		m.PoolMax.WithLabelValues(p).Set(float64(rt.Spec.Max))
 		m.SetPoolVMs(p, counts)
-		idleWithEmpty := 0
-		if queuesEmpty(obs) {
-			idleWithEmpty = counts[metrics.StateIdle]
-		}
 		m.IdleInstancesWithEmptyQueue.WithLabelValues(p).Set(float64(idleWithEmpty))
 	}
 	snap := Snapshot{
@@ -681,6 +689,7 @@ func (l *poolLoop) publish(now time.Time, rt *PoolRuntime, d scaling.Decision, o
 		QueuesKnown:          obs.QueuesKnown,
 		LastScale:            l.last.scale,
 		LastError:            l.last.err,
+		IdleEmptySince:       l.idleEmptySince,
 		InstanceSecondsToday: l.acct.seconds,
 		Generation:           rt.Spec.Generation,
 	}

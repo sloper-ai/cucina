@@ -103,6 +103,9 @@ type Snapshot struct {
 	QueuesKnown bool
 	// LastScale is when the loop last launched, terminated or stopped a VM.
 	LastScale time.Time
+	// IdleEmptySince is when registered VMs started idling while every queue
+	// of the pool was empty (zero when none does): the cost-leak signal.
+	IdleEmptySince time.Time
 	// LastError summarizes the last failed executor call ("" when healthy).
 	LastError            string
 	InstanceSecondsToday float64

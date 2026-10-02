@@ -137,6 +137,42 @@ func TestSTSExchange(t *testing.T) {
 	require.ErrorContains(t, err, "invalid_grant")
 }
 
+// Guards in-cluster canaries (`helm test`, the controller's loop; found by the
+// kind smoke test): discovery advertises the public token_endpoint/jwks_uri,
+// which Pods cannot always resolve or reach (no DNS on kind, NLB hairpin), so
+// URLs on the issuer's origin are rebased onto the STS URL the canary was
+// given; the token is still verified against the advertised issuer, and URLs
+// on other origins are followed as advertised.
+func TestSTSExchangeThroughInClusterURL(t *testing.T) {
+	s := newSigner(t, "k1")
+	var jwksHits int
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		jwksHits++
+		_ = json.NewEncoder(w).Encode(s.jwks())
+	}))
+	defer other.Close()
+	jwksURI := issuer + "/jwks.json"
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/.well-known/cucina-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"issuer": issuer, "token_endpoint": issuer + "/token", "jwks_uri": jwksURI})
+	})
+	mux.HandleFunc("/jwks.json", func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(s.jwks()) })
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": s.sign(t, claims(time.Now(), nil)), "token_type": "Bearer", "expires_in": 900})
+	})
+	tok, err := (&STS{URL: srv.URL + "/", Key: "cuc_sk_1_secret"}).Token(context.Background())
+	require.NoError(t, err, "the advertised public URLs must be rebased onto the in-cluster STS URL")
+	require.Equal(t, "sa:canary", tok.Subject)
+	require.Zero(t, jwksHits)
+
+	jwksURI = other.URL + "/keys" // another origin: followed as advertised
+	_, err = (&STS{URL: srv.URL, Key: "cuc_sk_1_secret"}).Token(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, jwksHits)
+}
+
 func bootStorage(t *testing.T, scheduler string) string {
 	addr := bbtest.FreeAddr(t)
 	bbtest.BootStorage(t, bbtest.StorageConfig(bbtest.StorageOptions{ClientListen: addr, SchedulerAddress: scheduler, Compression: true}),

@@ -1,15 +1,20 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("//bazel:oci.bzl", "cucina_go_image")
+load("//bazel:tiers.bzl", "cucina_go_test")
 
 go_library(
     name = "cucina-controller_lib",
-    srcs = ["main.go"],
+    srcs = [
+        "crds.go",
+        "main.go",
+    ],
     importpath = "github.com/sloper-ai/cucina/cmd/cucina-controller",
     visibility = ["//visibility:private"],
     deps = [
+        "//api/crds",
+        "//internal/canary",
         "//internal/config",
         "//internal/controller",
-        "//internal/controller/canary",
         "//internal/proto",
         "@com_github_spf13_cobra//:cobra",
         "@io_k8s_client_go//kubernetes",
@@ -32,4 +37,15 @@ cucina_go_image(
     binary = ":cucina-controller",
     repository = "ghcr.io/sloper-ai/cucina-controller",
     visibility = ["//visibility:public"],
+)
+
+cucina_go_test(
+    name = "cucina-controller_test",
+    srcs = ["main_test.go"],
+    embed = [":cucina-controller_lib"],
+    tier = "unit",
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )

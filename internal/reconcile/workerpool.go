@@ -50,6 +50,10 @@ type WorkerPoolReconciler struct {
 	Log     *slog.Logger
 	// FastLaunch manages EC2 Fast Launch on Windows pools (nil disables it).
 	FastLaunch *FastLaunchManager
+	// Costs supplies status.estimatedCostTodayUSD (nil without cost accounting).
+	Costs interface {
+		TodayUSD(pool domain.PoolName) (float64, bool)
+	}
 
 	mu   sync.Mutex
 	last map[domain.PoolName]*PoolRuntime
@@ -112,6 +116,11 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	snap, haveSnap := r.Fleet.Snapshot(name)
 	now := r.Clock.Now()
 	status := PoolStatus(&wp, rt, resolveErr, snap, haveSnap, now)
+	if r.Costs != nil {
+		if v, ok := r.Costs.TodayUSD(name); ok {
+			status.EstimatedCostTodayUSD = fmt.Sprintf("%.2f", v)
+		}
+	}
 	if !equality.Semantic.DeepEqual(status, wp.Status) {
 		before := wp.DeepCopy()
 		wp.Status = status

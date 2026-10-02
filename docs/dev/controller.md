@@ -15,7 +15,7 @@ version). The autoscaler policy itself is `internal/scaling` (see [scaling.md](s
 | `wait-for --file P --tcp H:P [--timeout 5m]` | init containers | Waits until files exist and addresses accept TCP; exit 1 with the pending targets on timeout. |
 | `bootstrap --config F [--certs C]` | Helm pre-install/pre-upgrade hook | Idempotent, never overwrites: CA Secret, server certificate Secrets (from `--certs`), signing keys + JWKS/deny-list ConfigMaps, break-glass key. Prints nothing secret. |
 | `uninstall-prep [--config F] [--timeout 20m]` | Helm pre-delete hook | Deletes every WorkerPool and MacHost, waits for their finalizers (VMs drained and terminated/stopped), then (with `aws` configured) checks that no instance of the cluster is pending/running/stopped. Exit 1 otherwise (R-OPS-3). |
-| `canary cache --sts-url U --endpoint grpcs://H:P --key-file K [--ca-file C]` | `helm test`, canary CronJob | STS token exchange with a service-account key, GetCapabilities, CAS write/read, AC write/read; JSON report; starts no workers (R-TEST-7). `canary exec` is reserved for the e2e harness. |
+| `canary cache\|exec [flags]` | `helm test`, canary CronJob, e2e | `internal/canary.Command()` (agent e2e): the cache canary (STS token exchange + JWKS check + AC/CAS round trip, starts no workers) or the execution canary (one uncached action on a pool). Flags default from `CUCINA_CANARY_*`; `--report-to` POSTs the result to the controller's `/canary/results`. |
 | `keys rotate` / `keys compromise --kid K\|*` | operators (`kubectl exec` into the controller Pod) | Publish a successor signing key (the leader promotes it once every frontend and the scheduler accept a probe token signed with it), or remove a key from the JWKS at once, activate a fresh key and rolling-restart frontends and scheduler (R-AUTH-9, T10e). |
 | `version` | humans, CI | JSON: version, commit, Go, protocol version, compiled-in components. |
 
@@ -57,10 +57,20 @@ compiles. Hooks:
 | `components_hostlink.go` | `internal/hostlink` (hostd) | controller | HostService (mTLS) and the `ports.HostFleet`; admission from MacHost objects; Welcome with endpoints, slots, desired images, message size |
 | `components_mgmt.go` | `internal/mgmt` (mgmt) | controller | ManagementService with the controller-side views (pools, history, workers, hosts, floors, cordons) |
 
-Not wired yet (reported): the management API's alerts, queue-timing and SSM worker-log (`Shell`) sources (their RPCs
-answer FAILED_PRECONDITION "not configured"). Wired: cost (`reconcile.CostModel`), images (current image per pool and
-Fast Launch state), components (Deployment/StatefulSet readiness by `app.kubernetes.io/component`), the controller log
-ring (`LogTee` → `mgmt.NewLogRing`) and the support sources (TrustPolicies, metrics text).
+Management API sources wired by the controller: pools/history/workers (Fleet), hosts, floor/pause/cordon/reimage/
+diagnostics, cost (`reconcile.CostModel`), images (current image per pool and Fast Launch state), components
+(Deployment/StatefulSet readiness by `app.kubernetes.io/component`), queue timing (`reconcile.QueueTimer`: oldest queued
+age and queue-time p95 per queue, also `cucina_queue_oldest_seconds`), alerts (`controller.DeriveAlerts`: queue not
+declared, no capacity, image missing, startup failures, scheduler unreachable, host offline, orphans, idle VMs with empty
+queues beyond the idle timeout, invariant violations, failing canary), EC2 worker logs (`controller.SSMShell`: SSM Run
+Command, only on running workers that a tag-filtered Describe shows as this cluster's), the controller log ring
+(`LogTee` → `mgmt.NewLogRing`) and the support sources (TrustPolicies, metrics text).
+
+Cache canary (R-TEST-7): the leader runs `internal/canary` every 5 min (±10 %) in-process with the mounted canary key
+(`CUCINA_CANARY_KEY_FILE`, default `/var/run/secrets/cucina/canary/key`) or else the break-glass key, against
+`CUCINA_CANARY_ENDPOINT`/`CUCINA_CANARY_STS_URL` (default: the configured public endpoints) and exports
+`cucina_canary_*`; one-shot runs POST to `/canary/results` on the metrics listener. `CUCINA_CANARY_DISABLE=true` turns
+the loop off.
 
 ## Replicas and leader routing
 
@@ -111,7 +121,14 @@ every EC2 launch they observe (type, volumes, public IPv4, start/end) and each p
 (leader-only, every minute, `observability.costEnabled`) prices them with `internal/cost` (region rates, on-demand
 prices from `Compute.InstancePrices`, 60 s minimum per launch) into `cucina_cost_usd_total{pool,category}` and
 `cucina_standing_cost_usd_per_month{category}`, and backs `GetCost`. The usage lives on the leader: after a leader change
-month-to-date figures restart from the instances still visible (a lower bound). HTTP SD (`/sd/workers`) returns
+month-to-date figures restart from the stored usage (below).
+
+Cost details: launch volumes are the pool's root volume (the AMI size when unset) and data volume for the instance's
+lifetime; public IPv4 for EC2 pools with `associatePublicIP`; the current and previous AMI of each pool (rollback,
+R-OPS-2) as standing snapshot storage; EC2 Fast Launch pre-provisioned snapshots (standing, from the Fast Launch
+manager). The leader persists the usage every minute in the ConfigMap `<release>-cost-usage` (`usage.json`) and a new
+leader resumes from it; `status.estimatedCostTodayUSD` shows each pool's cost since 00:00 UTC. Orphaned volumes are
+counted (`cucina_orphans`) but not priced (their size is unknown to the sweep). HTTP SD (`/sd/workers`) returns
 `{targets: ["<private-ip>:<worker.metricsPort>"], labels: {pool, node, generation, instance_type}}` per running EC2
 worker, from the leader's observations or (other replicas) a 30 s cached tag-filtered Describe.
 

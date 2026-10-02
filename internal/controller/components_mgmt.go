@@ -76,6 +76,13 @@ func newMgmt(ctx context.Context, d *Deps) (any, error) {
 	if cm, ok := Shared[*reconcile.CostModel](d, SharedCost); ok {
 		deps.Cost = costSource{m: cm, f: fleet}
 	}
+	if sh, ok := Shared[*SSMShell](d, SharedShell); ok {
+		deps.Shell = sh
+	}
+	if qt, ok := Shared[*reconcile.QueueTimer](d, SharedQueues); ok {
+		deps.QueueStats = queueStats{qt}
+	}
+	deps.Alerts = &alertSource{d: d, fleet: fleet}
 	ring := mgmt.NewLogRing(1 << 20)
 	LogTee.Set(ring)
 	deps.LogTail = ring
@@ -91,6 +98,20 @@ func newMgmt(ctx context.Context, d *Deps) (any, error) {
 		DefaultEnrollTokenTTL: cfg.Hosts.DefaultTokenTTL.Duration,
 		Logger:                d.Log.With("component", "mgmt"),
 	})
+}
+
+// SharedQueues is the key of the queue timer (reconcile.QueueTimer).
+const SharedQueues = "reconcile.queues"
+
+// queueStats adapts the queue timer to mgmt.QueueStats.
+type queueStats struct{ t *reconcile.QueueTimer }
+
+func (q queueStats) QueueStats(context.Context) (map[domain.QueueKey]mgmt.QueueStat, error) {
+	out := map[domain.QueueKey]mgmt.QueueStat{}
+	for k, v := range q.t.Stats() {
+		out[k] = mgmt.QueueStat{OldestQueuedAge: v.OldestQueuedAge, QueueTimeP95: v.QueueTimeP95}
+	}
+	return out, nil
 }
 
 // costSource prices the leader's recorded usage with the current price table.

@@ -52,6 +52,15 @@ type harness struct {
 	violations []invariants.Violation
 }
 
+// memUsage is an in-memory reconcile.UsageStore.
+type memUsage struct{ b []byte }
+
+func (m *memUsage) LoadUsage(context.Context) ([]byte, error) { return m.b, nil }
+func (m *memUsage) SaveUsage(_ context.Context, b []byte) error {
+	m.b = append([]byte(nil), b...)
+	return nil
+}
+
 type memLedgers struct {
 	mu sync.Mutex
 	m  map[domain.PoolName]scaling.Ledger
@@ -104,7 +113,7 @@ func newHarness(t *testing.T, seed uint64, kube ...kubeOpt) *harness {
 	require.NoError(t, err)
 	h.metrics, err = metrics.New(h.reg)
 	require.NoError(t, err)
-	h.compute.AddImage(ports.Image{ID: testAMI, Name: "cucina-linux", Arch: "x86_64", Version: "v1", Platform: "linux"})
+	h.compute.AddImage(ports.Image{ID: testAMI, Name: "cucina-linux", Arch: "x86_64", Version: "v1", Platform: "linux", SizeGiB: 8})
 	h.compute.OnReady(func(in ports.Instance) {
 		h.mu.Lock()
 		th := h.threads[in.Pool]

@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/sloper-ai/cucina/api/v1alpha1"
+	"github.com/sloper-ai/cucina/internal/domain"
 	"github.com/sloper-ai/cucina/internal/ports"
 )
 
@@ -37,6 +38,9 @@ type FastLaunchManager struct {
 	Client  client.Client
 	Clock   ports.Clock
 	Log     *slog.Logger
+	// Record receives the pre-provisioned snapshot count of each image the
+	// manager looked at (0 once disabled): standing cost (R-OBS-5).
+	Record func(pool domain.PoolName, image string, snapshots, sizeGiB int)
 
 	mu    sync.Mutex
 	state map[string]flState // by image ID
@@ -65,6 +69,9 @@ func (m *FastLaunchManager) Sync(ctx context.Context, wp *v1alpha1.WorkerPool, r
 	var errs []error
 	if want != "" {
 		st, err := m.describe(ctx, want)
+		if err == nil && m.Record != nil {
+			m.Record(domain.PoolName(wp.Name), want, st.Snapshots, rt.ImageSizeGiB)
+		}
 		switch {
 		case err != nil:
 			errs = append(errs, err)
@@ -103,6 +110,9 @@ func (m *FastLaunchManager) Sync(ctx context.Context, wp *v1alpha1.WorkerPool, r
 			keep, done = append(keep, img), false
 		case st.State == "disabled" || st.State == "":
 			m.Log.Info("EC2 Fast Launch disabled", "pool", wp.Name, "image", img)
+			if m.Record != nil {
+				m.Record(domain.PoolName(wp.Name), img, 0, 0)
+			}
 		case st.State == "disabling":
 			keep, done = append(keep, img), false
 		default:

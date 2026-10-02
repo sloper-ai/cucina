@@ -134,6 +134,7 @@ func (s *STS) Token(ctx context.Context) (Token, error) {
 	if err != nil {
 		return Token{}, fmt.Errorf("discovery: %w", err)
 	}
+	d.TokenEndpoint, d.JWKSURI = s.rebase(d.TokenEndpoint, d.Issuer), s.rebase(d.JWKSURI, d.Issuer)
 	key, err := s.key()
 	if err != nil {
 		return Token{}, err
@@ -173,6 +174,31 @@ func (s *STS) Token(ctx context.Context) (Token, error) {
 		return Token{}, fmt.Errorf("jwks: %w", err)
 	}
 	return Verify(tr.AccessToken, jwks, d.Issuer, s.now())
+}
+
+// rebase points an advertised URL on the issuer's origin at the STS URL the
+// canary was given (scheme and host; the path stays). Discovery advertises the
+// public names, which in-cluster canaries cannot always resolve or reach (no
+// DNS for them, load-balancer hairpin); the token is still verified against
+// the advertised issuer. URLs on other origins are returned unchanged.
+func (s *STS) rebase(advertised, issuer string) string {
+	a, errA := url.Parse(advertised)
+	i, errI := url.Parse(issuer)
+	b, errB := url.Parse(strings.TrimSuffix(s.URL, "/"))
+	if errA != nil || errI != nil || errB != nil || b.Host == "" || origin(a) != origin(i) {
+		return advertised
+	}
+	a.Scheme, a.Host = b.Scheme, b.Host
+	return a.String()
+}
+
+// origin is scheme://host:port with the scheme's default port made explicit.
+func origin(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[strings.ToLower(u.Scheme)]
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Hostname()) + ":" + port
 }
 
 // cucinaClaims is the JWT payload of docs/contracts.md §5.1.

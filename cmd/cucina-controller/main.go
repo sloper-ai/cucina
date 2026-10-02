@@ -20,9 +20,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/sloper-ai/cucina/internal/canary"
 	"github.com/sloper-ai/cucina/internal/config"
 	"github.com/sloper-ai/cucina/internal/controller"
-	"github.com/sloper-ai/cucina/internal/controller/canary"
 	cucinaproto "github.com/sloper-ai/cucina/internal/proto"
 )
 
@@ -30,6 +30,10 @@ const defaultConfig = "/etc/cucina/controller.json"
 
 func main() {
 	if err := newRoot().Execute(); err != nil {
+		var ce *canary.ExitError
+		if errors.As(err, &ce) {
+			os.Exit(ce.Code) // the canary already printed its report (0 ok, 1 probe failed, 2 usage)
+		}
 		fmt.Fprintln(os.Stderr, "cucina-controller:", err)
 		os.Exit(1)
 	}
@@ -44,7 +48,7 @@ func newRoot() *cobra.Command {
 	}
 	root.AddCommand(runCmd(controller.ModeController, "controller", "Run the manager, reconcilers, autoscaler and every server (leader election)"))
 	root.AddCommand(runCmd(controller.ModeSTS, "sts", "Run only the STS HTTPS server (stateless, leaderless Deployment)"))
-	root.AddCommand(waitForCmd(), versionCmd(), bootstrapCmd(), uninstallPrepCmd(), canaryCmd(), keysCmd())
+	root.AddCommand(waitForCmd(), versionCmd(), bootstrapCmd(), uninstallPrepCmd(), canary.Command(), keysCmd(), crdsCmd())
 	return root
 }
 
@@ -242,45 +246,5 @@ func keysCmd() *cobra.Command {
 	compromise.Flags().StringVar(&reason, "reason", "compromised", "reason recorded with the restart")
 	c.PersistentFlags().StringVar(&cfgPath, "config", cfgPath, "controller configuration")
 	c.AddCommand(rotate, compromise)
-	return c
-}
-
-func canaryCmd() *cobra.Command {
-	c := &cobra.Command{Use: "canary", Short: "Synthetic canaries (helm test, CronJob)"}
-	var o canary.Options
-	timeout := time.Minute
-	cache := &cobra.Command{
-		Use:   "cache",
-		Short: "STS token exchange, GetCapabilities, CAS write/read and AC write/read through the client endpoint (starts no workers)",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if o.STSURL == "" || o.Endpoint == "" || o.KeyFile == "" {
-				return errors.New("canary cache needs --sts-url, --endpoint and --key-file")
-			}
-			ctx, cancel := context.WithTimeout(ctrl.SetupSignalHandler(), timeout)
-			defer cancel()
-			rep, err := canary.RunCache(ctx, o)
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			_ = enc.Encode(rep)
-			return err
-		},
-	}
-	f := cache.Flags()
-	f.StringVar(&o.STSURL, "sts-url", "", "STS base URL (https://…)")
-	f.StringVar(&o.Endpoint, "endpoint", "", "client endpoint (grpcs://host:port)")
-	f.StringVar(&o.ServerName, "server-name", "", "TLS server name override")
-	f.StringVar(&o.InstanceName, "instance", "main", "Buildbarn instance name")
-	f.StringVar(&o.CAFile, "ca-file", "", "CA bundle for the STS and the endpoint (default: system roots)")
-	f.StringVar(&o.KeyFile, "key-file", "", "file holding the service-account key (never printed)")
-	f.DurationVar(&timeout, "timeout", timeout, "overall timeout")
-	exec := &cobra.Command{
-		Use:   "exec",
-		Short: "Run a tiny uncached action (scale from zero); not implemented yet",
-		RunE: func(*cobra.Command, []string) error {
-			return errors.New("canary exec is not implemented yet (owned by the e2e harness)")
-		},
-	}
-	c.AddCommand(cache, exec)
 	return c
 }

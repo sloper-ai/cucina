@@ -6,6 +6,7 @@ import (
 	"context"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/sloper-ai/cucina/internal/ports"
 	"github.com/sloper-ai/cucina/internal/providers/ec2"
@@ -30,6 +31,15 @@ func init() {
 		if d.Metrics != nil {
 			opts.OnAPIError = func(op, code string) { d.Metrics.EC2APIErrors.WithLabelValues(op, code).Inc() }
 		}
-		return ec2.New(cfg, opts)
+		p, err := ec2.New(cfg, opts)
+		if err != nil {
+			return nil, err
+		}
+		// Worker logs for the management API through SSM Run Command.
+		d.Share(SharedShell, &SSMShell{API: ssm.NewFromConfig(cfg), Compute: p, Cluster: d.Config.ClusterID, Clock: d.Clock})
+		return p, nil
 	})
 }
+
+// SharedShell is the key of the SSM shell (mgmt.InstanceShell).
+const SharedShell = "ssm.shell"

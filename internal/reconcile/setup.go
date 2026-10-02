@@ -75,6 +75,8 @@ type Components struct {
 	Notifications chan event.TypedGenericEvent[*v1alpha1.WorkerPool]
 	// Cost prices the recorded usage (nil without AWS or with cost disabled).
 	Cost *CostModel
+	// Queues measures queue timing (cucina_queue_oldest_seconds, queue p95).
+	Queues *QueueTimer
 }
 
 // New builds the Fleet and the reconcilers without a manager (tests drive
@@ -140,7 +142,12 @@ func New(o Options, ledgers LedgerStore, events *RecorderEvents) (*Components, e
 			o.Log.Warn("no built-in AWS rates for the region: EBS, snapshots and transfer are priced at $0", "region", o.Config.AWS.Region)
 		}
 		c.Cost = &CostModel{Rates: rates, Compute: o.Compute, Fleet: c.Fleet, Metrics: o.Metrics, Clock: o.Clock, Log: o.Log.With("component", "cost")}
+		c.WorkerPool.Costs = c.Cost
 	}
+	if fl != nil {
+		fl.Record = c.Fleet.RecordFastLaunch
+	}
+	c.Queues = &QueueTimer{BuildQueue: o.BuildQueue, Clock: o.Clock, Metrics: o.Metrics, Log: o.Log.With("component", "queue-timer")}
 	c.MacHost = &MacHostReconciler{
 		HostFleet: o.HostFleet,
 		Config:    o.Config,
@@ -175,6 +182,9 @@ func Setup(mgr manager.Manager, o Options) (*Components, error) {
 		return nil, err
 	}
 	c.UseClient(cl)
+	if c.Cost != nil {
+		c.Cost.Store = ConfigMapUsage{Client: cl, Reader: mgr.GetAPIReader(), Namespace: o.Config.Namespace, Name: o.Config.ReleaseName + "-cost-usage"}
+	}
 	if err := mgr.Add(c.Fleet); err != nil {
 		return nil, err
 	}
@@ -182,6 +192,9 @@ func Setup(mgr manager.Manager, o Options) (*Components, error) {
 		if err := mgr.Add(c.Cost); err != nil {
 			return nil, err
 		}
+	}
+	if err := mgr.Add(c.Queues); err != nil {
+		return nil, err
 	}
 	err = builder.ControllerManagedBy(mgr).
 		Named("workerpool").

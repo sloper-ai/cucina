@@ -98,7 +98,7 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
-	tlsCfgs, err := NewTLSConfigs(cfg)
+	tlsCfgs, err := NewTLSConfigs(cfg, o.Mode)
 	if err != nil {
 		return fmt.Errorf("TLS material: %w", err)
 	}
@@ -143,6 +143,7 @@ func Run(ctx context.Context, o Options) error {
 	}
 	invariants.SetReporter(invariants.ReporterFunc(func(v invariants.Violation) {
 		m.InvariantViolated(string(v.Invariant))
+		noteViolation(clock.Now())
 		log.Error("invariant violated", "invariant", string(v.Invariant), "pool", v.Pool, "subject", v.Subject, "detail", v.Detail)
 	}))
 
@@ -197,6 +198,7 @@ func Run(ctx context.Context, o Options) error {
 		if comps.Cost != nil {
 			d.Share(SharedCost, comps.Cost)
 		}
+		d.Share(SharedQueues, comps.Queues)
 	}
 	more, err := buildComponents(ctx, d, func(f Factory) bool { return f.Order >= 0 })
 	if err != nil {

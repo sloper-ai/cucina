@@ -15,6 +15,7 @@ import (
 	"github.com/sloper-ai/cucina/internal/domain"
 	"github.com/sloper-ai/cucina/internal/fakes"
 	"github.com/sloper-ai/cucina/internal/ports"
+	"github.com/sloper-ai/cucina/internal/reconcile"
 )
 
 // Guards the full autoscaler loop through the executor (R-SCALE-1..3, R-RE-4,
@@ -42,10 +43,14 @@ func TestScenarioScaleFromZeroToZero(t *testing.T) {
 		ops = append(ops, name)
 	}
 
+	qt := &reconcile.QueueTimer{BuildQueue: h.bq, Clock: h.clock, Metrics: h.metrics}
 	var maxAlive int
+	var maxOldest time.Duration
 	lastDone := time.Time{}
 	for i := 0; i < 20*60; i++ {
 		h.step()
+		qt.Poll(h.ctx)
+		maxOldest = max(maxOldest, qt.Stats()[native].OldestQueuedAge)
 		maxAlive = max(maxAlive, len(h.alive(pool)))
 		done := 0
 		for _, op := range h.bq.Ops() {
@@ -102,6 +107,12 @@ func TestScenarioScaleFromZeroToZero(t *testing.T) {
 	assert.True(t, snap.Status.Empty)
 	h.noViolations()
 
+	// UC16 queue timing: the oldest queued action aged through the cold start,
+	// and the queue-time p95 is a cold-start sample, not zero.
+	assert.Greater(t, maxOldest, 20*time.Second)
+	assert.LessOrEqual(t, maxOldest, 90*time.Second)
+	assert.Greater(t, qt.Stats()[native].QueueTimeP95, 20*time.Second)
+
 	// R-OBS-5: the recorded launches are priced; the compute cost matches what
 	// the (fake) region billed for the same instance-seconds within 10 %.
 	usage, err := h.comps.Fleet.Usage(h.ctx)
@@ -110,10 +121,24 @@ func TestScenarioScaleFromZeroToZero(t *testing.T) {
 	for _, l := range usage.Launches {
 		assert.False(t, l.End.IsZero(), "termination recorded")
 	}
+	store := &memUsage{}
+	h.comps.Cost.Store = store
 	h.comps.Cost.Export(h.ctx)
 	_, billed := h.compute.InstanceSeconds()
 	got := testutil.ToFloat64(h.metrics.CostUSD.WithLabelValues(string(pool), "compute"))
 	assert.InEpsilon(t, billed[pool], got, 0.1, "compute cost %f vs billed %f", got, billed[pool])
+	assert.Greater(t, testutil.ToFloat64(h.metrics.StandingCostUSDPerMonth.WithLabelValues("ami-storage")), 0.0, "the pool's AMI is standing cost (NFR-C1)")
+
+	// A new leader resumes the month's usage from the stored record.
+	today, ok := h.comps.Cost.TodayUSD(pool)
+	require.True(t, ok)
+	next := newHarness(t, 8)
+	next.clock.Set(h.clock.Now()) // the new leader takes over now
+	next.comps.Cost.Store = store
+	next.comps.Cost.Export(next.ctx)
+	resumed, ok := next.comps.Cost.TodayUSD(pool)
+	require.True(t, ok)
+	assert.InDelta(t, today, resumed, 1e-6)
 }
 
 // Guards the Tart path of the loop (R-POOL-6 placement spread, R-MAC-3 at most
