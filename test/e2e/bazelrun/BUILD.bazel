@@ -19,6 +19,24 @@ go_library(
     ],
 )
 
+# gazelle:exclude windows_wait_test.go
+
+cucina_go_test(
+    name = "windows_wait_test",  # keep
+    srcs = ["windows_wait_test.go"],  # keep
+    runfiles_env = {"BASELINE_PS1": "//test/e2e/abseil:local-baseline.ps1"},
+    target_compatible_with = ["@platforms//os:windows"],
+    tier = "integration",
+    deps = [
+        ":bazelrun",
+        "//test/e2e/remote",
+        "@com_github_aws_aws_sdk_go_v2//aws",
+        "@com_github_aws_aws_sdk_go_v2_service_ssm//:ssm",
+        "@com_github_aws_aws_sdk_go_v2_service_ssm//types",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 cucina_go_test(
     name = "bazelrun_test",
     srcs = ["bazelrun_test.go"],

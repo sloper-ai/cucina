@@ -12,9 +12,14 @@ Set-Location $Workspace
 $ob = "$Workspace.local-ob"
 & bazel.exe "--output_base=$ob" clean --expunge 2>$null | Out-Null
 $t0 = Get-Date
-$b = Start-Process -FilePath bazel.exe -ArgumentList (@("--output_base=$ob", 'build') + $BazelArgs + @('//absl/...')) -RedirectStandardOutput "$Out\build.out" -RedirectStandardError "$Out\build.log" -NoNewWindow -Wait -PassThru
+# -Wait includes Bazel's persistent server; wait for each client process only.
+$b = Start-Process -FilePath bazel.exe -ArgumentList (@("--output_base=$ob", 'build') + $BazelArgs + @('//absl/...')) -RedirectStandardOutput "$Out\build.out" -RedirectStandardError "$Out\build.log" -NoNewWindow -PassThru
+$null = $b.Handle
+$b.WaitForExit()
 $t1 = Get-Date
-$t = Start-Process -FilePath bazel.exe -ArgumentList (@("--output_base=$ob", 'test') + $BazelArgs + @("--build_event_json_file=$Out\bep.json", '//absl/...')) -RedirectStandardOutput "$Out\test.out" -RedirectStandardError "$Out\test.log" -NoNewWindow -Wait -PassThru
+$t = Start-Process -FilePath bazel.exe -ArgumentList (@("--output_base=$ob", 'test') + $BazelArgs + @("--build_event_json_file=$Out\bep.json", '//absl/...')) -RedirectStandardOutput "$Out\test.out" -RedirectStandardError "$Out\test.log" -NoNewWindow -PassThru
+$null = $t.Handle
+$t.WaitForExit()
 $t2 = Get-Date
 @{ buildExit = $b.ExitCode; testExit = $t.ExitCode; buildSeconds = [int]($t1 - $t0).TotalSeconds; testSeconds = [int]($t2 - $t1).TotalSeconds;
    wallSeconds = [int]($t2 - $t0).TotalSeconds; cpus = [Environment]::ProcessorCount } | ConvertTo-Json -Compress

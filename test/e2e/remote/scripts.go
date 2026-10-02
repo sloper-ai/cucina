@@ -195,7 +195,11 @@ const psHead64 = `function Get-Head64([string]$f, [int]$n) {
 
 func psRunCmd(dir string) string {
 	q := psQuote(dir)
-	return fmt.Sprintf(`$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path %s 'cmd.ps1') -RedirectStandardOutput (Join-Path %s 'stdout') -RedirectStandardError (Join-Path %s 'stderr') -NoNewWindow -Wait -PassThru`, q, q, q)
+	// Start-Process -Wait includes descendants such as the persistent Bazel
+	// server. The job's context still bounds execution and owns tree cancellation.
+	return fmt.Sprintf(`$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path %s 'cmd.ps1') -RedirectStandardOutput (Join-Path %s 'stdout') -RedirectStandardError (Join-Path %s 'stderr') -NoNewWindow -PassThru
+$null = $p.Handle
+$p.WaitForExit()`, q, q, q)
 }
 
 func (d ps) foreground(dir, script string, o Opts) string {

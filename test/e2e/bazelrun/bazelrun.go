@@ -244,7 +244,9 @@ Get-ChildItem Env: | Where-Object { $keep -notcontains $_.Name.ToUpperInvariant(
 	}
 	fmt.Fprintf(&b, `$bazelArgs = $startup + %s
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$p = Start-Process -FilePath $bazel -ArgumentList $bazelArgs -RedirectStandardOutput (Join-Path $out 'console.out') -RedirectStandardError (Join-Path $out '%s') -NoNewWindow -Wait -PassThru
+$p = Start-Process -FilePath $bazel -ArgumentList $bazelArgs -RedirectStandardOutput (Join-Path $out 'console.out') -RedirectStandardError (Join-Path $out '%s') -NoNewWindow -PassThru
+$null = $p.Handle
+$p.WaitForExit()
 $rc = $p.ExitCode
 $sw.Stop()
 $serverPid = (& $bazel @startup info server_pid 2>$null | Select-Object -Last 1)
