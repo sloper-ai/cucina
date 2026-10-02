@@ -23,7 +23,7 @@ Everything below is binding; change it only by editing this file and the code to
 | aws | `deploy/aws-e2e/**` |
 | images | `workers/linux/**`, `workers/windows/**` |
 | macimage | `workers/macos/**` |
-| core | `internal/{scaling,reconcile,controller,fakes,sim,metrics}`, `internal/ports/porttest`, `invariants/`, `slo/`, `sim/`, `cmd/cucina-controller` (wiring) |
+| core | `internal/{scaling,reconcile,controller,fakes,sim,metrics}`, `internal/ports/porttest`, `invariants/`, `sim/`, `cmd/cucina-controller` (wiring) |
 | ec2 | `internal/providers/ec2`, `internal/cost` |
 | bbconfig | `internal/bbconfig`, `internal/buildqueue` (real BuildQueue adapter), `internal/bbtest` (boot pinned binaries) |
 | auth | `internal/{auth,sts,pki,enroll}`, `cmd/cucina-controller/sts*` |
@@ -34,7 +34,7 @@ Everything below is binding; change it only by editing this file and the code to
 | cli | `cli/**` (except workspace plumbing), `docs/cli.md` |
 | pkg | `macos/**`, `docs/macos/**`, `docs/mdm/**` |
 | cross | `platforms/targets.json`, `bazel/platforms/**`, `docs/upstream/**`, cross-platform scenario data |
-| e2e | `test/e2e/**`, `deploy/aws-e2e/scripts/*campaign*`, `docs/reports/**` templates |
+| e2e | `test/e2e/**`, `internal/canary/`, `slo/`, `deploy/aws-e2e/scripts/campaign/`, `docs/reports/**` templates |
 
 ## 3. Pools, platforms and queues
 
@@ -130,6 +130,10 @@ stopped, failed), `cucina_pool_max{pool}`, `cucina_vm_start_seconds{pool,phase}`
 `cucina_sts_exchanges_total{issuer,result}`, `cucina_sts_token_ttl_seconds`, `cucina_hosts{phase}`, `cucina_host_heartbeat_age_seconds{serial}`.
 Hostd (`/metrics`): `cucina_hostd_vms{state}`, `cucina_hostd_l2_requests_total{result}`, `cucina_hostd_wan_bytes_total{direction}`,
 `cucina_hostd_l2_size_bytes`, `cucina_hostd_disk_free_bytes`. All metrics pass `testutil.CollectAndLint`.
+Canaries (`internal/canary`, `cucina-controller canary cache|exec`): `cucina_canary_up{canary}`, `cucina_canary_runs_total{canary,result}`,
+`cucina_canary_duration_seconds`, `cucina_canary_step_duration_seconds{step}`, `cucina_canary_exec_queue_seconds{pool}`,
+`cucina_canary_last_run_timestamp_seconds`, `cucina_canary_last_success_timestamp_seconds`. The shared SLO / recording-rule definitions live in
+`slo/` (Go data, exported as `slo/rules.json` and `slo/sloth.json`); scenarios, canaries and the chart's PrometheusRules query the same rules.
 Storage retention: the chart's storage config exposes `buildbarn_blobstore_local_blob_access_oldest_block_age_seconds`-style data; alerts use the
 recording rule `cucina:cas_retention_seconds` defined in `slo/` and `charts/cucina/files/rules`.
 
