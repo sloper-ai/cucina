@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "httpsd",
+    srcs = ["httpsd.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/httpsd",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/ports"],
+)
+
+cucina_go_test(
+    name = "httpsd_test",
+    srcs = ["httpsd_test.go"],
+    tier = "unit",
+    deps = [
+        ":httpsd",
+        "//internal/ports",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

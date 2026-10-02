@@ -1,0 +1,19 @@
+{
+  "clusterId": "cucina-test",
+  "namespace": "cucina",
+  "releaseName": "cucina",
+  "instanceNames": ["main"],
+  "platformsFile": "/etc/cucina/platforms.json",
+  "leaderElection": {"enabled": true, "id": "cucina-controller", "leaseDuration": "15s", "renewDeadline": "10s", "retryPeriod": "2s"},
+  "listeners": {"probes": ":8081", "metrics": ":9090", "sts": ":8443", "management": ":8444", "enrollment": ":8445", "host": ":8446"},
+  "tls": {"certFile": "/etc/cucina/tls/tls.crt", "keyFile": "/etc/cucina/tls/tls.key", "caFile": "/etc/cucina/ca/ca.crt"},
+  "pki": {"caSecret": "cucina-ca", "workerCertTTL": "24h", "hostCertTTL": "168h", "vmCertTTL": "12h"},
+  "scheduler": {"buildQueueStateAddress": "cucina-scheduler:8984", "pollInterval": "1s", "clientCertFile": "/etc/cucina/client/tls.crt", "clientKeyFile": "/etc/cucina/client/tls.key", "queueFailAfter": "10m"},
+  "endpoints": {"clientEndpoint": "grpcs://cucina.example.com:443", "workerScheduler": "10.0.0.10:8983", "workerStorage": "10.0.0.10:8981", "workerEnroll": "10.0.0.10:8445", "hostEndpoint": "cucina.example.com:8446", "serverName": "cucina.example.com", "stsUrl": "https://cucina.example.com:8443/", "managementUrl": "cucina.example.com:8444"},
+  "aws": {"region": "us-west-1", "accountId": "000000000000", "extraTags": {"cucina:env": "e2e"}, "sweepInterval": "5m"},
+  "auth": {"signingKeySecret": "cucina-signing-keys", "jwksConfigMap": "cucina-jwks", "denyListConfigMap": "cucina-denylist", "tokenTTL": "15m", "audience": "buildbarn", "keyRotationPublishLead": "10m", "breakGlassKeySecret": "cucina-break-glass", "serviceKeysSecret": "cucina-service-keys", "rateLimitPerMinute": 60},
+  "hosts": {"defaultTokenTtl": "720h", "staleAfter": "2m", "registrySecret": "cucina-registry"},
+  "worker": {"maximumMessageSizeBytes": 16777216, "metricsPort": 9987, "wanCompressionForHosts": true},
+  "autoscaler": {"shadow": false, "runInstancesBurst": 5, "runInstancesRefillPerSecond": 2, "deadmanIdleLimit": "30m", "deadmanUnreachableLimit": "10m", "deadmanMaxUptime": "12h", "iceBackoffMin": "15s", "iceBackoffMax": "5m"},
+  "observability": {"logLevel": "info", "otlpEndpoint": "", "costEnabled": true}
+}

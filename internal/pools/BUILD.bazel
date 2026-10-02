@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "pools",
+    srcs = [
+        "catalog.go",
+        "resolve.go",
+        "settings.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/pools",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//api/v1alpha1",
+        "//internal/config",
+        "//internal/domain",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@org_golang_google_protobuf//types/known/durationpb",
+    ],
+)
+
+cucina_go_test(
+    name = "pools_test",
+    srcs = ["pools_test.go"],
+    data = ["//platforms:pools.json"],
+    tier = "unit",
+    deps = [
+        ":pools",
+        "//api/v1alpha1",
+        "//internal/config",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@net_pgregory_rapid//:rapid",
+    ],
+)
