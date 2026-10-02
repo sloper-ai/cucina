@@ -1,84 +1,107 @@
 #!/bin/sh
 # SPDX-License-Identifier: FSL-1.1-ALv2
-#
-# Runs the acceptance campaign (PROMPT §10.3) with the scenario harness, phase by phase. It creates no AWS resources
-# itself: the lead brings the environment up first (deploy/aws-e2e/scripts/up.sh all, helm values, kubeconfig, keys,
-# `e2e env` descriptor). Scenarios that need what the environment lacks SKIP with a reason; the budget governor
-# ($300, §12) holds or skips scenarios whose projected spend would exceed the budget.
-#
-#   run.sh [--env NAME] PHASE...
-#
-# Phases (in campaign order; "all" runs every phase, teardown last):
-#   preflight  install  baselines  linux  windows  concurrency  faults  security  upgrade  rollout  mac  pkg
-#   cross  cli  data  dogfood  canaries  teardown  report
-#
-# Each phase logs to $CUCINA_DEV_STORAGE/logs/campaign-<phase>.log; results land in
-# <artifactsDir>/<runId>/results (result-<ID>.json, budget.json). `report` writes docs/reports/e2e-<date>.md (redacted).
+# Run acceptance phases against an environment the lead provisioned. Scenarios
+# can scale workers, inject faults and destroy tagged resources; this is NOT an
+# offline check. Use `e2e check` for local prerequisite validation first.
+# Usage: run.sh [--env NAME] PHASE...
+# `all` attempts teardown even after failure/interruption; skipped/failed/error
+# results return nonzero, never an "ok" campaign. Report generation still runs.
 set -eu
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo=$(CDPATH='' cd -- "$here/../../../.." && pwd)
 env=${CUCINA_E2E_ENV:-aws-e2e}
-if [ "${1:-}" = "--env" ]; then env=$2 && shift 2; fi
-[ $# -gt 0 ] || { sed -n '3,20p' "$0" >&2; exit 2; }
+if [ "${1:-}" = --env ]; then env=$2; shift 2; fi
+[ $# -gt 0 ] || { echo 'usage: run.sh [--env NAME] preflight|install|baselines|linux|windows|concurrency|faults|security|upgrade|rollout|mac|pkg|cross|cli|data|dogfood|canaries|teardown|report|all ...' >&2; exit 2; }
 logs=${CUCINA_DEV_STORAGE:?source .work/env.sh first}/logs
 mkdir -p "$logs"
+desc=$HOME/.config/cucina/e2e/$env.json
+[ -f "$desc" ] || { echo 'No descriptor: generate it with e2e env first.' >&2; exit 1; }
+results=$(jq -er '.artifactsDir+"/"+.runId+"/results"' "$desc")
+status=0
+teardown_due=0
 
 ids() {
-	case $1 in
-	install) echo T0 ;;
-	baselines) echo baseline-linux,baseline-windows,baseline-macos ;;
-	linux) echo T1,T2,T3 ;;
-	windows) echo T4,T5,T6 ;;
-	concurrency) echo T7,T8 ;;
-	faults) echo T9a,T9b,T9c,T9d,T9e,T9f ;;
-	security) echo T10a,T10b,T10c,T10d,T10e,T10f,T10g,T10h,T10i ;;
-	upgrade) echo T11 ;;
-	rollout) echo T12 ;;
-	mac) echo T13 ;;
-	pkg) echo T14 ;;
-	cross) echo T16,T17,T18,T19 ;;
-	cli) echo T20 ;;
-	data) echo T21 ;;
-	dogfood) echo T22 ;;
-	canaries) echo canary-cache,canary-exec,zero-scale ;;
-	teardown) echo T15 ;;
-	*) return 1 ;;
-	esac
+ case $1 in
+ install) echo T0 ;;
+ baselines) echo baseline-linux,baseline-windows,baseline-macos ;;
+ linux) echo T1,T2,T3 ;;
+ windows) echo T4,T5,T6 ;;
+ concurrency) echo T7,T8 ;;
+ faults) echo T9a,T9b,T9c,T9d,T9e,T9f ;;
+ security) echo T10a,T10b,T10c,T10d,T10e,T10f,T10g,T10h,T10i ;;
+ upgrade) echo T11 ;; rollout) echo T12 ;; mac) echo T13 ;; pkg) echo T14 ;;
+ cross) echo T16,T17,T18,T19 ;; cli) echo T20 ;; data) echo T21 ;; dogfood) echo T22 ;;
+ canaries) echo canary-cache,canary-exec,zero-scale ;; teardown) echo T15 ;;
+ *) return 1 ;;
+ esac
 }
-
-scenario() { # phase
-	list=$(ids "$1") || { echo "unknown phase $1" >&2; exit 2; }
-	echo "== $1: $list"
-	(cd "$repo" && go test ./test/e2e -count=1 -timeout 24h -run TestScenario -args -env "$env" -id "$list") \
-		>"$logs/campaign-$1.log" 2>&1 && echo "   ok" || echo "   see $logs/campaign-$1.log (failures do not stop the campaign)"
-	grep -E '^\s+scenario_test.go:[0-9]+: ' "$logs/campaign-$1.log" | sed 's/^ *scenario_test.go:[0-9]*: /   /' || true
+cli() { (cd "$repo" && go run ./test/e2e/cmd/e2e "$@"); }
+scenario() {
+ phase=$1
+ list=$(ids "$phase") || { echo "unknown phase $phase" >&2; status=1; return; }
+ echo "== $phase: $list"
+ if ! (cd "$repo" && go test ./test/e2e -count=1 -timeout 24h -run '^TestScenario$' -args -env "$env" -id "$list") >"$logs/campaign-$phase.log" 2>&1; then
+  status=1
+  echo "   test process failed; see $logs/campaign-$phase.log"
+ fi
+ for id in $(printf '%s' "$list" | tr ',' ' '); do
+  result=$results/result-$id.json
+  if [ ! -f "$result" ]; then echo "   $id ERROR: no result written"; status=1; continue; fi
+  jq -r '"   "+.id+" "+(.status|ascii_upcase)+": "+(.skipReason // .error // "")' "$result"
+  if ! jq -e '.status=="pass"' "$result" >/dev/null; then status=1; fi
+ done
 }
-
 preflight() {
-	desc=$HOME/.config/cucina/e2e/$env.json
-	[ -f "$desc" ] || { echo "no $desc: run go run ./test/e2e/cmd/e2e env --base … --env …" >&2; exit 1; }
-	aws sts get-caller-identity --query Arn --output text >/dev/null || { echo "AWS session expired: aws sso login (ask the user)" >&2; exit 1; }
-	kubectl --kubeconfig "${KUBECONFIG:-$HOME/.config/cucina/aws-e2e/kubeconfig}" get nodes >/dev/null || { echo "cluster unreachable" >&2; exit 1; }
-	"$here/port-forwards.sh" up
-	echo "preflight ok ($env)"
+ cli check --env "$env" --id T0 || return 1
+ aws --profile default --region us-west-1 sts get-caller-identity >/dev/null || { echo 'AWS session unavailable: stop and ask the lead to arrange login.' >&2; return 1; }
+ export KUBECONFIG
+ KUBECONFIG=$(jq -er '.kubernetes.kubeconfig' "$desc")
+ kubectl --kubeconfig "$KUBECONFIG" get nodes >/dev/null || return 1
+ # The lead owns Prometheus deployment and may already forward it. Require
+ # the descriptor's exact URL rather than silently starting a different one.
+ prom=$(jq -er '.endpoints.prometheus' "$desc")
+ curl --fail --silent --show-error --max-time 10 "$prom/-/ready" >/dev/null || { echo 'Prometheus is not reachable; run the configured port-forward.' >&2; return 1; }
+ echo 'preflight ready (connectivity only; not an acceptance verdict)'
 }
-
+security() {
+ if ! "$here/mock-oauth2-server.sh" up || ! "$here/port-forwards.sh" up mock-idp; then status=1; return; fi
+ scenario security
+}
+# shellcheck disable=SC2329 # Invoked by the EXIT trap.
+cleanup() {
+ incoming=$?
+ trap - EXIT INT TERM
+ if [ "$teardown_due" = 1 ]; then
+  teardown_due=0
+  scenario teardown
+  cli report --env "$env" || status=1
+ fi
+ if [ "$incoming" -ne 0 ]; then exit "$incoming"; fi
+ exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 for phase in "$@"; do
-	case $phase in
-	preflight) preflight ;;
-	report) (cd "$repo" && go run ./test/e2e/cmd/e2e report --env "$env") ;;
-	all)
-		preflight
-		for p in install baselines linux windows concurrency faults security upgrade rollout mac pkg cross cli data dogfood canaries teardown; do
-			scenario "$p"
-		done
-		(cd "$repo" && go run ./test/e2e/cmd/e2e report --env "$env")
-		;;
-	security)
-		"$here/mock-oauth2-server.sh" up
-		"$here/port-forwards.sh" up
-		scenario security
-		;;
-	*) scenario "$phase" ;;
-	esac
+ case $phase in
+ preflight) preflight || status=1 ;;
+ report) cli report --env "$env" || status=1 ;;
+ all)
+  # Do not start a campaign whose mandatory cleanup would be skipped.
+  jq -e '.kind=="aws-e2e" and .safety.allowDestructive==true and (.capabilities|index("destructive")!=null)' "$desc" >/dev/null || { echo 'all requires explicit destructive/teardown permission in the descriptor; refusing workloads' >&2; exit 2; }
+  teardown_due=1
+  if preflight; then
+   for p in install baselines linux windows concurrency faults security upgrade rollout mac pkg cross cli data dogfood canaries; do
+    if [ "$p" = security ]; then security; else scenario "$p"; fi
+   done
+  else status=1
+  fi
+  teardown_due=0
+  scenario teardown
+  cli report --env "$env" || status=1
+  ;;
+ security) security ;;
+ *) scenario "$phase" ;;
+ esac
 done
+exit "$status"

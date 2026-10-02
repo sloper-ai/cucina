@@ -29,6 +29,29 @@ func TestPriceSampledLifecycles(t *testing.T) {
 	windowsMin := 3.51984 * 60 / 3600
 	require.InDelta(t, linux+ebs+windowsMin, b.TotalUSD, 1e-5)
 
+	// The small-functional campaign must price every selected OS/type pair.
+	// In particular, standard Windows AMIs use RunInstances:0002, NOT the
+	// cheaper RunInstances:0002:box (Windows without licences) product.
+	for _, tc := range []struct {
+		name, typ, platform string
+		hourly              float64
+	}{
+		{"small x86 Linux", "m7i.large", "linux", 0.1176},
+		{"small x86 Windows licence included", "m7i.large", "windows", 0.2096},
+		{"small arm Linux", "m7g.large", "linux", 0.0952},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usage := cost.Usage{Launches: Launches([]awsinv.Lifecycle{{ID: "i-small", Pool: "small", Type: tc.typ, Platform: tc.platform, Launched: t0, Gone: t0.Add(time.Hour)}})}
+			bill := Price(usage, t0.Add(2*time.Hour))
+			require.Empty(t, bill.Unpriced, "selected small-runner shape needs a verified rate")
+			require.InDelta(t, tc.hourly, bill.TotalUSD, 1e-8)
+		})
+	}
+	for _, key := range []cost.InstanceKey{{Type: "unlisted.large"}, {Type: "m7g.large", Windows: true}} {
+		bill := Price(cost.Usage{Launches: []cost.Launch{{Type: key.Type, Windows: key.Windows, Start: t0, End: t0.Add(time.Hour)}}}, t0.Add(2*time.Hour))
+		require.NotEmpty(t, bill.Unpriced, "unknown type/OS rates must remain incomplete, never fall back to a cheaper rate")
+	}
+
 	_, testMonth := Standing(TestTopology())
 	_, prodMonth := Standing(SmallProductionTopology())
 	require.Greater(t, testMonth, prodMonth, "the production starting point drops the two client VMs")

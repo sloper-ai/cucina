@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
+//go:build !windows
 
 package remote
 
@@ -64,6 +65,20 @@ func TestBackgroundJobs(t *testing.T) {
 	require.NoError(t, err)
 	_, err = Wait(ctx, h, j, time.Second, busyPoll)
 	require.ErrorIs(t, err, ErrJobLost)
+
+	// Cancelling a detached build must stop it, not only stop polling. The
+	// long-lived subprocess is our fake workload, not a test synchronization sleep.
+	cancelCtx, stop := context.WithCancel(ctx)
+	j, _, err = RunJob(cancelCtx, h, "exec sleep 600", Opts{}, time.Second, func(context.Context, time.Duration) error { stop(); return context.Canceled })
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = StopJob(cleanup, h, j)
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	st, err := h.Status(ctx, j)
+	require.NoError(t, err)
+	require.Contains(t, []string{JobExited, JobLost}, st.State, "cancelled workload must no longer run")
 }
 
 func TestTransferRoundTrip(t *testing.T) {

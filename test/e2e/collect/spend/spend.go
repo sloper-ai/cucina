@@ -16,13 +16,24 @@ import (
 	"github.com/sloper-ai/cucina/test/e2e/collect/awsinv"
 )
 
-// PriceSource documents the instance price snapshot.
-const PriceSource = "AWS Price List API, us-west-1, on-demand, shared tenancy, queried 2026-10-02 (Windows: licence included)"
+// PriceSource documents the instance price snapshots. The small-runner
+// entries are from the public AmazonEC2 offer (not an account API), filtered
+// to us-west-1, OnDemand, Shared, USD/Hrs, standard Linux/Windows AMIs.
+const PriceSource = "AWS Price List, us-west-1, on-demand shared tenancy; legacy rows queried 2026-10-02; small-runner rows from https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonEC2/current/us-west-1/index.csv, offer version 20260925174521, effective 2026-09-01, retrieved 2026-10-02T14:15:53Z (standard Windows AMI licence included)"
 
-// InstancePrices is the on-demand $/h of every instance type the campaign
-// may run (k3s node, clients, the three pools and their fallbacks).
+// InstancePrices is the on-demand $/h snapshot for approved small shapes
+// and historical campaign launches. Historical billing rows do not authorize
+// launching those larger instance types.
 func InstancePrices() map[cost.InstanceKey]float64 {
 	return map[cost.InstanceKey]float64{
+		// Current small-functional shapes (source/version/effective date above).
+		{Type: "m7i.large"}:                0.1176, // SKU M42E2XJND79B24XJ, RunInstances.
+		{Type: "m7i.large", Windows: true}: 0.2096, // SKU 467DVSJSH8Q6YVDV, RunInstances:0002.
+		{Type: "m7g.large"}:                0.0952, // SKU 6NEBY6FWRHRB8ZCU, RunInstances.
+		// Exclude A2AUFKC7VYA9WJ23 / RunInstances:0002:box: its 0.1176/h
+		// Windows-without-licences rate does not price the campaign's AMIs.
+		// Historical large shapes remain for accounting of earlier launches;
+		// these are rates, never launch-type fallbacks.
 		{Type: "c8i.8xlarge"}: 1.86976, {Type: "c7i.8xlarge"}: 1.7808, {Type: "c7a.8xlarge"}: 2.04784,
 		{Type: "m6id.8xlarge"}: 2.2344, {Type: "c8g.8xlarge"}: 1.58592, {Type: "c7g.8xlarge"}: 1.4416,
 		{Type: "c7gd.8xlarge"}: 1.8144, {Type: "m8i.2xlarge"}: 0.49392, {Type: "m7i.xlarge"}: 0.2352,

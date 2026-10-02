@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sloper-ai/cucina/internal/cost"
@@ -111,7 +112,7 @@ func openLane(c *harness.Context, lane Lane, extraRC ...string) (*laneRun, error
 	}
 	var rc string
 	if err := c.Step(lane.Name+": cucinactl bazelrc", func() error {
-		res, err := h.Run(c, fmt.Sprintf("%s bazelrc --platform %s", quoteFor(h, cli), lane.Platform), remote.Opts{User: lr.user})
+		res, err := h.Run(c, fmt.Sprintf("%s bazelrc --platform %s --ci --disk-cache=none --helper-path %s", quoteFor(h, cli), lane.Platform, argFor(h, credentialHelper(h))), remote.Opts{User: lr.user})
 		if err != nil {
 			return err
 		}
@@ -183,11 +184,26 @@ func checkClientFlags(c *harness.Context, lane Lane, rc string) {
 		Pass: len(missing) == 0 && len(bad) == 0, Detail: fmt.Sprintf("missing %v, forbidden %v", missing, bad)})
 }
 
-func quoteFor(h remote.Host, s string) string {
+func argFor(h remote.Host, s string) string {
 	if h.OS() == remote.Windows {
-		return "& '" + strings.ReplaceAll(s, "'", "''") + "'"
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func quoteFor(h remote.Host, s string) string {
+	if h.OS() == remote.Windows {
+		return "& " + argFor(h, s)
+	}
+	return argFor(h, s)
+}
+
+func credentialHelper(h remote.Host) string {
+	name := "cucina-credential-helper"
+	if h.OS() == remote.Windows {
+		name += ".exe"
+	}
+	return hjoin(h, h.WorkDir(), "bin", name)
 }
 
 // installCucinactl puts the right cucinactl build on the host (once per
@@ -195,7 +211,18 @@ func quoteFor(h remote.Host, s string) string {
 // port-forwarding path, never inline in an SSM command), and returns its path.
 func installCucinactl(c *harness.Context, svc *infra.Services, h remote.Host) (string, error) {
 	if h.Name() == infra.DevMac {
-		return svc.CucinactlPath()
+		if err := svc.VerifyLocalProfile(c); err != nil {
+			return "", err
+		}
+		cli, err := svc.CucinactlPath()
+		if err != nil {
+			return "", err
+		}
+		r, err := h.Run(c, quoteFor(h, cli)+" credential-helper install --dir "+argFor(h, hjoin(h, h.WorkDir(), "bin")), remote.Opts{})
+		if err != nil {
+			return "", err
+		}
+		return cli, r.Err()
 	}
 	local := c.Env.Cucinactl[h.OS()]
 	if local == "" {
@@ -221,6 +248,13 @@ func installCucinactl(c *harness.Context, svc *infra.Services, h remote.Host) (s
 	}); err != nil {
 		return "", err
 	}
+	r, err := h.Run(c, quoteFor(h, dst)+" credential-helper install --dir "+argFor(h, hjoin(h, h.WorkDir(), "bin")), remote.Opts{})
+	if err != nil {
+		return "", err
+	}
+	if err = r.Err(); err != nil {
+		return "", err
+	}
 	return dst, loginWithKey(c, svc, h, dst)
 }
 
@@ -232,34 +266,28 @@ func loginWithKey(c *harness.Context, svc *infra.Services, h remote.Host, cli st
 	if keyFile == "" {
 		return harness.Skip("no service key file in the environment descriptor (secrets.serviceKeyFile)")
 	}
-	user := svc.ClientUser(h.Name())
-	sts := c.Env.Endpoints.STS
-	if cl, ok := c.Env.Clients[h.Name()]; ok && cl.STS != "" {
-		sts = cl.STS
+	cl := c.Env.Clients[h.Name()]
+	sts := cl.STS
+	if sts == "" {
+		sts = c.Env.Endpoints.STS
 	}
-	remoteKey := hjoin(h, h.WorkDir(), "secrets", "e2e.key")
-	if err := remote.PutPrivate(c, h, keyFile, remoteKey, user); err != nil {
-		return err
-	}
-	var script string
-	if h.OS() == remote.Windows {
-		script = fmt.Sprintf("%s login %s --key (Get-Content -Raw %s).Trim(); $rc = $LASTEXITCODE; Remove-Item -Force %s; exit $rc",
-			quoteFor(h, cli), sts, "'"+remoteKey+"'", "'"+remoteKey+"'")
-	} else {
-		script = fmt.Sprintf("%s login %s --key \"$(cat %s)\"; rc=$?; rm -f %s; exit $rc", quoteFor(h, cli), sts, quoteFor(h, remoteKey), quoteFor(h, remoteKey))
-	}
-	return c.Step(h.Name()+": cucinactl login --key", func() error {
-		res, err := h.Run(c, script, remote.Opts{User: user})
-		if err != nil {
-			return err
-		}
-		return res.Err()
+	return c.Step(h.Name()+": cucinactl login --key FILE", func() error {
+		return infra.LoginClient(c, h, infra.ClientLogin{CLI: cli, STS: sts, KeyFile: keyFile, CAFile: c.Env.Endpoints.CAFile, User: svc.ClientUser(h.Name()), RemoteExecution: cl.RemoteExecution, Management: cl.Management})
 	})
 }
 
 // prepareAbseil uploads the @cucina_platforms module and prepares the
 // host's Abseil checkout with the overlay for the toolchain.
 func prepareAbseil(c *harness.Context, svc *infra.Services, h remote.Host, ws string, tc bazelrun.Toolchain, user string) error {
+	if h.OS() == remote.Linux && user != "" {
+		r, err := h.Run(c, "mkdir -p "+argFor(h, h.WorkDir())+" && chown "+argFor(h, user)+" "+argFor(h, h.WorkDir()), remote.Opts{})
+		if err != nil {
+			return err
+		}
+		if err = r.Err(); err != nil {
+			return err
+		}
+	}
 	platforms, err := uploadPlatforms(c, svc, h)
 	if err != nil {
 		return err
@@ -321,18 +349,34 @@ func uploadPlatforms(c *harness.Context, svc *infra.Services, h remote.Host) (st
 
 // BuildOpts tune one Abseil invocation.
 type BuildOpts struct {
+	// Context optionally scopes cancellation to this invocation only.
+	Context     context.Context
 	Command     string   // build | test
 	Extra       []string // extra flags
 	FreshServer bool
+	// ForceExecute bypasses output/action/test caches with a new output base
+	// and requires evidence of remote execution (not merely a cache hit).
+	ForceExecute bool
 	// OutputBase isolates concurrent invocations in one checkout.
 	OutputBase string
 	// NoRemoteRC runs without cucina.bazelrc (local baseline).
 	NoRemoteRC bool
 }
 
+var forcedExecutionSequence atomic.Uint64
+
 // bazel runs one Abseil invocation on the lane and records its outcome.
 func (lr *laneRun) bazel(name string, o BuildOpts) (*bazelrun.Outcome, error) {
 	c, h := lr.c, lr.host
+	for _, f := range o.Extra {
+		if f == "--noremote_accept_cached" || f == "--remote_accept_cached=false" {
+			o.ForceExecute = true
+		}
+	}
+	if o.ForceExecute && o.Command != "clean" {
+		o.OutputBase = hjoin(h, h.WorkDir(), "ob", fmt.Sprintf("%s-%d-%d", c.Scenario.ID, c.Result.Started.UnixNano(), forcedExecutionSequence.Add(1)))
+		o.Extra = append(append([]string{}, o.Extra...), "--noremote_accept_cached", "--nocache_test_results")
+	}
 	var startup []string
 	if !o.NoRemoteRC {
 		startup = append(startup, "--bazelrc="+hjoin(h, lr.ws, "cucina.bazelrc"))
@@ -340,22 +384,39 @@ func (lr *laneRun) bazel(name string, o BuildOpts) (*bazelrun.Outcome, error) {
 	if o.OutputBase != "" {
 		startup = append(startup, "--output_base="+o.OutputBase)
 	}
-	args := append(append([]string{}, o.Extra...), "--")
-	args = append(args, bazelrun.AbseilTargets...)
+	args := append([]string{}, o.Extra...)
+	if o.Command != "clean" {
+		args = append(args, "--")
+		args = append(args, bazelrun.AbseilTargets...)
+	}
 	inv := bazelrun.Invocation{
 		Name: c.Scenario.ID + "-" + name, Host: h, Workspace: lr.ws, Startup: startup, Command: o.Command, Args: args,
-		FreshServer: o.FreshServer, Collect: true, User: lr.user, Bazel: bazelBinary(c.Env, h),
+		FreshServer: o.FreshServer, Collect: o.Command != "clean", User: lr.user, Bazel: bazelBinary(c.Env, h),
 	}
 	var out *bazelrun.Outcome
 	err := c.Step(lr.lane.Name+": bazel "+o.Command+" ("+name+")", func() error {
 		var err error
-		out, err = bazelrun.Run(c, inv, filepath.Join(c.Dir(), name))
+		ctx := o.Context
+		if ctx == nil {
+			ctx = c
+		}
+		out, err = bazelrun.Run(ctx, inv, filepath.Join(c.Dir(), name))
 		return err
 	})
 	if out != nil {
 		recordOutcome(c, lr.lane.Name+"."+name, out)
 	}
+	if err == nil && o.ForceExecute && o.Command != "clean" {
+		err = requireRemoteExecution(out, name)
+	}
 	return out, err
+}
+
+func requireRemoteExecution(o *bazelrun.Outcome, what string) error {
+	if o == nil || o.ExecLog == nil || o.ExecLog.RemoteExecutions == 0 {
+		return harness.Fail("%s: no remote-execution evidence (missing execution log or zero executed remote spawns)", what)
+	}
+	return nil
 }
 
 // namespace is the release namespace ("cucina" when the descriptor has no
@@ -439,32 +500,60 @@ type PoolInfo struct {
 	Starts  []PoolStart    `json:"starts"`
 }
 
-// describePool reads `cucinactl pools describe <pool> --output json`,
-// tolerating snake_case/camelCase and protojson durations ("12.5s").
-func describePool(c *harness.Context, svc *infra.Services, pool string) (PoolInfo, error) {
+// UnmarshalJSON decodes the CLI's pool-describe.v1 contract. Missing pool
+// counters/arrays are not a zero-sized fleet. Nullable start latencies stay
+// unmeasured until the controller reports them.
+func (pi *PoolInfo) UnmarshalJSON(data []byte) error {
 	var raw map[string]any
-	if err := svc.CucinactlJSON(c, &raw, "pools", "describe", pool); err != nil {
-		return PoolInfo{}, err
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
 	}
-	pi := PoolInfo{Raw: raw}
-	if ws, ok := field(raw, "workers").([]any); ok {
-		pi.Workers = len(ws)
+	if raw["schema"] != "pool-describe.v1" {
+		return fmt.Errorf("expected pool-describe.v1 response")
 	}
-	if ss, ok := field(raw, "starts").([]any); ok {
-		for _, s := range ss {
-			m, _ := s.(map[string]any)
-			ps := PoolStart{VM: str(field(m, "vm")), Path: str(field(m, "path")),
-				ToRunning: dur(field(m, "to_running")), ToRegistered: dur(field(m, "to_registered")), ToFirstAction: dur(field(m, "to_first_action"))}
-			if t, err := time.Parse(time.RFC3339Nano, str(field(m, "launched"))); err == nil {
-				ps.Launched = t
-			}
-			pi.Starts = append(pi.Starts, ps)
+	pool, ok := raw["pool"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("pool-describe.v1 missing pool")
+	}
+	for _, k := range []string{"desired", "launching", "registered", "busy", "idle", "draining"} {
+		if _, ok := pool[k].(float64); !ok {
+			return fmt.Errorf("pool-describe.v1 missing numeric pool.%s", k)
 		}
 	}
-	return pi, nil
+	workers, ok := raw["workers"].([]any)
+	if !ok {
+		return fmt.Errorf("pool-describe.v1 missing workers array")
+	}
+	starts, ok := raw["starts"].([]any)
+	if !ok {
+		return fmt.Errorf("pool-describe.v1 missing starts array")
+	}
+	*pi = PoolInfo{Raw: raw, Workers: len(workers)}
+	for _, s := range starts {
+		m, ok := s.(map[string]any)
+		if !ok {
+			return fmt.Errorf("pool-describe.v1 malformed start")
+		}
+		ps := PoolStart{VM: str(m["vm"]), Path: str(m["path"]), ToRunning: dur(m["to_running_seconds"]), ToRegistered: dur(m["to_registered_seconds"]), ToFirstAction: dur(m["to_first_action_seconds"])}
+		if m["launched"] != nil {
+			var err error
+			ps.Launched, err = time.Parse(time.RFC3339Nano, str(m["launched"]))
+			if err != nil {
+				return fmt.Errorf("invalid launch timestamp: %w", err)
+			}
+		}
+		pi.Starts = append(pi.Starts, ps)
+	}
+	return nil
 }
 
-// field looks a key up as given, in camelCase and nested under "summary".
+func describePool(c *harness.Context, svc *infra.Services, pool string) (PoolInfo, error) {
+	var pi PoolInfo
+	err := svc.CucinactlJSON(c, &pi, "pools", "describe", pool)
+	return pi, err
+}
+
+// field looks a key up as given, in camelCase and in CLI pool/proto summary.
 func field(m map[string]any, key string) any {
 	if m == nil {
 		return nil
@@ -475,8 +564,12 @@ func field(m map[string]any, key string) any {
 	if v, ok := m[camel(key)]; ok {
 		return v
 	}
-	if s, ok := m["summary"].(map[string]any); ok {
-		return field(s, key)
+	for _, container := range []string{"pool", "summary"} {
+		if s, ok := m[container].(map[string]any); ok {
+			if v := field(s, key); v != nil {
+				return v
+			}
+		}
 	}
 	return nil
 }
@@ -524,9 +617,12 @@ func coldStarts(starts []PoolStart, from, to, firstSubmit time.Time) []time.Dura
 	var out []time.Duration
 	var first time.Time
 	for _, s := range starts {
-		if s.Launched.Before(from) || s.Launched.After(to) || s.ToFirstAction <= 0 {
+		if s.Launched.Before(from) || s.Launched.After(to) {
 			continue
 		}
+		if s.ToFirstAction <= 0 {
+			return nil
+		} // partial launch samples cannot prove a maximum
 		if first.IsZero() || s.Launched.Before(first) {
 			first = s.Launched
 		}
@@ -551,7 +647,13 @@ func coldStarts(starts []PoolStart, from, to, firstSubmit time.Time) []time.Dura
 // timeline. Without the aws capability fn just runs.
 func sampled(c *harness.Context, every time.Duration, fn func() error) (awsinv.UsageSummary, error) {
 	svc, err := infra.Of(c)
-	if err != nil || svc.EC2 == nil {
+	if err != nil {
+		return awsinv.UsageSummary{}, err
+	}
+	if svc.EC2 == nil {
+		if c.Env.Has(harness.RequiresAWS) {
+			return awsinv.UsageSummary{}, fmt.Errorf("AWS inventory unavailable")
+		}
 		return awsinv.UsageSummary{}, fn()
 	}
 	sctx, cancel := context.WithCancel(c)
@@ -561,7 +663,7 @@ func sampled(c *harness.Context, every time.Duration, fn func() error) (awsinv.U
 	cancel()
 	u := awsinv.Integrate(snaps)
 	if sampleErrs > 0 {
-		c.Note("AWS sampler: %d describe errors", sampleErrs)
+		c.Check(harness.CheckResult{Name: "AWS lifecycle sampling complete", Kind: "aws", Pass: false, Detail: fmt.Sprintf("%d describe errors; lifecycle/cost evidence incomplete", sampleErrs)})
 	}
 	c.Record("aws", u)
 	for k, v := range u.InstanceSeconds {
@@ -577,6 +679,10 @@ func sampled(c *harness.Context, every time.Duration, fn func() error) (awsinv.U
 	}
 	c.Result.Cost.EBSGBHours += u.VolumeGiBHours
 	bill := spend.Price(cost.Usage{Launches: spend.Launches(u.Lifecycles)}, c.Now())
+	if len(bill.Unpriced) > 0 {
+		c.Result.Cost.Unpriced = append(c.Result.Cost.Unpriced, bill.Unpriced...)
+		c.Check(harness.CheckResult{Name: "complete instance pricing", Kind: "cost", Detail: fmt.Sprintf("no verified price for %v; partial cost is not total spend", bill.Unpriced)})
+	}
 	for _, l := range bill.Lines {
 		c.AddCost(l.Category+":"+l.Detail, l.Amount.USD())
 	}
@@ -646,12 +752,17 @@ func PromCheck(name string, th slo.Threshold) harness.Check {
 			r.Skipped = err.Error()
 			return r
 		}
+		up, ok, err := p.Scalar(ctx, `max(up{job=~".*controller.*"})`, time.Time{})
+		if err != nil || !ok || up != 1 {
+			r.Detail = fmt.Sprintf("controller scrape unavailable (present=%v, up=%g, error=%v)", ok, up, err)
+			return r
+		}
 		v, ok, err := p.Scalar(ctx, th.Query, time.Time{})
 		switch {
 		case err != nil:
-			r.Skipped = "query failed: " + err.Error()
+			r.Detail = "query failed: " + err.Error()
 		case !ok:
-			r.Skipped = "no data"
+			r.Detail = "required Prometheus query returned no data"
 		default:
 			r.Value = strconv.FormatFloat(v, 'g', 6, 64)
 			r.Pass = th.Holds(v)
@@ -669,7 +780,7 @@ func ZeroResidueCheck(name string) harness.Check {
 	return harness.CheckFunc{Name: name, Kind: "aws", Fn: func(_ context.Context, c *harness.Context) harness.CheckResult {
 		r, err := residue(c)
 		if err != nil {
-			return harness.CheckResult{Skipped: err.Error()}
+			return harness.CheckResult{Detail: "inventory unavailable: " + err.Error()}
 		}
 		return harness.CheckResult{Query: "tag-filtered describe-instances/volumes/network-interfaces/addresses", Value: r.String(), Pass: r.Zero(), Detail: r.String()}
 	}}
@@ -686,34 +797,45 @@ var Guards = []harness.Check{
 func promMax(c *harness.Context, q string, from, to time.Time) (float64, bool) {
 	svc, err := infra.Of(c)
 	if err != nil {
+		c.Check(harness.CheckResult{Name: "required metrics source", Kind: "promql", Query: q, Detail: err.Error()})
 		return 0, false
 	}
 	p, err := svc.Prom(c)
 	if err != nil {
+		c.Check(harness.CheckResult{Name: "required metrics source", Kind: "promql", Query: q, Detail: err.Error()})
 		return 0, false
 	}
 	step := max(15*time.Second, to.Sub(from)/200)
 	ss, err := p.Range(c, q, from, to, step)
 	if err != nil {
-		c.Note("query %s: %v", q, err)
+		c.Check(harness.CheckResult{Name: "required metrics query", Kind: "promql", Query: q, Pass: false, Detail: err.Error()})
 		return 0, false
 	}
-	return promMaxOf(ss)
+	v, ok := promMaxOf(ss)
+	if !ok {
+		c.Check(harness.CheckResult{Name: "required metrics samples", Kind: "promql", Query: q, Pass: false, Detail: "no data"})
+	}
+	return v, ok
 }
 
 func promScalar(c *harness.Context, q string, at time.Time) (float64, bool) {
 	svc, err := infra.Of(c)
 	if err != nil {
+		c.Check(harness.CheckResult{Name: "required metrics source", Kind: "promql", Query: q, Detail: err.Error()})
 		return 0, false
 	}
 	p, err := svc.Prom(c)
 	if err != nil {
+		c.Check(harness.CheckResult{Name: "required metrics source", Kind: "promql", Query: q, Detail: err.Error()})
 		return 0, false
 	}
 	v, ok, err := p.Scalar(c, q, at)
 	if err != nil {
-		c.Note("query %s: %v", q, err)
+		c.Check(harness.CheckResult{Name: "required metrics query", Kind: "promql", Query: q, Pass: false, Detail: err.Error()})
 		return 0, false
+	}
+	if !ok {
+		c.Check(harness.CheckResult{Name: "required metrics samples", Kind: "promql", Query: q, Pass: false, Detail: "no data"})
 	}
 	return v, ok
 }

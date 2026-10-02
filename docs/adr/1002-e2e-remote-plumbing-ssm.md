@@ -21,7 +21,7 @@ Builds run for hours, longer than a sensible single Run Command.
 * Small files go inline (24 KiB chunks); files above 256 KiB go through an SSM port-forwarding session
   (`aws ssm start-session --document-name AWS-StartPortForwardingSession`) to a one-shot loopback HTTP receiver on the VM
   (python3 / `HttpListener`) with a random path token. **Secrets** (service keys) always take the port-forward path
-  (`PutPrivate`), are restricted to their owner, and are deleted after `cucinactl login --key "$(cat …)"`.
+  (`PutPrivate`), are restricted to their owner, and are deleted after `cucinactl login --key <file> --ca-file <bundle>` (the CLI takes a filename, never key contents in argv).
 * Bazel runs as a non-root user on Linux (`sudo -u ubuntu -H`) under `env -i` with a minimal environment.
 * Acceptance scenarios poll real infrastructure with real time (`remote.RealSleep`), the one place where waiting cannot use a
   fake clock; unit and integration tests inject a `Sleeper` and never sleep.
@@ -29,4 +29,6 @@ Builds run for hours, longer than a sensible single Run Command.
 ## Consequences
 * The POSIX scripts are exercised by the integration tier on the dev Mac (BSD tools); the PowerShell variants are first
   exercised in the campaign (no Windows host offline).
+* Cancelling a detached build stops its job tree with a separate bounded cleanup context; stopping the poller alone would leave cloud work running.
+* The POSIX transport/script integration tests run on Linux/macOS; they do not pretend `/bin/sh` exists on a native Windows test host. The PowerShell transport still needs its Windows acceptance run.
 * The dev Mac needs the Session Manager plugin (present via mise) for transfers above 256 KiB.

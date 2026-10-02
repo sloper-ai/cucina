@@ -9,16 +9,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// ScopeSmallFunctional is the user-selected .large/max-one-worker campaign.
+// Diagnostic timings must not qualify the original four-worker benchmark.
+const ScopeSmallFunctional = "small-functional"
 
 // Env is an environment descriptor, read from
 // ~/.config/cucina/e2e/<name>.json (0600, never committed: it holds instance
 // IDs, endpoints and other environment identifiers, §12). It is generated for
-// the AWS campaign from the OpenTofu outputs by
-// deploy/aws-e2e/scripts/campaign/env-descriptor.sh.
+// the AWS campaign from the OpenTofu outputs by `e2e env`.
 type Env struct {
 	Name string  `json:"name"`
 	Kind EnvKind `json:"kind"`
+	// MeasurementScope distinguishes functional checks from the original
+	// max-four, large-worker performance campaign.
+	MeasurementScope string `json:"measurementScope,omitempty"`
 	// RunID is the cucina:run tag value of the campaign (§12).
 	RunID string `json:"runId"`
 	// Capabilities lists the Requirements this environment satisfies.
@@ -52,6 +59,18 @@ type Env struct {
 	// WorkerSelectors maps a lane (linux, windows, macos) to the PromQL label
 	// matchers selecting its bb_worker metrics (default job=~".*worker.*").
 	WorkerSelectors map[string]string `json:"workerSelectors,omitempty"`
+	// CLI names disposable, isolated T20 resources, never production fixtures.
+	CLI *CLIFixtures `json:"cli,omitempty"`
+}
+
+// CLIFixtures is the explicit allow-list for T20 destructive CLI coverage.
+// The scenario verifies run-scoped names, idle state and operation ownership.
+type CLIFixtures struct {
+	Pool         string `json:"pool,omitempty"`
+	Host         string `json:"host,omitempty"`
+	VM           string `json:"vm,omitempty"`
+	InvocationID string `json:"invocationId,omitempty"`
+	Operation    string `json:"operation,omitempty"`
 }
 
 // ImageVersions are a pool's image IDs for T12.
@@ -77,6 +96,11 @@ type KubeEnv struct {
 	// UpgradeValuesFile carries T11's configuration change (add a pool,
 	// change a cache size).
 	UpgradeValuesFile string `json:"upgradeValuesFile,omitempty"`
+	// BootstrapCLI optionally runs a lead-owned private script after T0's
+	// install/test to export the CA/admin key and configure the local profile.
+	// Paths/arguments only, never inline credentials. Empty requires an
+	// already configured profile that is verified against the descriptor.
+	BootstrapCLI []string `json:"bootstrapCLI,omitempty"`
 	// RotateSigningKey is the argv that starts a signing-key rotation
 	// (T10e), e.g. ["kubectl","exec","deploy/cucina-controller","--",
 	// "cucina-controller","keys","rotate"].
@@ -100,6 +124,8 @@ type Endpoints struct {
 	PublicHost string `json:"publicHost,omitempty"`
 	// Host is the HostService endpoint (host:port, mTLS) Mac hosts dial (T10h).
 	Host string `json:"host,omitempty"`
+	// Enrollment is TLS (not mTLS); clients enroll before they have a certificate.
+	Enrollment string `json:"enrollment,omitempty"`
 	// WorkerListener is the private mTLS worker endpoint (host:port) as seen
 	// from the Linux client (T10h).
 	WorkerListener string `json:"workerListener,omitempty"`
@@ -129,6 +155,10 @@ type ClientEnv struct {
 	// STS overrides endpoints.sts for this client: in-VPC clients reach the
 	// control plane by its private address (R-DATA-4, no public-IP hairpin).
 	STS string `json:"sts,omitempty"`
+	// Discovery may advertise the public endpoint. Override the profile for
+	// in-VPC clients so REAPI and management never hairpin over the EIP.
+	RemoteExecution string `json:"remoteExecution,omitempty"`
+	Management      string `json:"management,omitempty"`
 }
 
 // DevMacEnv describes the dev Mac acting as host and macOS client (T13).
@@ -177,6 +207,11 @@ type Secrets struct {
 	ReadOnlyKeyFile string `json:"readOnlyKeyFile,omitempty"`
 	// AdminKeyFile: the Helm-generated break-glass admin key.
 	AdminKeyFile string `json:"adminKeyFile,omitempty"`
+	// Valid mTLS identities for T10h's positive controls, stored privately.
+	HostCertFile   string `json:"hostCertFile,omitempty"`
+	HostKeyFile    string `json:"hostKeyFile,omitempty"`
+	WorkerCertFile string `json:"workerCertFile,omitempty"`
+	WorkerKeyFile  string `json:"workerKeyFile,omitempty"`
 }
 
 // AbseilPin is the build under test (§10.2).
@@ -198,6 +233,9 @@ type Safety struct {
 
 // DescriptorPath returns ~/.config/cucina/e2e/<name>.json.
 func DescriptorPath(name string) (string, error) {
+	if !DescriptorName(name) {
+		return "", fmt.Errorf("invalid descriptor name %q", name)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -245,12 +283,21 @@ func (e *Env) Validate() error {
 	default:
 		return fmt.Errorf("environment %q: unknown kind %q", e.Name, e.Kind)
 	}
-	if e.Name == "" {
-		return fmt.Errorf("environment: missing name")
+	if !DescriptorName(e.Name) || !DescriptorName(e.RunID) {
+		return fmt.Errorf("environment: name and runId must be nonempty single path components")
 	}
-	if e.Has(RequiresAWS) {
+	if e.AWS != nil || e.Has(RequiresAWS) {
 		if e.AWS == nil || e.AWS.Region == "" || e.AWS.Tags["cucina:run"] == "" || e.AWS.Tags["cucina:env"] == "" {
 			return fmt.Errorf("environment %q: capability aws needs aws.region and the cucina:env/cucina:run tags (§12)", e.Name)
+		}
+		if e.AWS.Profile != "default" || e.AWS.Region != "us-west-1" || e.AWS.Tags["cucina:env"] != "e2e" || e.AWS.Tags["cucina:run"] != e.RunID {
+			return fmt.Errorf("environment %q: AWS scope must be profile default, region us-west-1, cucina:env=e2e and matching runId", e.Name)
+		}
+		if _, err := time.Parse(time.RFC3339, e.AWS.Tags["cucina:expires"]); err != nil {
+			return fmt.Errorf("environment %q: cucina:expires must be an RFC3339 timestamp", e.Name)
+		}
+		if e.Safety.MaxSpendUSD > DefaultBudgetUSD && !e.Safety.AllowOverBudget {
+			return fmt.Errorf("environment %q: budget above $300 requires explicit user-approved allowOverBudget", e.Name)
 		}
 		if e.Safety.MaxSpendUSD <= 0 || e.Safety.MaxInstances <= 0 {
 			return fmt.Errorf("environment %q: capability aws needs safety.maxSpendUSD and safety.maxInstances", e.Name)
@@ -293,7 +340,11 @@ func (e *Env) Has(r Requirement) bool {
 		_, ok := e.Clients["windows-client"]
 		return ok
 	case RequiresMacHost:
-		return e.DevMac != nil
+		return e.DevMac != nil && e.DevMac.HostdConfig != "" && e.DevMac.HostdBinary != ""
+	case RequiresHostdPkg:
+		return e.DevMac != nil && e.DevMac.PkgPath != "" && e.DevMac.MDMKit != ""
+	case RequiresCucinactl:
+		return len(e.Cucinactl) > 0
 	case RequiresIdP:
 		return e.IdP != nil && e.IdP.MockOAuth2URL != ""
 	case RequiresKubernetes:
@@ -317,6 +368,10 @@ func (e *Env) expandPaths() {
 	exp(&e.Secrets.ServiceKeyFile)
 	exp(&e.Secrets.ReadOnlyKeyFile)
 	exp(&e.Secrets.AdminKeyFile)
+	exp(&e.Secrets.HostCertFile)
+	exp(&e.Secrets.HostKeyFile)
+	exp(&e.Secrets.WorkerCertFile)
+	exp(&e.Secrets.WorkerKeyFile)
 	if e.IdP != nil {
 		exp(&e.IdP.CAFile)
 	}

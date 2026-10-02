@@ -11,8 +11,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -21,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,10 +31,13 @@ import (
 	"time"
 
 	repb "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/sloper-ai/cucina/internal/canary"
+	"github.com/sloper-ai/cucina/internal/ports"
+	"github.com/sloper-ai/cucina/test/e2e/collect/execlog"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
 	"github.com/sloper-ai/cucina/test/e2e/infra"
 	"github.com/sloper-ai/cucina/test/e2e/remote"
@@ -114,6 +120,9 @@ func mintMock(ctx context.Context, env *harness.Env, issuer, scenario string) (s
 		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("mock issuer %s: HTTP %d", issuer, resp.StatusCode)
+	}
 	var tr struct {
 		AccessToken string `json:"access_token"`
 		IDToken     string `json:"id_token"`
@@ -197,9 +206,20 @@ func exchange(ctx context.Context, env *harness.Env, subject, tokenType string) 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var e struct {
-		Error string `json:"error"`
+		Error       string `json:"error"`
+		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+		ExpiresIn   int    `json:"expires_in"`
 	}
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&e)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&e); err != nil {
+		return resp.StatusCode, "", fmt.Errorf("STS returned invalid JSON (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode == http.StatusOK && (e.AccessToken == "" || e.TokenType != "Bearer" || e.ExpiresIn <= 0 || e.Error != "") {
+		return resp.StatusCode, e.Error, fmt.Errorf("STS returned no usable access token")
+	}
+	if resp.StatusCode != http.StatusOK && e.AccessToken != "" {
+		return resp.StatusCode, e.Error, fmt.Errorf("STS included an access token in an error response")
+	}
 	return resp.StatusCode, e.Error, nil
 }
 
@@ -209,11 +229,39 @@ const (
 )
 
 func secScenario(id, title string, timeout time.Duration, req []harness.Requirement, run func(*harness.Context) error) *harness.Scenario {
-	return &harness.Scenario{
+	s := &harness.Scenario{
 		ID: id, Title: "Security: " + title, Requires: append([]harness.Requirement{harness.RequiresKubernetes}, req...),
 		Envs: []harness.EnvKind{harness.EnvAWS}, Cost: harness.CostNone, Essential: true, Timeout: timeout,
 		Post: Guards, Run: run,
 	}
+	if id == "T10c" || id == "T10e" {
+		// These force real remote work, not free authentication-only probes.
+		s.Cost, s.EstimateUSD, s.MaxInstances = harness.CostHigh, 20, 4
+		s.Run = func(c *harness.Context) error {
+			svc, err := infra.Of(c)
+			if err != nil {
+				return err
+			}
+			if svc.EC2 == nil {
+				return harness.Skip("security workload requires worker inventory/spend accounting")
+			}
+			_, err = sampled(c, 15*time.Second, func() error {
+				if err := run(c); err != nil {
+					return err
+				}
+				_, residue, err := waitZero(c, 30*time.Minute)
+				if err != nil {
+					return err
+				}
+				if !residue.Zero() {
+					return harness.Fail("security workload did not scale back to zero: %s", residue.String())
+				}
+				return nil
+			})
+			return err
+		}
+	}
+	return s
 }
 
 func t10() []*harness.Scenario {
@@ -255,12 +303,27 @@ func runT10a(c *harness.Context) error {
 	if err != nil {
 		return err
 	}
-	cfgDir := c.Dir() + "/cucinactl-config"
-	cmd := exec.CommandContext(c, bin, "login", c.Env.Endpoints.STS, "--no-browser")
-	// The CLI reaches the in-cluster issuer through the CONNECT proxy and must
-	// trust the throwaway mock CA (SSL_CERT_FILE / CUCINA_EXTRA_CA_FILE).
+	descriptor, err := harness.DescriptorPath(c.Env.Name)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(descriptor), 0o700); err != nil {
+		return err
+	}
+	cfgDir, err := os.MkdirTemp(filepath.Dir(descriptor), "t10a-login-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(cfgDir) }()
+	args := []string{"login", c.Env.Endpoints.STS, "--no-browser", "--provider", "google", "--credential-store", "file"}
+	if c.Env.Endpoints.CAFile != "" {
+		args = append(args, "--ca-file", c.Env.Endpoints.CAFile)
+	}
+	cmd := exec.CommandContext(c, bin, args...)
+	// The cluster CA is explicit; SSL_CERT_FILE adds the independent mock-IdP
+	// CA. Credentials use a private, disposable file store, not the user's keychain.
 	cmd.Env = append(os.Environ(), "CUCINA_CONFIG_DIR="+cfgDir, "NO_COLOR=1", "HTTPS_PROXY="+proxy, "https_proxy="+proxy,
-		"NO_PROXY=127.0.0.1,localhost,"+hostOf(c.Env.Endpoints.STS), "SSL_CERT_FILE="+c.Env.IdP.CAFile, "CUCINA_EXTRA_CA_FILE="+c.Env.IdP.CAFile)
+		"NO_PROXY=127.0.0.1,localhost,"+hostOf(c.Env.Endpoints.STS), "SSL_CERT_FILE="+c.Env.IdP.CAFile)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -326,19 +389,37 @@ func runT10a(c *harness.Context) error {
 func runT10b(c *harness.Context) error {
 	cases := []struct {
 		name, issuer, scenario, tokenType string
-		accept                            bool
+		status                            int
+		oauthError                        string
 		waitExpiry                        time.Duration
 	}{
-		{"google valid (control)", "google", "valid", idTokenType, true, 0},
-		{"wrong hd", "google", "wrong-hd", idTokenType, false, 0},
-		{"unverified email", "google", "unverified-email", idTokenType, false, 0},
-		{"wrong aud", "google", "wrong-aud", idTokenType, false, 0},
-		{"github valid push (control)", "github", "push-main", jwtType, true, 0},
-		{"foreign repository id", "github", "foreign-repo", jwtType, false, 0},
-		{"pull_request_target", "github", "pull-request-target", jwtType, false, 0},
-		{"expired token", "google-short", "valid", idTokenType, false, 90 * time.Second}, // 30 s tokens, wait past expiry + skew
+		{"wrong hd", "google", "wrong-hd", idTokenType, http.StatusForbidden, "access_denied", 0},
+		{"unverified email", "google", "unverified-email", idTokenType, http.StatusForbidden, "access_denied", 0},
+		{"wrong aud", "google", "wrong-aud", idTokenType, http.StatusBadRequest, "invalid_grant", 0},
+		{"foreign repository id", "github", "foreign-repo", jwtType, http.StatusForbidden, "access_denied", 0},
+		{"pull_request_target", "github", "pull-request-target", jwtType, http.StatusForbidden, "access_denied", 0},
+		{"expired token", "google-short", "valid", idTokenType, http.StatusBadRequest, "invalid_grant", 90 * time.Second},
 	}
-	var bad []string
+	control := func(issuer, typ string) error {
+		scenario := "valid"
+		if issuer == "github" {
+			scenario = "push-main"
+		} else {
+			issuer = "google"
+		}
+		tok, err := mintMock(c, c.Env, issuer, scenario)
+		if err != nil {
+			return err
+		}
+		code, oauthErr, err := exchange(c, c.Env, tok, typ)
+		if err != nil {
+			return err
+		}
+		if code != http.StatusOK || oauthErr != "" {
+			return harness.Fail("%s valid control: HTTP %d %s", issuer, code, oauthErr)
+		}
+		return nil
+	}
 	for _, tc := range cases {
 		tok, err := mintMock(c, c.Env, tc.issuer, tc.scenario)
 		if err != nil {
@@ -353,125 +434,521 @@ func runT10b(c *harness.Context) error {
 		if err != nil {
 			return err
 		}
-		accepted := code == http.StatusOK
-		pass := accepted == tc.accept
+		pass := code == tc.status && oauthErr == tc.oauthError
 		c.Check(harness.CheckResult{Name: tc.name, Kind: "sts", Pass: pass, Value: fmt.Sprintf("HTTP %d %s", code, oauthErr)})
 		if !pass {
-			bad = append(bad, fmt.Sprintf("%s: HTTP %d %s", tc.name, code, oauthErr))
+			return harness.Fail("%s: HTTP %d %s, want HTTP %d %s", tc.name, code, oauthErr, tc.status, tc.oauthError)
 		}
-	}
-	if len(bad) > 0 {
-		return harness.Fail("%s", strings.Join(bad, "; "))
+		if err := control(tc.issuer, tc.tokenType); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// T10c: one Bazel server keeps building past the 15-minute token TTL; the
-// credential helper renews without failures.
+// CredentialUse is non-secret evidence emitted when Bazel calls its helper.
+type CredentialUse struct {
+	At          float64 `json:"at"`
+	Issued      int64   `json:"issued"`
+	Expires     int64   `json:"expires"`
+	Kid         string  `json:"kid"`
+	Fingerprint string  `json:"fingerprint"`
+}
+
+// TokenRenewalCheck is the T10c oracle over one invocation's BEP, compact
+// execution log and non-secret helper trace; it is usable by the harness/report.
+type TokenRenewalCheck struct {
+	Started, Finished time.Time
+	Uses              []CredentialUse
+	RemoteStarts      []time.Time
+}
+
+func (TokenRenewalCheck) CheckName() string { return "one active build renews beyond one token TTL" }
+
+func (e TokenRenewalCheck) Evaluate(_ context.Context, _ *harness.Context) harness.CheckResult {
+	r := harness.CheckResult{Name: e.CheckName(), Kind: "auth"}
+	if len(e.Uses) == 0 || e.Started.IsZero() || !e.Finished.After(e.Started) {
+		r.Detail = "missing invocation or helper timestamps"
+		return r
+	}
+	first := e.Uses[0]
+	for _, u := range e.Uses {
+		if u.At < first.At {
+			first = u
+		}
+	}
+	expiry := time.Unix(first.Expires, 0)
+	ttl := time.Duration(first.Expires-first.Issued) * time.Second
+	if ttl <= 0 || !expiry.After(e.Started) || !e.Finished.After(expiry) || e.Finished.Sub(e.Started) <= ttl {
+		r.Detail = "this invocation did not span a whole token TTL"
+		return r
+	}
+	renewed, beforeExpiry, afterExpiry := false, false, false
+	for _, u := range e.Uses {
+		at := time.Unix(0, int64(u.At*1e9))
+		if at.Before(e.Started) || at.After(e.Finished) || u.Fingerprint == "" || u.Expires <= u.Issued {
+			r.Detail = "helper evidence does not belong to this invocation"
+			return r
+		}
+		renewed = renewed || (u.Fingerprint != first.Fingerprint && u.Expires > first.Expires && u.Issued > first.Issued && !time.Unix(u.Issued, 0).Before(e.Started))
+	}
+	for _, at := range e.RemoteStarts {
+		if at.Before(e.Started) || at.After(e.Finished) {
+			continue
+		}
+		beforeExpiry = beforeExpiry || at.Before(expiry)
+		afterExpiry = afterExpiry || at.After(expiry)
+	}
+	r.Pass = renewed && beforeExpiry && afterExpiry
+	if !r.Pass {
+		r.Detail = "missing in-build renewal or remote execution on both sides of JWT expiry"
+	}
+	return r
+}
+
+// recordCredentials wraps the public helper protocol, recording only token
+// times/kid and a SHA-256 fingerprint. Bearer tokens stay in the helper pipe,
+// never in execution artifacts. Only Bazel invokes it; observation cannot renew.
+func recordCredentials(lr *laneRun) (string, func() ([]CredentialUse, error), error) {
+	c, h := lr.c, lr.host
+	cli := hjoin(h, h.WorkDir(), "bin", "cucinactl")
+	wrapper := hjoin(h, h.WorkDir(), c.Scenario.ID+"-credential-helper")
+	trace := wrapper + ".jsonl"
+	program := `#!/usr/bin/env python3
+# SPDX-License-Identifier: FSL-1.1-ALv2
+import base64, hashlib, json, os, subprocess, sys, time
+r = subprocess.run(COMMAND, input=sys.stdin.buffer.read(), stdout=subprocess.PIPE)
+if r.returncode:
+    sys.exit(r.returncode)
+try:
+    doc = json.loads(r.stdout)
+    auth = doc["headers"]["Authorization"][0]
+    if not auth.startswith("Bearer "):
+        raise ValueError()
+    token = auth[7:]
+    parts = token.split(".")
+    header, claims = [json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4))) for p in parts[:2]]
+    use = {"at": time.time(), "issued": int(claims["iat"]), "expires": int(claims["exp"]),
+           "kid": header["kid"], "fingerprint": hashlib.sha256(token.encode()).hexdigest()}
+    fd = os.open(TRACE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write(json.dumps(use) + "\n")
+except Exception:
+    print("credential evidence is missing or invalid", file=sys.stderr)
+    sys.exit(1)
+sys.stdout.buffer.write(r.stdout)
+`
+	program = strings.ReplaceAll(program, "COMMAND", jsonString([]string{cli, "credential-helper", "get"}))
+	program = strings.ReplaceAll(program, "TRACE", jsonString(trace))
+	local := filepath.Join(c.Dir(), "credential-recorder.py")
+	if err := os.WriteFile(local, []byte(program), 0o700); err != nil {
+		return "", nil, err
+	}
+	if err := h.Put(c, local, wrapper); err != nil {
+		return "", nil, err
+	}
+	// Put is root-owned on SSM clients. Set the executable mode as root and
+	// create only the metadata trace as the non-root Bazel user's writable file.
+	res, err := h.Run(c, "chmod 0755 "+shellQuote(wrapper)+" && install -o "+shellQuote(lr.user)+" -m 0600 /dev/null "+shellQuote(trace), remote.Opts{})
+	if err != nil {
+		return "", nil, err
+	}
+	if err := res.Err(); err != nil {
+		return "", nil, err
+	}
+	res, err = h.Run(c, "command -v python3 >/dev/null && test -w "+shellQuote(trace), remote.Opts{User: lr.user})
+	if err != nil {
+		return "", nil, err
+	}
+	if err := res.Err(); err != nil {
+		return "", nil, harness.Skip("T10 credential evidence requires python3 and a writable client trace")
+	}
+	read := func() ([]CredentialUse, error) {
+		res, err := h.Run(c, readFileScript(h, trace), remote.Opts{User: lr.user})
+		if err != nil {
+			return nil, err
+		}
+		if err := res.Err(); err != nil {
+			return nil, err
+		}
+		var uses []CredentialUse
+		for _, line := range strings.Split(strings.TrimSpace(string(res.Stdout)), "\n") {
+			var u CredentialUse
+			if json.Unmarshal([]byte(line), &u) != nil || u.At <= 0 || u.Issued <= 0 || u.Expires <= u.Issued || u.Kid == "" || u.Fingerprint == "" {
+				return nil, harness.Fail("no valid Bazel credential-helper evidence")
+			}
+			uses = append(uses, u)
+		}
+		return uses, nil
+	}
+	target := c.Env.Endpoints.RemoteExecution
+	if client := c.Env.Clients[lr.lane.Host]; client.RemoteExecution != "" {
+		target = client.RemoteExecution
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Hostname() == "" {
+		return "", nil, harness.Fail("credential helper needs a REAPI URL with a host")
+	}
+	return "--credential_helper=" + u.Hostname() + "=" + wrapper, read, nil
+}
+
+// T10c adds a serial, one-minute-per-action remote fixture to the unchanged
+// Abseil test invocation. It guarantees work across a whole JWT TTL without
+// depending on Abseil's machine-dependent speed or between-invocation renewal.
 func runT10c(c *harness.Context) error {
+	control, err := campaignToken(c)
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(control.Raw, ".")
+	var claims struct {
+		Issued  int64 `json:"iat"`
+		Expires int64 `json:"exp"`
+	}
+	if len(parts) != 3 {
+		return harness.Fail("missing initial JWT lifetime")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || json.Unmarshal(payload, &claims) != nil || claims.Expires <= claims.Issued {
+		return harness.Fail("missing initial JWT lifetime")
+	}
+	ttl := time.Duration(claims.Expires-claims.Issued) * time.Second
+	if ttl > 30*time.Minute {
+		return harness.Skip("T10c's bounded remote fixture supports token TTLs up to 30 minutes")
+	}
 	lr, err := openLane(c, LinuxLane)
 	if err != nil {
 		return err
 	}
-	start := c.Now()
-	for i := 0; c.Now().Sub(start) < 17*time.Minute; i++ {
-		o, err := lr.bazel(fmt.Sprintf("long-%d", i), BuildOpts{Command: "test", Extra: []string{"--noremote_accept_cached"}})
-		if err != nil {
+	flag, read, err := recordCredentials(lr)
+	if err != nil {
+		return err
+	}
+	dir := hjoin(lr.host, lr.host.WorkDir(), "t10c-renewal")
+	var build strings.Builder
+	build.WriteString("# SPDX-License-Identifier: FSL-1.1-ALv2\n")
+	steps := int((ttl+time.Minute-1)/time.Minute) + 2
+	for i := 0; i < steps; i++ {
+		srcs, cmd := "[]", "/bin/sleep 60 && printf '"+uuid.NewString()+"\\n' >$@"
+		if i > 0 {
+			srcs = fmt.Sprintf("[\":step_%d\"]", i-1)
+			cmd = fmt.Sprintf("/bin/sleep 60 && /bin/cat $(location :step_%d) >$@", i-1)
+		}
+		fmt.Fprintf(&build, "genrule(name = %q, srcs = %s, outs = [%q], cmd = %q, visibility = [\"//visibility:public\"])\n", fmt.Sprintf("step_%d", i), srcs, fmt.Sprintf("step_%d.txt", i), cmd)
+	}
+	for name, contents := range map[string]string{"MODULE.bazel": "# SPDX-License-Identifier: FSL-1.1-ALv2\nmodule(name = \"cucina_renewal\")\n", "BUILD.bazel": build.String()} {
+		local := filepath.Join(c.Dir(), "renewal-"+name)
+		if err := os.WriteFile(local, []byte(contents), 0o600); err != nil {
 			return err
 		}
-		if err := mustSucceed(o, "build spanning the token TTL"); err != nil {
+		if err := lr.host.Put(c, local, hjoin(lr.host, dir, name)); err != nil {
 			return err
 		}
 	}
-	c.Metric("span_seconds", c.Now().Sub(start).Seconds(), "s")
+	res, err := lr.host.Run(c, "chmod 0755 "+shellQuote(dir)+" && chmod 0644 "+shellQuote(hjoin(lr.host, dir, "MODULE.bazel"))+" "+shellQuote(hjoin(lr.host, dir, "BUILD.bazel")), remote.Opts{})
+	if err != nil {
+		return err
+	}
+	if err := res.Err(); err != nil {
+		return err
+	}
+	o, err := lr.bazel("ttl-spanning-test", BuildOpts{Command: "test", ForceExecute: true, Extra: []string{flag,
+		"--inject_repository=cucina_renewal=" + dir, "--nobuild_tests_only", fmt.Sprintf("@cucina_renewal//:step_%d", steps-1)}})
+	if err != nil {
+		return err
+	}
+	if err := mustSucceed(o, "single build spanning the token TTL"); err != nil {
+		return err
+	}
+	uses, err := read()
+	if err != nil {
+		return err
+	}
+	log, err := execlog.ReadFile(o.ExecLogPath)
+	if err != nil {
+		return err
+	}
+	if o.BEP == nil {
+		return harness.Fail("missing invocation timestamps")
+	}
+	check := TokenRenewalCheck{Started: o.BEP.Started, Finished: o.BEP.Finished, Uses: uses}
+	for _, spawn := range log.Spawns {
+		if spawn.Remote() {
+			check.RemoteStarts = append(check.RemoteStarts, spawn.Start)
+		}
+	}
+	verdict := check.Evaluate(c, c)
+	c.Check(verdict)
+	c.Record("credentialUses", uses)
+	c.Metric("span_seconds", o.BEP.Finished.Sub(o.BEP.Started).Seconds(), "s")
+	c.Metric("token_ttl_seconds", ttl.Seconds(), "s")
+	if !verdict.Pass {
+		return harness.Fail("%s", verdict.Detail)
+	}
 	return nil
 }
 
-// T10d: a minted token keeps working until its principal is revoked, then
-// fails within 3 minutes (deny-list propagation to the frontends).
+func campaignToken(c *harness.Context) (canary.Token, error) {
+	if c.Env.Secrets.ServiceKeyFile == "" || c.Env.Endpoints.STS == "" || c.Env.Endpoints.RemoteExecution == "" {
+		return canary.Token{}, harness.Skip("STS, REAPI and secrets.serviceKeyFile are required for a valid control")
+	}
+	hc, err := stsHTTP(c.Env)
+	if err != nil {
+		return canary.Token{}, err
+	}
+	return (&canary.STS{URL: c.Env.Endpoints.STS, KeyFile: c.Env.Secrets.ServiceKeyFile, HTTP: hc, Now: c.Now}).Token(c)
+}
+
+func createServiceKey(c *harness.Context, svc *infra.Services, subject, purpose string) (string, string, error) {
+	account, ok := strings.CutPrefix(subject, "sa:")
+	if !ok || account == "" {
+		return "", "", harness.Fail("campaign writer is not a service account")
+	}
+	var created struct {
+		KeyID   string `json:"key_id"`
+		Account string `json:"account"`
+		Key     string `json:"key"`
+	}
+	if err := svc.CucinactlJSON(c, &created, "keys", "create", "--account", account, "--description", purpose+"-"+c.Env.RunID, "--ttl", "1h"); err != nil {
+		return "", "", err
+	}
+	if created.KeyID == "" || created.Key == "" || created.Account != account {
+		return "", "", harness.Fail("keys create returned no key/key_id or a different account")
+	}
+	return created.Key, created.KeyID, nil
+}
+
+// revokeCreatedKey cleans up the exchange credential; it is NOT the deny-list proof.
+func revokeCreatedKey(c *harness.Context, svc *infra.Services, id string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c), 30*time.Second)
+	defer cancel()
+	_, err := svc.Cucinactl(ctx, "keys", "revoke", id, "--yes")
+	c.Check(harness.CheckResult{Name: "temporary service key revoked", Kind: "cleanup", Pass: err == nil, Detail: errString(err)})
+}
+
+func casAccess(ctx context.Context, env *harness.Env, token string) error {
+	conn, err := endpoint(env).Dial(token)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err = repb.NewContentAddressableStorageClient(conn).FindMissingBlobs(ctx, &repb.FindMissingBlobsRequest{
+		InstanceName: instanceName(env), BlobDigests: []*repb.Digest{{Hash: strings.Repeat("cd", 32), SizeBytes: 1}}})
+	return err
+}
+
+// T10d revokes the JWT's session, not the exchange-only service key. Both
+// probes reuse their original tokens, which stay unexpired throughout the bound.
 func runT10d(c *harness.Context) error {
 	svc, err := infra.Of(c)
 	if err != nil {
 		return err
 	}
-	var created map[string]any
-	if err := svc.CucinactlJSON(c, &created, "keys", "create", "e2e-t10d-"+c.Env.RunID); err != nil {
+	control, err := campaignToken(c)
+	if err != nil {
 		return err
 	}
-	key, id := str(field(created, "key")), str(field(created, "id"))
-	if key == "" || id == "" {
-		return harness.Fail("keys create returned no key/id")
+	key, id, err := createServiceKey(c, svc, control.Subject, "e2e-t10d")
+	if err != nil {
+		return err
 	}
+	defer revokeCreatedKey(c, svc, id)
 	hc, err := stsHTTP(c.Env)
 	if err != nil {
 		return err
 	}
-	tok, err := (&canary.STS{URL: c.Env.Endpoints.STS, Key: key, HTTP: hc}).Token(c)
+	tok, err := (&canary.STS{URL: c.Env.Endpoints.STS, Key: key, HTTP: hc, Now: c.Now}).Token(c)
 	if err != nil {
-		return harness.Fail("mint with the new key: %v", err)
-	}
-	probe := func() canary.Result {
-		p := &canary.Probe{Kind: canary.KindCache, Endpoint: endpoint(c.Env), Tokens: canary.StaticToken(tok.Raw), Timeout: time.Minute}
-		return p.Run(c)
-	}
-	if r := probe(); !r.Success {
-		return harness.Fail("the token did not work before revocation: %s", r.Error)
-	}
-	if _, err := svc.Cucinactl(c, "keys", "revoke", id, "--yes"); err != nil {
 		return err
 	}
+	// Token was signature-verified by STS.Token; only extract the session here.
+	parts := strings.Split(tok.Raw, ".")
+	var claims struct {
+		SID string `json:"sid"`
+	}
+	if len(parts) != 3 {
+		return harness.Fail("STS returned a malformed JWT")
+	}
+	body, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || json.Unmarshal(body, &claims) != nil || claims.SID == "" {
+		return harness.Fail("STS returned no JWT session")
+	}
+	if !tok.Expiry.After(c.Now().Add(4*time.Minute)) || !control.Expiry.After(c.Now().Add(4*time.Minute)) {
+		return harness.Skip("token TTL must exceed the 3-minute revocation bound plus expiry skew")
+	}
+	for _, raw := range []string{control.Raw, tok.Raw} {
+		if err := casAccess(c, c.Env, raw); err != nil {
+			return harness.Fail("valid token failed before revocation: %s", status.Code(err))
+		}
+	}
 	revoked := c.Now()
+	if _, err := svc.Cucinactl(c, "keys", "revoke", "--sid", claims.SID, "--reason", "T10d existing-token proof", "--yes"); err != nil {
+		return err
+	}
+	deadline, cancel := context.WithTimeout(c, 3*time.Minute-c.Now().Sub(revoked))
+	defer cancel()
 	for {
-		r := probe()
-		if !r.Success {
+		if err := casAccess(deadline, c.Env, control.Raw); err != nil {
+			return harness.Fail("valid control unavailable during revocation: %s", status.Code(err))
+		}
+		code := status.Code(casAccess(deadline, c.Env, tok.Raw))
+		if code == codes.PermissionDenied {
+			if err := casAccess(deadline, c.Env, control.Raw); err != nil {
+				return harness.Fail("valid control failed after denial: %s", status.Code(err))
+			}
 			took := c.Now().Sub(revoked)
 			c.Metric("revocation_seconds", took.Seconds(), "s")
-			c.Check(harness.CheckResult{Name: "revocation ≤ 3 min", Kind: "auth", Pass: took <= 3*time.Minute, Value: took.String(), Detail: r.Error})
 			if took > 3*time.Minute {
 				return harness.Fail("revocation took %s", took)
 			}
 			return nil
 		}
-		if c.Now().Sub(revoked) > 5*time.Minute {
-			return harness.Fail("the revoked principal's token still works after 5 min")
+		if code != codes.OK {
+			return harness.Fail("revocation probe returned %s, not PermissionDenied", code)
 		}
-		if err := remote.RealSleep(c, 10*time.Second); err != nil {
-			return err
+		if err := remote.RealSleep(deadline, 5*time.Second); err != nil {
+			return harness.Fail("existing token not denied within 3 minutes")
 		}
 	}
 }
 
-// T10e: a signing-key rotation while a build runs causes no failure.
+// T10e rotates only after this invocation is executing, observes a changed
+// signing kid while it is still active, and joins/cancels the workload on all paths.
 func runT10e(c *harness.Context) error {
-	argv := c.Env.Kubernetes.RotateSigningKey
-	if len(argv) == 0 {
+	if c.Env.Kubernetes == nil || len(c.Env.Kubernetes.RotateSigningKey) == 0 {
 		return harness.Skip("no kubernetes.rotateSigningKey command in the environment descriptor")
 	}
+	argv := c.Env.Kubernetes.RotateSigningKey
 	lr, err := openLane(c, LinuxLane)
 	if err != nil {
 		return err
 	}
+	old, err := campaignToken(c)
+	if err != nil {
+		return err
+	}
+	flag, read, err := recordCredentials(lr)
+	if err != nil {
+		return err
+	}
+	invocation := uuid.NewString()
+	ctx, cancel := context.WithCancel(c)
 	done := make(chan error, 1)
+	finished := false
+	defer func() {
+		cancel()
+		if !finished {
+			<-done
+		}
+	}()
 	go func() {
-		o, err := lr.bazel("build-during-rotation", BuildOpts{Command: "test", Extra: []string{"--noremote_accept_cached"}})
+		o, err := lr.bazel("build-during-rotation", BuildOpts{Command: "test", Context: ctx, ForceExecute: true,
+			Extra: []string{flag, "--invocation_id=" + invocation}})
 		if err == nil {
 			err = mustSucceed(o, "build during signing-key rotation")
 		}
 		done <- err
 	}()
-	if err := remote.RealSleep(c, 2*time.Minute); err != nil {
+	stillRunning := func() error {
+		select {
+		case err := <-done:
+			finished = true
+			if err != nil {
+				return err
+			}
+			return harness.Fail("workload ended before signing-key rotation was observed during execution")
+		default:
+			return nil
+		}
+	}
+	active := func() (bool, error) {
+		if err := stillRunning(); err != nil {
+			return false, err
+		}
+		var ops struct {
+			Operations []struct {
+				Stage, Name      string
+				ToolInvocationID string `json:"tool_invocation_id"`
+				InvocationID     string `json:"invocation_id"`
+			} `json:"operations"`
+		}
+		if err := lr.svc.CucinactlJSON(c, &ops, "ops", "list", "--stage", "executing", "--invocation", invocation); err != nil {
+			return false, err
+		}
+		for _, op := range ops.Operations {
+			if op.Name != "" && strings.EqualFold(op.Stage, "executing") && (op.ToolInvocationID == invocation || op.InvocationID == invocation) {
+				return true, stillRunning()
+			}
+		}
+		return false, nil
+	}
+	for {
+		ok, err := active()
+		if err != nil {
+			return err
+		}
+		if ok {
+			break
+		}
+		if err := remote.RealSleep(ctx, time.Second); err != nil {
+			return err
+		}
+	}
+	uses, err := read()
+	if err != nil {
 		return err
 	}
-	if err := c.Step("rotate the signing key", func() error {
-		cmd := exec.CommandContext(c, argv[0], argv[1:]...)
-		cmd.Env = append(os.Environ(), "KUBECONFIG="+c.Env.Kubernetes.Kubeconfig)
-		out, err := cmd.CombinedOutput()
-		c.Record("rotation", tail(string(out), 4000))
+	if uses[0].Kid != old.KeyID {
+		return harness.Fail("workload and pre-rotation control use different signing keys")
+	}
+	if err := stillRunning(); err != nil {
 		return err
+	}
+	if err := c.Step("rotate the signing key during active execution", func() error {
+		r, err := scenarioExec(c).Run(ctx, ports.Command{Path: argv[0], Args: argv[1:], Env: append(os.Environ(), "KUBECONFIG="+c.Env.Kubernetes.Kubeconfig)})
+		if err != nil {
+			return err
+		}
+		if r.ExitCode != 0 {
+			return harness.Fail("signing-key rotation command exited %d", r.ExitCode)
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
-	return <-done
+	for {
+		if err := stillRunning(); err != nil {
+			return err
+		}
+		fresh, err := campaignToken(c)
+		if err != nil {
+			return err
+		}
+		if fresh.KeyID != old.KeyID {
+			if ok, err := active(); err != nil {
+				return err
+			} else if ok {
+				for _, raw := range []string{old.Raw, fresh.Raw} {
+					if err := casAccess(ctx, c.Env, raw); err != nil {
+						return harness.Fail("old/new signing-key control failed: %s", status.Code(err))
+					}
+				}
+				if err := stillRunning(); err != nil {
+					return err
+				}
+				c.Record("signingKeys", map[string]string{"before": old.KeyID, "after": fresh.KeyID})
+				break
+			}
+		}
+		if err := remote.RealSleep(ctx, time.Second); err != nil {
+			return err
+		}
+	}
+	err = <-done
+	finished = true
+	return err
 }
 
 func readOnlyToken(c *harness.Context) (string, error) {
@@ -483,7 +960,7 @@ func readOnlyToken(c *harness.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	t, err := (&canary.STS{URL: c.Env.Endpoints.STS, KeyFile: kf, HTTP: hc}).Token(c)
+	t, err := (&canary.STS{URL: c.Env.Endpoints.STS, KeyFile: kf, HTTP: hc, Now: c.Now}).Token(c)
 	return t.Raw, err
 }
 
@@ -499,10 +976,22 @@ func runT10f(c *harness.Context) error {
 	}
 	defer func() { _ = conn.Close() }()
 	ac := repb.NewActionCacheClient(conn)
+	control, err := campaignToken(c)
+	if err != nil {
+		return err
+	}
+	writer, err := endpoint(c.Env).Dial(control.Raw)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = writer.Close() }()
 	d := &repb.Digest{Hash: strings.Repeat("ab", 32), SizeBytes: 1}
+	if _, err := repb.NewActionCacheClient(writer).UpdateActionResult(c, &repb.UpdateActionResultRequest{InstanceName: instanceName(c.Env), ActionDigest: d, ActionResult: &repb.ActionResult{}}); err != nil {
+		return harness.Fail("valid writer cannot write the AC: %s", status.Code(err))
+	}
 	_, getErr := ac.GetActionResult(c, &repb.GetActionResultRequest{InstanceName: instanceName(c.Env), ActionDigest: d})
 	_, putErr := ac.UpdateActionResult(c, &repb.UpdateActionResultRequest{InstanceName: instanceName(c.Env), ActionDigest: d, ActionResult: &repb.ActionResult{}})
-	readOK := getErr == nil || status.Code(getErr) == codes.NotFound
+	readOK := getErr == nil
 	denied := status.Code(putErr) == codes.PermissionDenied
 	c.Check(harness.CheckResult{Name: "AC read allowed", Kind: "auth", Pass: readOK, Value: status.Code(getErr).String()})
 	c.Check(harness.CheckResult{Name: "AC write denied", Kind: "auth", Pass: denied, Value: status.Code(putErr).String()})
@@ -514,6 +1003,13 @@ func runT10f(c *harness.Context) error {
 
 // T10g: no token, no access (REAPI through the client endpoint).
 func runT10g(c *harness.Context) error {
+	control, err := campaignToken(c)
+	if err != nil {
+		return err
+	}
+	if err := casAccess(c, c.Env, control.Raw); err != nil {
+		return harness.Fail("authenticated control failed: %s", status.Code(err))
+	}
 	conn, err := endpoint(c.Env).Dial("")
 	if err != nil {
 		return err
@@ -534,7 +1030,7 @@ func runT10g(c *harness.Context) error {
 	sort.Strings(names)
 	for _, n := range names {
 		code := status.Code(calls[n])
-		ok := code == codes.Unauthenticated || code == codes.PermissionDenied
+		ok := code == codes.Unauthenticated
 		c.Check(harness.CheckResult{Name: n + " without a token", Kind: "auth", Pass: ok, Value: code.String()})
 		if !ok {
 			bad = append(bad, n+"="+code.String())
@@ -542,6 +1038,9 @@ func runT10g(c *harness.Context) error {
 	}
 	if len(bad) > 0 {
 		return harness.Fail("unauthenticated calls not rejected: %s", strings.Join(bad, ", "))
+	}
+	if err := casAccess(c, c.Env, control.Raw); err != nil {
+		return harness.Fail("authenticated control failed after denial: %s", status.Code(err))
 	}
 	return nil
 }
@@ -561,67 +1060,130 @@ func selfSignedClient() (tls.Certificate, error) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}, nil
 }
 
-// mtlsRejected dials an mTLS endpoint with the given client certificates and
-// reports whether the server refused (handshake failure or an alert on the
-// first read).
-func mtlsRejected(addr string, certs []tls.Certificate) (bool, string) {
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr,
-		&tls.Config{InsecureSkipVerify: true, Certificates: certs, NextProtos: []string{"h2"}}) //nolint:gosec // probing the server's client-auth only
+// tlsProbe sends the HTTP/2 preface so TLS 1.3's deferred client-auth alert is
+// read too. EOF, timeout, DNS errors and local server-trust failures are not denials.
+func tlsProbe(ctx context.Context, addr string, cfg *tls.Config) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	d := tls.Dialer{Config: cfg, NetDialer: &net.Dialer{Timeout: 10 * time.Second}}
+	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return true, err.Error()
+		return err
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, rerr := conn.Read(make([]byte, 1))
-	if rerr != nil && !strings.Contains(rerr.Error(), "timeout") {
-		return true, rerr.Error()
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
 	}
-	return false, "handshake accepted"
+	if _, err := io.WriteString(conn, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n\x00\x00\x00\x04\x00\x00\x00\x00\x00"); err != nil {
+		return err
+	}
+	_, err = io.ReadFull(conn, make([]byte, 9))
+	return err
 }
 
-// T10h: the host endpoint (public) and the worker listener (private, probed
-// from the Linux client) refuse clients without a Cucina-issued certificate.
+func certificateAlert(err error) bool {
+	var op *net.OpError
+	if !errors.As(err, &op) || op.Op != "remote error" {
+		return false
+	}
+	switch op.Err.Error() {
+	case "tls: certificate required", "tls: bad certificate", "tls: unknown certificate authority", "tls: access denied":
+		return true
+	}
+	return false
+}
+
+// T10h pairs each invalid-certificate probe with a reachable, trusted control.
 func runT10h(c *harness.Context) error {
+	s := c.Env.Secrets
+	if c.Env.Endpoints.Host == "" || c.Env.Endpoints.WorkerListener == "" || !c.Env.Has(harness.RequiresLinuxClient) ||
+		s.HostCertFile == "" || s.HostKeyFile == "" || s.WorkerCertFile == "" || s.WorkerKeyFile == "" || c.Env.Endpoints.CAFile == "" {
+		return harness.Skip("T10h requires both mTLS endpoints, linux-client, CA and valid host/worker certificate-key controls")
+	}
 	svc, err := infra.Of(c)
 	if err != nil {
 		return err
 	}
-	var bad []string
-	if addr := c.Env.Endpoints.Host; addr != "" {
-		impostor, err := selfSignedClient()
+	cfg, err := endpoint(c.Env).TLSConfig()
+	if err != nil {
+		return err
+	}
+	cfg.MinVersion, cfg.NextProtos = tls.VersionTLS13, []string{"h2"}
+	valid, err := tls.LoadX509KeyPair(s.HostCertFile, s.HostKeyFile)
+	if err != nil {
+		return err
+	}
+	cfg.Certificates = []tls.Certificate{valid}
+	impostor, err := selfSignedClient()
+	if err != nil {
+		return err
+	}
+	for _, certs := range [][]tls.Certificate{nil, {impostor}} {
+		if err := tlsProbe(c, c.Env.Endpoints.Host, cfg); err != nil {
+			return harness.Fail("valid host certificate control failed: %v", err)
+		}
+		invalid := cfg.Clone()
+		// Force the self-signed certificate to be offered even when its issuer
+		// is not in the server's acceptable-CA list.
+		invalid.Certificates = certs
+		if len(certs) > 0 {
+			invalid.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &impostor, nil }
+		}
+		err := tlsProbe(c, c.Env.Endpoints.Host, invalid)
+		if !certificateAlert(err) {
+			return harness.Fail("host probe needs an explicit client-certificate alert, got %v", err)
+		}
+		if err := tlsProbe(c, c.Env.Endpoints.Host, cfg); err != nil {
+			return harness.Fail("host control failed after denial: %v", err)
+		}
+	}
+	// The private worker listener is reachable only from the Linux client.
+	h, err := svc.Host(c, "linux-client")
+	if err != nil {
+		return err
+	}
+	files := []string{s.WorkerCertFile, s.WorkerKeyFile, c.Env.Endpoints.CAFile}
+	var paths []string
+	for i, file := range files {
+		dst := hjoin(h, h.WorkDir(), "secrets", fmt.Sprintf("t10h-%d", i))
+		if err := remote.PutPrivate(c, h, file, dst, svc.ClientUser(h.Name())); err != nil {
+			return err
+		}
+		paths = append(paths, dst)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(c), 30*time.Second)
+		defer cancel()
+		_, _ = h.Run(ctx, "rm -f "+shellQuote(paths[0])+" "+shellQuote(paths[1])+" "+shellQuote(paths[2]), remote.Opts{User: svc.ClientUser(h.Name())})
+	}()
+	addr := c.Env.Endpoints.WorkerListener
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	verify := " -verify_hostname " + shellQuote(host)
+	if net.ParseIP(host) != nil {
+		verify = " -verify_ip " + shellQuote(host)
+	}
+	base := "timeout 15 openssl s_client -brief -tls1_3 -verify_return_error" + verify + " -CAfile " + shellQuote(paths[2]) + " -connect " + shellQuote(addr) + " -alpn h2"
+	for _, control := range []bool{true, false, true} {
+		cmd := base
+		if control {
+			cmd += " -cert " + shellQuote(paths[0]) + " -key " + shellQuote(paths[1])
+		}
+		r, err := h.Run(c, cmd+" </dev/null 2>&1", remote.Opts{User: svc.ClientUser(h.Name()), Timeout: 20 * time.Second})
 		if err != nil {
 			return err
 		}
-		for name, certs := range map[string][]tls.Certificate{"no client certificate": nil, "self-signed client certificate": {impostor}} {
-			ok, why := mtlsRejected(addr, certs)
-			c.Check(harness.CheckResult{Name: "host endpoint, " + name, Kind: "tls", Pass: ok, Value: why})
-			if !ok {
-				bad = append(bad, "host endpoint accepted "+name)
+		out := string(r.Stdout)
+		if control {
+			if r.ExitCode != 0 || !strings.Contains(out, "CONNECTION ESTABLISHED") || !strings.Contains(out, "Verification: OK") {
+				return harness.Fail("valid worker certificate control did not establish verified TLS")
 			}
+		} else if !strings.Contains(out, "tlsv13 alert certificate required") || r.ExitCode == 124 {
+			return harness.Fail("worker probe did not receive the certificate_required TLS alert")
 		}
-	} else {
-		c.Note("no endpoints.host: host endpoint not probed")
-	}
-	if addr := c.Env.Endpoints.WorkerListener; addr != "" && c.Env.Has(harness.RequiresLinuxClient) {
-		h, err := svc.Host(c, "linux-client")
-		if err != nil {
-			return err
-		}
-		res, err := h.Run(c, fmt.Sprintf("timeout 20 openssl s_client -connect %s -alpn h2 </dev/null 2>&1 | tail -n 20", quoteFor(h, addr)), remote.Opts{})
-		if err != nil {
-			return err
-		}
-		out := string(res.Stdout)
-		ok := strings.Contains(out, "alert") || strings.Contains(out, "certificate required") || strings.Contains(out, "handshake failure")
-		c.Check(harness.CheckResult{Name: "worker listener without a client certificate", Kind: "tls", Pass: ok, Value: tail(out, 400)})
-		if !ok {
-			bad = append(bad, "worker listener accepted a client without a certificate")
-		}
-	} else {
-		c.Note("no endpoints.workerListener or linux-client: worker listener not probed")
-	}
-	if len(bad) > 0 {
-		return harness.Fail("%s", strings.Join(bad, "; "))
 	}
 	return nil
 }
@@ -645,6 +1207,12 @@ func runT10i(c *harness.Context) error {
 	} else {
 		how = "Go TCP connect scan of 1-65535"
 		open = connectScan(c, host, 1, 65535, 400)
+	}
+	if err := c.Err(); err != nil {
+		return err
+	}
+	if len(open) == 0 {
+		return harness.Fail("port scan found no reachable TLS endpoint; empty measurement cannot prove exposure")
 	}
 	c.Record("openPorts", open)
 	var bad []string

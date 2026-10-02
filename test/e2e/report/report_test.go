@@ -23,7 +23,7 @@ func TestRedactionPatterns(t *testing.T) {
 		{"arn:aws:iam::123456789012:role/cucina", "arn:aws:iam::<redacted:aws-account>:role/cucina"},
 		{"account id: 123456789012", "account id: <redacted:aws-account>"},
 		{"123456789012.dkr.ecr.us-west-1.amazonaws.com/cucina", "<redacted:ecr-registry>/cucina"},
-		{"endpoint 203.0.113.7:443 and 10.0.1.23", "endpoint <redacted:ipv4>:443 and <redacted:ipv4>"},
+		{"endpoint 203.0.113.7:443 and 10.0.1.23", "endpoint 203.0.113.7:443 and <redacted:ipv4>"},
 		{"2600:1f1c:abc:de00::12 and 2600:1f1c::5", "<redacted:ipv6> and <redacted:ipv6>"},
 		{"ip-10-0-1-23.us-west-1.compute.internal", "<redacted:ec2-hostname>"},
 		{"ec2-203-0-113-7.us-west-1.compute.amazonaws.com", "<redacted:ec2-hostname>"},
@@ -48,6 +48,10 @@ func TestRedactionPatterns(t *testing.T) {
 	got, found := Redactor{Literals: map[string]string{"cucina-e2e-mini.corp": "host"}}.Apply("host cucina-e2e-mini.corp up")
 	require.Equal(t, "host <redacted:host> up", got)
 	require.Len(t, found, 1)
+	// A descriptor-supplied endpoint is redacted even when a test deployment
+	// happens to use a documentation address; the generic pattern preserves it.
+	got, _ = (Redactor{Literals: map[string]string{"203.0.113.7": "endpoint"}}).Apply("endpoint 203.0.113.7:443")
+	require.Equal(t, "endpoint <redacted:endpoint>:443", got)
 	require.NotEmpty(t, Check("left behind: i-0abc123def4567890"))
 }
 

@@ -74,6 +74,9 @@ func t0() *harness.Scenario {
 			}); err != nil {
 				return harness.Fail("%v", err)
 			}
+			if err := svc.BootstrapLocalProfile(c); err != nil {
+				return err
+			}
 			if err := c.Step("cucinactl: every pool at zero", func() error { return poolsAtZero(c, svc) }); err != nil {
 				return harness.Fail("%v", err)
 			}
@@ -225,14 +228,21 @@ func t8() *harness.Scenario {
 				pool := lane.Pool(c.Env)
 				pi, err := describePool(c, svc, pool)
 				if err != nil {
-					c.Note("pools describe %s: %v", pool, err)
-					continue
+					return err
 				}
-				limit := dur(field(specOf(pi), "idle_timeout")) + dur(field(specOf(pi), "drain_timeout"))
+				timers, _ := field(specOf(pi), "timers").(map[string]any)
+				limit := dur(field(timers, "idle_timeout")) + dur(field(timers, "drain_timeout"))
+				if limit <= 0 {
+					c.Check(harness.CheckResult{Name: pool + " scale-in timeout", Kind: "lifecycle", Skipped: "explicit timers.idleTimeout/drainTimeout not present in pool spec"})
+				}
 				for _, e := range poolEvents(pi) {
 					c.Event(e.Subject, pool+" "+e.Type+": "+e.Message, e.Time)
 				}
-				for vm, d := range idleToTerminated(poolEvents(pi), start) {
+				evidence := idleToTerminated(poolEvents(pi), start)
+				if len(evidence) == 0 {
+					c.Check(harness.CheckResult{Name: pool + " per-VM idle to terminated", Kind: "lifecycle", Skipped: "management timeline lacks paired idle and termination timestamps for this scale-in"})
+				}
+				for vm, d := range evidence {
 					if limit > 0 && d > limit+2*time.Minute {
 						late = append(late, fmt.Sprintf("%s %s took %s (limit %s)", pool, vm, d.Round(time.Second), limit))
 					}
@@ -292,7 +302,7 @@ func poolEvents(pi PoolInfo) []PoolEvent {
 	return out
 }
 
-// idleToTerminated pairs each VM's drain event with its terminate event
+// idleToTerminated pairs each VM's idle event with its terminate event
 // after `since` and returns the time between them.
 func idleToTerminated(evs []PoolEvent, since time.Time) map[string]time.Duration {
 	drain := map[string]time.Time{}
@@ -302,7 +312,7 @@ func idleToTerminated(evs []PoolEvent, since time.Time) map[string]time.Duration
 			continue
 		}
 		switch e.Type {
-		case "drain":
+		case "idle":
 			drain[e.Subject] = e.Time
 		case "terminate":
 			if t, ok := drain[e.Subject]; ok {
@@ -350,6 +360,9 @@ func t11() *harness.Scenario {
 				if err := mustSucceed(o, name); err != nil {
 					return err
 				}
+				if o.ExecLog == nil || o.ExecLog.Spawns == 0 {
+					return harness.Fail("%s: missing cache-hit evidence", name)
+				}
 				c.NFR(nfr.CacheHits("NFR-R2", "after "+name, o.ExecLog.RemoteCacheHitRatio()))
 				return nil
 			}
@@ -363,7 +376,7 @@ func t11() *harness.Scenario {
 				return harness.Fail("not ready after upgrade: %v", err)
 			}
 			if err := c.Step("controller converged", func() error { return poolsAtZero(c, svc) }); err != nil {
-				c.Note("pools after upgrade: %v", err)
+				return harness.Fail("controller did not converge after upgrade: %v", err)
 			}
 			if err := warm("warm-after-upgrade"); err != nil {
 				return err
@@ -397,7 +410,7 @@ func t12() *harness.Scenario {
 			}
 			pool := LinuxLane.Pool(c.Env)
 			img, ok := c.Env.Images[pool]
-			if !ok || img.Current == "" || img.Next == "" {
+			if !ok || img.Current == "" || img.Next == "" || img.Current == img.Next {
 				return harness.Skip("no images[%q] {current, next} in the environment descriptor", pool)
 			}
 			lr, err := openLane(c, LinuxLane)
@@ -432,6 +445,15 @@ func t12() *harness.Scenario {
 				if err := <-done; err != nil {
 					return err
 				}
+				// Prove the old generation drains, then force a new launch rather
+				// than accepting an empty set of post-rollout launches.
+				_, res, err := waitZero(c, scaleInLimit)
+				if err != nil {
+					return err
+				}
+				if !res.Zero() {
+					return harness.Fail("old generation did not drain: %s", res)
+				}
 				// Build B: launches after the change must use the new image.
 				o, err := lr.bazel("build-b", BuildOpts{Command: "build", Extra: []string{"--noremote_accept_cached"}})
 				if err == nil {
@@ -440,9 +462,14 @@ func t12() *harness.Scenario {
 				if err != nil {
 					return err
 				}
-				if s, err := poolInventory(svc, pool).Describe(c); err == nil {
-					snaps = append(snaps, s)
+				s, err := poolInventory(svc, pool).Describe(c)
+				if err != nil {
+					return err
 				}
+				if len(s.Instances) == 0 {
+					return harness.Fail("no new-image instance observed after build B")
+				}
+				snaps = append(snaps, s)
 				if err := c.Step("roll back the image", func() error { return setImage(img.Current) }); err != nil {
 					return err
 				}
@@ -452,17 +479,24 @@ func t12() *harness.Scenario {
 				return err
 			}
 			var wrong []string
+			observed := 0
 			for _, l := range usage.Lifecycles {
 				if l.Pool != pool || l.Launched.Before(patched) {
 					continue
 				}
 				for _, s := range snaps {
 					for _, in := range s.Instances {
-						if in.ID == l.ID && in.ImageID != img.Next {
-							wrong = append(wrong, in.ID+"="+in.ImageID)
+						if in.ID == l.ID {
+							observed++
+							if in.ImageID != img.Next {
+								wrong = append(wrong, in.ID+"="+in.ImageID)
+							}
 						}
 					}
 				}
+			}
+			if observed == 0 {
+				return harness.Fail("no post-rollout launch has both lifecycle and image evidence")
 			}
 			if len(wrong) > 0 {
 				return harness.Fail("launches after the rollout used the old image: %s", strings.Join(wrong, ", "))
@@ -482,6 +516,9 @@ func t12() *harness.Scenario {
 			s, err := poolInventory(svc, pool).Describe(c)
 			if err != nil {
 				return err
+			}
+			if len(s.Instances) == 0 {
+				return harness.Fail("no rollback-image instance observed")
 			}
 			for _, in := range s.Instances {
 				if in.ImageID != img.Current {
@@ -603,9 +640,17 @@ func campaignAccounting(c *harness.Context, svc *infra.Services) {
 	test, testMonth := spend.Standing(spend.TestTopology())
 	prod, prodMonth := spend.Standing(spend.SmallProductionTopology())
 	c.Record("standingCost", map[string]any{"test": test, "testUSDPerMonth": testMonth, "production": prod, "productionUSDPerMonth": prodMonth})
-	c.NFR(nfr.Reported("NFR-C2", "test topology", testMonth, "USD/month", "itemised in values.standingCost"))
+	testRow := nfr.Reported("NFR-C2", "test topology", testMonth, "USD/month", "itemised in values.standingCost")
+	if c.Env.MeasurementScope == harness.ScopeSmallFunctional {
+		testRow.Pass = false
+		testRow.Unqualified = "standing table is the original topology; actual small-functional standing inventory/rates must be supplied"
+	}
+	c.NFR(testRow)
 	c.NFR(nfr.Reported("NFR-C2", "small production topology", prodMonth, "USD/month", "itemised in values.standingCost"))
-	c.NFR(nfr.Spend(spent, harness.DefaultBudgetUSD))
+	budgetRow := nfr.Spend(spent, harness.DefaultBudgetUSD)
+	budgetRow.Pass = false
+	budgetRow.Unqualified = "worker scenario subtotal only; standing environment, baseline hosts, image builds, snapshots, Fast Launch and transfer charges require complete campaign accounting"
+	c.NFR(budgetRow)
 	c.Note("NFR-C3: $%.2f is the sum of the scenarios' measured worker spend; the report adds the standing environment, image builds and Fast Launch", spent)
 	if svc.EC2 != nil {
 		if n, err := svc.EC2.NATGateways(c); err == nil {

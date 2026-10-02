@@ -185,6 +185,12 @@ func RunJob(ctx context.Context, h Host, script string, o Opts, every time.Durat
 	}
 	st, err := Wait(ctx, h, j, every, sleep)
 	if err != nil {
+		if ctx.Err() != nil {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			stopErr := StopJob(cleanup, h, j)
+			cancel()
+			err = errors.Join(err, stopErr)
+		}
 		return j, Result{}, err
 	}
 	stdout, err := ReadAll(ctx, h, j, "stdout", st.StdoutBytes)
@@ -196,6 +202,65 @@ func RunJob(ctx context.Context, h Host, script string, o Opts, every time.Durat
 		return j, Result{}, err
 	}
 	return j, Result{ExitCode: st.ExitCode, Stdout: stdout, Stderr: stderr, Duration: time.Since(start)}, nil
+}
+
+// StopJob terminates a detached job's process tree. It is called with an
+// independent bounded context after cancellation, so cancelling Wait cannot
+// abandon an active remote build. Linux SSM jobs have a dedicated systemd
+// unit; the local POSIX fallback targets descendants of the recorded PID.
+func StopJob(ctx context.Context, h Host, j Job) error {
+	if j.ID == "" || j.Dir == "" {
+		return fmt.Errorf("cannot stop an unidentified job")
+	}
+	var script string
+	if h.OS() == Windows {
+		script = fmt.Sprintf(`$ErrorActionPreference='Stop'
+$f=Join-Path %s 'pid'
+for ($i=0; $i -lt 20 -and -not (Test-Path $f); $i++) { Start-Sleep -Milliseconds 100 }
+if (-not (Test-Path $f)) { throw 'job PID missing during cancellation' }
+$jobPid=[int](Get-Content -Raw $f).Trim()
+if (Get-Process -Id $jobPid -ErrorAction SilentlyContinue) { & taskkill.exe /PID $jobPid /T /F | Out-Null }
+exit 0
+`, psQuote(j.Dir))
+	} else {
+		script = fmt.Sprintf(`set -eu
+J=%s
+unit=%s
+if command -v systemctl >/dev/null 2>&1 && [ "$(id -u)" = 0 ] && systemctl is-active --quiet "$unit"; then
+  systemctl stop "$unit"
+else
+  i=0
+  while [ ! -s "$J/pid" ] && [ ! -f "$J/exit" ] && [ "$i" -lt 20 ]; do i=$((i+1)); sleep 0.1; done
+  [ ! -f "$J/exit" ] || exit 0
+  [ -s "$J/pid" ] || { printf 'job PID missing during cancellation\n' >&2; exit 1; }
+  read -r p <"$J/pid"
+  stop_tree() {
+    for child in $(pgrep -P "$1" 2>/dev/null || true); do stop_tree "$child"; done
+    kill -TERM "$1" 2>/dev/null || true
+  }
+  stop_tree "$p"
+fi
+`, shQuote(j.Dir), shQuote("cucina-e2e-"+j.ID))
+	}
+	r, err := h.Run(ctx, script, Opts{Timeout: time.Minute})
+	if err != nil {
+		return err
+	}
+	if err = r.Err(); err != nil {
+		return err
+	}
+	for {
+		s, err := h.Status(ctx, j)
+		if err != nil {
+			return err
+		}
+		if s.State == JobExited || s.State == JobLost {
+			return nil
+		}
+		if err := RealSleep(ctx, time.Second); err != nil {
+			return fmt.Errorf("job did not stop: %w", err)
+		}
+	}
 }
 
 func newJobID() string {

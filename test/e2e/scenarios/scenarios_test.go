@@ -3,6 +3,7 @@
 package scenarios
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -78,6 +79,21 @@ func countAfter(reg *harness.Registry, id string) int {
 	return n
 }
 
+// Guards pool-describe.v1 evidence for NFR-P1/C1: snake_case seconds and the
+// nested pool summary must survive JSON decoding; absent evidence is an error.
+func TestPoolDescribeEvidence(t *testing.T) {
+	data := `{"schema":"pool-describe.v1","pool":{"desired":2,"launching":1,"registered":1,"busy":0,"idle":0,"draining":0},"workers":[{"id":"worker"}],"starts":[{"vm":"worker","launched":"2026-10-03T10:00:00Z","to_running_seconds":12.5,"to_registered_seconds":28,"to_first_action_seconds":41.5,"path":"cold"}]}`
+	var p PoolInfo
+	require.NoError(t, json.Unmarshal([]byte(data), &p))
+	require.Len(t, p.Starts, 1)
+	require.Equal(t, 12500*time.Millisecond, p.Starts[0].ToRunning)
+	require.Equal(t, 28*time.Second, p.Starts[0].ToRegistered)
+	require.Equal(t, 41500*time.Millisecond, p.Starts[0].ToFirstAction)
+	require.Equal(t, 1, p.Workers)
+	require.Contains(t, p.Raw, "pool")
+	require.Error(t, json.Unmarshal([]byte(`{"schema":"pool-describe.v1","pool":{}}`), &p))
+}
+
 // Guards NFR-P1's definition: a VM start counts from the client's first
 // Execute when it is the first launch of the scale-out, else from its launch.
 func TestColdStartSamples(t *testing.T) {
@@ -89,6 +105,7 @@ func TestColdStartSamples(t *testing.T) {
 	}
 	got := coldStarts(starts, t0, t0.Add(time.Hour), t0)
 	require.Equal(t, []time.Duration{42 * time.Second, 45 * time.Second}, got)
+	require.Empty(t, coldStarts(append(starts, PoolStart{VM: "incomplete", Launched: t0}), t0, t0.Add(time.Hour), t0), "partial latency samples cannot prove cold-start maximum")
 	require.Equal(t, 12500*time.Millisecond, dur("12.5s"))
 	require.Equal(t, 3*time.Second+5, dur(map[string]any{"seconds": 3.0, "nanos": 5.0}))
 }

@@ -89,7 +89,16 @@ func faultScenario(f fault) *harness.Scenario {
 				return harness.Fail("build failed under %s", f.title)
 			}
 			if f.after != nil {
-				return f.after(c, svc, lr, out)
+				if err := f.after(c, svc, lr, out); err != nil {
+					return err
+				}
+			}
+			_, res, err := waitZero(c, scaleInLimit)
+			if err != nil {
+				return err
+			}
+			if !res.Zero() {
+				return harness.Fail("residue after idle/drain grace: %s", res)
 			}
 			return nil
 		},
@@ -135,6 +144,9 @@ func warmAfter(name string) func(*harness.Context, *infra.Services, *laneRun, *b
 		}
 		if err := mustSucceed(o, name); err != nil {
 			return err
+		}
+		if o.ExecLog == nil || o.ExecLog.Spawns == 0 {
+			return harness.Fail("%s: missing warm-cache execution evidence", name)
 		}
 		r := nfr.CacheHits("NFR-R2", name, o.ExecLog.RemoteCacheHitRatio())
 		c.NFR(r)

@@ -157,6 +157,27 @@ func (inv *Invocation) Script() (string, error) {
 
 func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// environment preserves only the local CLI's non-secret profile selection
+// in addition to explicit invocation variables. The lead may keep campaign
+// credentials in a private CUCINA_CONFIG_DIR; env -i must not send the helper
+// to a different default profile. Remote clients use their own login state.
+func (inv *Invocation) environment() map[string]string {
+	env := map[string]string{}
+	for k, v := range inv.Env {
+		env[k] = v
+	}
+	if inv.Host.Name() == "dev-mac" {
+		for _, k := range []string{"CUCINA_CONFIG_DIR", "CUCINA_PROFILE"} {
+			if _, ok := env[k]; !ok {
+				if v := os.Getenv(k); v != "" {
+					env[k] = v
+				}
+			}
+		}
+	}
+	return env
+}
+
 func (inv *Invocation) shScript() string {
 	var b strings.Builder
 	out := inv.outDir()
@@ -172,8 +193,9 @@ func (inv *Invocation) shScript() string {
 	// A minimal, explicit environment: HOME/PATH/USER from the job shell plus
 	// the caller's variables (which win).
 	envs := []string{"env", "-i", `HOME="$HOME"`, `PATH="$PATH"`, `USER="${USER:-$(id -un)}"`, "LANG=C.UTF-8"}
-	for _, k := range sortedKeys(inv.Env) {
-		envs = append(envs, shq(k+"="+inv.Env[k]))
+	clientEnv := inv.environment()
+	for _, k := range sortedKeys(clientEnv) {
+		envs = append(envs, shq(k+"="+clientEnv[k]))
 	}
 	fmt.Fprintf(&b, "set -u\nOUT=%s\nmkdir -p \"$OUT\"\ncd %s || exit 2\n", shq(out), shq(inv.Workspace))
 	run := strings.Join(envs, " ") + " " + shq(bz) + " " + strings.Join(startup, " ")
@@ -205,6 +227,11 @@ func (inv *Invocation) psScript() string {
 	// Native commands report through exit codes; with 'Stop', Windows
 	// PowerShell 5.1 turns redirected native stderr into terminating errors.
 	fmt.Fprintf(&b, "$ErrorActionPreference = 'Continue'\n$out = %s\nNew-Item -ItemType Directory -Force -Path $out | Out-Null\nSet-Location %s\n", psq(out), psq(inv.Workspace))
+	// BEP includes client_env: keep only the Windows process/runtime paths,
+	// not inherited AWS credentials, tokens or arbitrary service variables.
+	b.WriteString(`$keep = @('SYSTEMROOT','WINDIR','COMSPEC','TEMP','TMP','USERPROFILE','HOMEDRIVE','HOMEPATH','APPDATA','LOCALAPPDATA','PROGRAMDATA','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432','PROCESSOR_ARCHITECTURE','PATH','PATHEXT','NUMBER_OF_PROCESSORS','USERNAME','USERDOMAIN','BAZEL_SH')
+Get-ChildItem Env: | Where-Object { $keep -notcontains $_.Name.ToUpperInvariant() } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
+`)
 	for _, k := range inv.Unset {
 		fmt.Fprintf(&b, "Remove-Item -ErrorAction SilentlyContinue %s\n", psq(`Env:\`+k))
 	}

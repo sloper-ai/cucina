@@ -76,12 +76,12 @@ func TestCrossMatrixPlanFollowsTargetsJSON(t *testing.T) {
 		tg := cfg.Target
 		require.Equal(t, tg.Name+"@linux-client", cfg.Name)
 		require.Equal(t, tg.ExecPlatforms[0], cfg.ExecPool, "default compile pool first (UC25)")
-		want, err := props.expectation(targets, cfg)
+		got, err := props.expectation(targets, cfg)
 		require.NoError(t, err, cfg.Name)
-		require.NotEmpty(t, want.Compile, cfg.Name)
+		require.NotEmpty(t, got.Compile, cfg.Name)
 		switch tg.Coverage {
 		case CoverageFull:
-			require.Equal(t, []Step{{Name: "test", Command: "test", Patterns: bazelrun.AbseilTargets}}, cfg.Steps, cfg.Name)
+			require.Equal(t, []Step{{Name: "build", Command: "build", Patterns: bazelrun.AbseilTargets}, {Name: "test", Command: "test", Patterns: bazelrun.AbseilTargets}}, cfg.Steps, cfg.Name)
 			require.Equal(t, TestStepFull, cfg.TestStep)
 		case CoverageSmoke:
 			require.Len(t, cfg.Steps, 2, cfg.Name)
@@ -89,15 +89,15 @@ func TestCrossMatrixPlanFollowsTargetsJSON(t *testing.T) {
 			require.Equal(t, smokePatterns, cfg.Steps[1].Patterns)
 			require.Equal(t, "qemu-user", tg.Test.Mode, cfg.Name)
 			require.Equal(t, []string{"--test_timeout=600,3000,9000,36000"}, cfg.Steps[1].Flags, cfg.Name)
-			require.Equal(t, "qemu", want.Test["cucina-emulation"], cfg.Name)
+			require.Equal(t, "qemu", got.Test["cucina-emulation"], cfg.Name)
 			require.Equal(t, TestStepSmoke, cfg.TestStep)
 		case CoverageExample:
 			require.Equal(t, []Step{{Name: "build", Command: "build", Patterns: bazelrun.ExamplePatterns}}, cfg.Steps, cfg.Name)
 			require.Equal(t, TestStepNA, cfg.TestStep)
-			require.Nil(t, want.Test, cfg.Name)
+			require.Nil(t, got.Test, cfg.Name)
 		}
 		if cfg.TestStep != TestStepNA {
-			require.Equal(t, props[tg.Test.Pool][tg.Test.Runner], want.Test, cfg.Name)
+			require.Equal(t, props[tg.Test.Pool][tg.Test.Runner], got.Test, cfg.Name)
 		}
 	}
 
@@ -128,11 +128,11 @@ func TestExecCoverageRows(t *testing.T) {
 		require.Equal(t, tg.ExecPlatforms[i+1], cfg.ExecPool)
 		require.Equal(t, "x86_64-linux-gnu@linux-client@exec-"+cfg.ExecPool, cfg.Name)
 		require.Equal(t, TestStepSmoke, cfg.TestStep)
-		want, err := props.expectation(targets, cfg)
+		got, err := props.expectation(targets, cfg)
 		require.NoError(t, err)
 		ep, _ := targets.execPlatform(cfg.ExecPool)
-		require.Equal(t, props[ep.Pool][ep.Runner], want.Compile)
-		require.Equal(t, props["linux-x86-64"]["native"], want.Test)
+		require.Equal(t, props[ep.Pool][ep.Runner], got.Compile)
+		require.Equal(t, props["linux-x86-64"]["native"], got.Test)
 	}
 	_, err = planConfig(tg, LinuxLane, "no-such-pool", ScopeSmoke)
 	require.ErrorContains(t, err, "cannot compile")
@@ -303,7 +303,7 @@ func TestComposeRCAndOverlay(t *testing.T) {
 func TestRCTokens(t *testing.T) {
 	for line, want := range map[string][]string{
 		`build '--test_env=SYSTEMROOT=C:\Windows'`: {"build", `--test_env=SYSTEMROOT=C:\Windows`},
-		`common --repository_cache=C:\x`:          {"common", "--repository_cache=C:x"},
+		`common --repository_cache=C:\x`:           {"common", "--repository_cache=C:x"},
 		`common "--a=b\\c d"`:                      {"common", `--a=b\c d`},
 		`build --x # trailing comment`:             {"build", "--x"},
 		`# a comment`:                              nil,

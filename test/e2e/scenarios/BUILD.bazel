@@ -9,6 +9,7 @@ go_library(
         "build.go",
         "canary.go",
         "cli.go",
+        "cli_extended.go",
         "common.go",
         "cross.go",
         "data.go",
@@ -22,8 +23,12 @@ go_library(
     importpath = "github.com/sloper-ai/cucina/test/e2e/scenarios",
     visibility = ["//test/e2e:__subpackages__"],
     deps = [
+        "//api/proto/cucina/v1:cucina",
         "//internal/canary",
         "//internal/cost",
+        "//internal/hostd/sys",
+        "//internal/ports",
+        "//internal/proto",
         "//slo",
         "//test/e2e/bazelrun",
         "//test/e2e/collect/awsinv",
@@ -36,19 +41,75 @@ go_library(
         "//test/e2e/nfr",
         "//test/e2e/remote",
         "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_google_uuid//:uuid",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],
 )
 
+# The real-component/fake-edge CLI tests have their own integration target.
+# gazelle:exclude cli_contract_test.go
+# gazelle:exclude cli_extended_test.go
+
 cucina_go_test(
     name = "scenarios_test",
-    srcs = ["scenarios_test.go"],
+    srcs = [
+        "cross_test.go",
+        "scenarios_test.go",
+    ],
     embed = [":scenarios"],
+    runfiles_env = {
+        "E2E_TARGETS_JSON": "//platforms:targets.json",
+        "E2E_POOLS_JSON": "//platforms:pools.json",
+    },
     tier = "unit",
     deps = [
+        "//test/e2e/bazelrun",
         "//test/e2e/harness",
         "//test/e2e/nfr",
+        "//test/e2e/remote",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+cucina_go_test(
+    name = "cli_contract_test",  # keep
+    srcs = ["cli_contract_test.go"],  # keep
+    embed = [":scenarios"],
+    tier = "integration",
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/fakes",
+        "//internal/ports",
+        "//internal/providers/tart/faketart",
+        "//test/e2e/bazelrun",
+        "//test/e2e/harness",
+        "//test/e2e/infra",
+        "//test/e2e/nfr",
+        "//test/e2e/remote",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_go_jose_go_jose_v4//jwt",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+cucina_go_test(
+    name = "cli_extended_test",  # keep
+    srcs = ["cli_extended_test.go"],  # keep
+    data = ["//cli/cucinactl:schemas"],
+    env = {"CUCINA_CLI_RESULT_SCHEMA": "../../../cli/cucinactl/schemas/result.v1.schema.json"},
+    tier = "integration",
+    deps = [
+        ":scenarios",
+        "//internal/fakes",
+        "//internal/ports",
+        "//test/e2e/harness",
+        "//test/e2e/infra",
         "@com_github_stretchr_testify//require",
     ],
 )

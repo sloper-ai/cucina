@@ -28,6 +28,11 @@ cucina_go_test(
         "//test/e2e/collect/profile:testdata",
     ],
     embed = [":bazelrun"],
+    # The collection pipeline fixture is a POSIX executable (ADR 1002).
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     tier = "integration",
     deps = [
         "//test/e2e/remote",

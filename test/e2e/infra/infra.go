@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 
+	"github.com/sloper-ai/cucina/internal/ports"
 	"github.com/sloper-ai/cucina/test/e2e/collect/awsinv"
 	"github.com/sloper-ai/cucina/test/e2e/collect/prom"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
@@ -39,6 +40,11 @@ type Services struct {
 	Env  *harness.Env
 	Log  *slog.Logger
 	Kube *Kube
+	// Exec replaces only local CLI process execution in deterministic tests.
+	// Production leaves it nil and uses os/exec.
+	Exec ports.Exec
+	// Clock is optional deterministic time for integration-boundary fakes.
+	Clock ports.Clock
 	// EC2 is nil without the aws capability.
 	EC2 *awsinv.Inventory
 
@@ -183,7 +189,69 @@ func (s *Services) Cucinactl(ctx context.Context, args ...string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
+	if s.Exec != nil {
+		r, err := s.Exec.Run(ctx, ports.Command{Path: bin, Args: args})
+		if err != nil {
+			return nil, err
+		}
+		if r.ExitCode != 0 {
+			return r.Stdout, fmt.Errorf("cucinactl exited %d: %s", r.ExitCode, tailString(string(r.Stderr), 2000))
+		}
+		return r.Stdout, nil
+	}
 	return run(ctx, nil, bin, args...)
+}
+
+// BootstrapLocalProfile invokes an explicitly configured lead-owned setup
+// command. Its stdout/stderr are discarded: key-creation tools may print a
+// secret once. The resulting profile is checked against this descriptor.
+func (s *Services) BootstrapLocalProfile(ctx context.Context) error {
+	if s.Env.Kubernetes != nil && len(s.Env.Kubernetes.BootstrapCLI) > 0 {
+		args := s.Env.Kubernetes.BootstrapCLI
+		if s.Exec != nil {
+			r, err := s.Exec.Run(ctx, ports.Command{Path: args[0], Args: args[1:]})
+			if err != nil {
+				return err
+			}
+			if r.ExitCode != 0 {
+				return fmt.Errorf("local CLI bootstrap exited %d", r.ExitCode)
+			}
+		} else {
+			if err := exec.CommandContext(ctx, args[0], args[1:]...).Run(); err != nil {
+				return fmt.Errorf("local CLI bootstrap: %w", err)
+			}
+		}
+	}
+	return s.VerifyLocalProfile(ctx)
+}
+
+// VerifyLocalProfile requires the operator's already-bootstrapped CLI profile
+// to name this descriptor's cluster. It never logs in, reads keys or silently
+// queries an ambient profile for another deployment. Bootstrap is lead-owned.
+func (s *Services) VerifyLocalProfile(ctx context.Context) error {
+	var view struct {
+		Profiles []struct {
+			Name       string `json:"name"`
+			Current    bool   `json:"current"`
+			URL        string `json:"url"`
+			RE         string `json:"remote_executor"`
+			Management string `json:"management"`
+			CA         string `json:"ca_file"`
+		} `json:"profiles"`
+	}
+	if err := s.CucinactlJSON(ctx, &view, "config", "view"); err != nil {
+		return fmt.Errorf("local CLI profile prerequisite: %w", err)
+	}
+	selected := os.Getenv("CUCINA_PROFILE")
+	for _, p := range view.Profiles {
+		if (selected != "" && p.Name == selected) || (selected == "" && p.Current) {
+			if strings.TrimRight(p.URL, "/") != strings.TrimRight(s.Env.Endpoints.STS, "/") || p.RE != s.Env.Endpoints.RemoteExecution || p.Management != s.Env.Endpoints.Management || filepath.Clean(p.CA) != filepath.Clean(s.Env.Endpoints.CAFile) {
+				return harness.Skip("local CLI profile does not match descriptor STS/REAPI/management/CA; bootstrap and select this campaign's profile before running")
+			}
+			return nil
+		}
+	}
+	return harness.Skip("no selected local CLI profile; the lead must bootstrap the chart CA/admin credentials and log in before this scenario")
 }
 
 // CucinactlJSON runs cucinactl with --output json and decodes the result.

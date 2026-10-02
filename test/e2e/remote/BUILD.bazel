@@ -27,6 +27,11 @@ cucina_go_test(
     name = "remote_test",
     srcs = ["remote_test.go"],
     embed = [":remote"],
+    # This suite exercises the documented POSIX local transport, not PowerShell.
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     tier = "integration",
     deps = ["@com_github_stretchr_testify//require"],
 )

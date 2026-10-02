@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -82,7 +83,7 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	now := r.now
 	res := &Result{
-		ID: s.ID, Title: s.Title, Env: r.Env.Name, EnvKind: r.Env.Kind, RunID: r.Env.RunID,
+		ID: s.ID, Title: s.Title, Env: r.Env.Name, EnvKind: r.Env.Kind, RunID: r.Env.RunID, MeasurementScope: r.Env.MeasurementScope,
 		Started: now(), CostClass: s.Cost, Cost: CostRecord{EstimateUSD: s.EstimateUSD},
 	}
 	if r.Env.AWS != nil {
@@ -121,6 +122,14 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 	}
 	runErr := safeRun(s.Run, c)
 	status := Classify(runErr)
+	if r.Env.MeasurementScope == ScopeSmallFunctional {
+		for i := range res.NFRs {
+			if res.NFRs[i].ID == "NFR-P2" {
+				res.NFRs[i].Unqualified = "small-functional scope: original pool-max-four large-worker performance topology was not exercised"
+				res.NFRs[i].Pass = false
+			}
+		}
+	}
 	if runErr != nil {
 		var se *SkipError
 		if errors.As(runErr, &se) {
@@ -146,16 +155,50 @@ func (r *Runner) Run(ctx context.Context, id string) (*Result, error) {
 					break
 				}
 			}
+			measured := map[string]bool{}
 			for _, n := range res.NFRs {
+				measured[n.ID] = true
+				if n.Unqualified != "" {
+					continue
+				}
 				if !n.Pass && status == StatusPass {
 					status = StatusFail
 					res.Error = fmt.Sprintf("%s (%s) missed: measured %g %s, target %s", n.ID, n.Subject, n.Measured, n.Unit, n.Target)
 				}
 			}
+			for _, id := range s.NFRs {
+				if !measured[id] && status == StatusPass {
+					status = StatusFail
+					res.Error = "required evidence not recorded: " + id
+				}
+			}
+			// A known failure wins over an unavailable check. Otherwise the
+			// explicit prerequisite reason makes this an incomplete run, not PASS.
+			if status == StatusPass {
+				var missing []string
+				for _, n := range res.NFRs {
+					if n.Unqualified != "" {
+						missing = append(missing, n.ID+": "+n.Unqualified)
+					}
+				}
+				for _, cr := range res.Checks {
+					if cr.Skipped != "" {
+						missing = append(missing, cr.Name+": "+cr.Skipped)
+					}
+				}
+				if len(missing) > 0 {
+					status = StatusSkip
+					res.SkipReason = "required checks unavailable: " + strings.Join(missing, "; ")
+				}
+			}
 		}
 	}
 	if r.Governor != nil && r.Env.Has(RequiresAWS) {
-		if err := r.Governor.Record(s.ID, now(), s.EstimateUSD, res.Cost.MeasuredUSD); err != nil {
+		cost := res.Cost.MeasuredUSD
+		if len(res.Cost.Unpriced) > 0 {
+			cost = 0
+		} // retain the reservation when measured cost is incomplete
+		if err := r.Governor.Record(s.ID, now(), s.EstimateUSD, cost); err != nil {
 			res.Notes = append(res.Notes, "budget ledger: "+err.Error())
 		}
 	}

@@ -162,11 +162,12 @@ if [ ! -d "$WS/.git" ]; then git clone --quiet --depth 1 --branch %s %s "$WS"; f
 cd "$WS"
 got=$(git rev-parse HEAD)
 [ "$got" = %s ] || { echo "abseil commit mismatch: $got" >&2; exit 3; }
-git checkout --quiet -- MODULE.bazel
-changed=$(git diff --name-only | grep -v -x -e MODULE.bazel -e MODULE.bazel.lock || true)
+git show HEAD:MODULE.bazel > MODULE.bazel
+changed=$(git diff HEAD --name-only | grep -v -x -e MODULE.bazel -e MODULE.bazel.lock || true)
 [ -z "$changed" ] || { echo "abseil sources modified: $changed" >&2; exit 4; }
 printf '%%s' %s | base64 -d >> MODULE.bazel
 cp %s .bazelrc
+printf '9.2.0\n' > .bazelversion
 rm -rf %s && cp -R %s %s
 echo prepared "$got"
 `, shq(ws), shq(pin.Tag), shq(pin.repo()), shq(pin.Commit), shq(module), shq(dir+"/"+OverlayBazelrc),
@@ -181,11 +182,14 @@ Set-Location $ws
 git config core.autocrlf false
 $got = (git rev-parse HEAD).Trim()
 if ($got -ne %s) { [Console]::Error.WriteLine("abseil commit mismatch: $got"); exit 3 }
-git checkout --quiet -- MODULE.bazel
-$changed = git diff --name-only | Where-Object { $_ -ne 'MODULE.bazel' -and $_ -ne 'MODULE.bazel.lock' }
+$original = git show HEAD:MODULE.bazel
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+[IO.File]::WriteAllText((Join-Path $ws 'MODULE.bazel'), ($original -join [Environment]::NewLine) + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+$changed = git diff HEAD --name-only | Where-Object { $_ -ne 'MODULE.bazel' -and $_ -ne 'MODULE.bazel.lock' }
 if ($changed) { [Console]::Error.WriteLine("abseil sources modified: $changed"); exit 4 }
 [IO.File]::AppendAllText((Join-Path $ws 'MODULE.bazel'), [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
 Copy-Item -Force %s .bazelrc
+[IO.File]::WriteAllText((Join-Path $ws '.bazelversion'), ('9.2.0' + [Environment]::NewLine), (New-Object Text.UTF8Encoding($false)))
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue %s
 Copy-Item -Recurse -Force %s %s
 "prepared $got"

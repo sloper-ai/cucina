@@ -61,6 +61,7 @@ func TestCalculators(t *testing.T) {
 	// NFR-X1: 99 % of compile/link, all tests.
 	require.Equal(t, []bool{true, true}, passes(Routing("x86_64-linux-gnu", 99, 100, 7, 7, true)))
 	require.Equal(t, []bool{false, false}, passes(Routing("x86_64-linux-gnu", 98, 100, 6, 7, true)))
+	require.Equal(t, []bool{false, false}, passes(Routing("missing logs", 0, 0, 0, 0, true)))
 	// Build-only (wasm, BPF): the test clause is not applicable.
 	require.Equal(t, []bool{true}, passes(Routing("wasm32-unknown-unknown", 2, 2, 0, 0, false)))
 
@@ -84,6 +85,8 @@ func TestOutcomes(t *testing.T) {
 	}, devs)
 	r, _ = Outcomes("x86_64-linux-musl", remote, local, map[string]string{"//b": "toolchain bug", "//d": "qemu"})
 	require.True(t, r.Pass)
+	r, _ = Outcomes("missing outcomes", nil, nil, nil)
+	require.False(t, r.Pass, "empty comparisons cannot prove outcome equivalence")
 }
 
 // Guards the report's NFR table: every §8 row appears once; a row passes only
@@ -107,7 +110,7 @@ func TestAggregate(t *testing.T) {
 	}
 	require.Equal(t, Fail, rows["NFR-P1"].Status)
 	require.Len(t, rows["NFR-P1"].Measurements, 2, "the skipped Windows run is ignored")
-	require.Equal(t, Pass, rows["NFR-P3"].Status)
+	require.NotEqual(t, Pass, rows["NFR-P3"].Status, "Linux-only measurements cannot pass a Linux+Windows requirement")
 	require.Equal(t, Pass, rows["NFR-T1"].Status)
 	require.Equal(t, []string{"T1"}, rows["NFR-T1"].From)
 	require.Equal(t, NotMeasured, rows["NFR-X5"].Status)

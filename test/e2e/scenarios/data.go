@@ -26,7 +26,7 @@ import (
 func t21() *harness.Scenario {
 	return &harness.Scenario{
 		ID: "T21", Title: "Repo contents cache: seed with the trusted writer, then fresh-client cold builds (Linux, Windows, macOS targets)",
-		Requires: []harness.Requirement{harness.RequiresAWS, harness.RequiresLinuxClient, harness.RequiresCrossMatrix, harness.RequiresCucinactl},
+		Requires: []harness.Requirement{harness.RequiresAWS, harness.RequiresLinuxClient, harness.RequiresWindowsClient, harness.RequiresMacHost, harness.RequiresCrossMatrix, harness.RequiresCucinactl},
 		Cost:     harness.CostMedium, EstimateUSD: 6, Essential: true, Timeout: 5 * time.Hour, DependsOn: []string{"T1"},
 		NFRs: []string{"NFR-T7", "NFR-T2"}, Post: Guards,
 		Run: func(c *harness.Context) error {
@@ -44,8 +44,7 @@ func t21() *harness.Scenario {
 			var failed []string
 			for _, p := range plan {
 				if !laneAvailable(c.Env, p.lane) {
-					c.Note("T21: %s skipped (no %s)", p.target, p.lane.Host)
-					continue
+					return harness.Skip("T21 requires all three clients; missing %s", p.lane.Host)
 				}
 				if err := repoCacheRun(c, m, p.lane, p.target); err != nil {
 					failed = append(failed, p.target+": "+err.Error())
@@ -126,6 +125,13 @@ func repoCacheRun(c *harness.Context, m *matrix, lane Lane, target string) error
 	c.NFR(nfr.AtMostBytes("NFR-T7", lane.Name+" client ("+target+")", float64(cached), 50e6,
 		fmt.Sprintf("without the repo contents cache: %.0f MB", float64(full)/1e6)))
 	if lane.Name == "linux" {
+		p, ok := c.Prior["T1"]
+		if !ok || fresh.BEP == nil {
+			return harness.Fail("missing first/fresh client upload evidence for NFR-T2")
+		}
+		if first, ok := p.Metrics["linux.cold-build.network_bytes_sent"]; !ok || first.Value <= 0 {
+			return harness.Fail("missing positive T1 upload baseline for NFR-T2")
+		}
 		if p, ok := c.Prior["T1"]; ok {
 			if first, ok := p.Metrics["linux.cold-build.network_bytes_sent"]; ok && fresh.BEP != nil {
 				c.NFR(nfr.Ratio("NFR-T2", "fresh Linux client vs first client uploads", float64(fresh.BEP.NetworkBytesSent), first.Value, 1, true,
@@ -147,12 +153,15 @@ func writeAndPut(c *harness.Context, h remote.Host, local, dst, content string) 
 func dirBytes(c *harness.Context, h remote.Host, dir, user string) (int64, error) {
 	var script string
 	if h.OS() == remote.Windows {
-		script = fmt.Sprintf("$s = (Get-ChildItem -Recurse -File -Force '%s' -ErrorAction SilentlyContinue | Measure-Object -Sum Length).Sum; if ($s) { $s } else { 0 }", dir)
+		script = fmt.Sprintf("$ErrorActionPreference='Stop'; if (-not (Test-Path -PathType Container %s)) { throw 'cache directory missing' }; $s = (Get-ChildItem -Recurse -File -Force %s -ErrorAction Stop | Measure-Object -Sum Length).Sum; if ($null -ne $s) { $s } else { 0 }", argFor(h, dir), argFor(h, dir))
 	} else {
-		script = fmt.Sprintf("find %s -type f -exec cat {} + 2>/dev/null | wc -c", quoteFor(h, dir))
+		script = fmt.Sprintf("set -e; test -d %s; python3 -c %s %s", argFor(h, dir), argFor(h, "import os,sys\ndef fail(e): raise e\nprint(sum(os.path.getsize(os.path.join(root,f)) for root,_,files in os.walk(sys.argv[1],onerror=fail) for f in files))"), argFor(h, dir))
 	}
 	res, err := h.Run(c, script, remote.Opts{User: user})
 	if err != nil {
+		return 0, err
+	}
+	if err := res.Err(); err != nil {
 		return 0, err
 	}
 	return strconv.ParseInt(strings.TrimSpace(lastLine(string(res.Stdout))), 10, 64)

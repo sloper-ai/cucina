@@ -56,13 +56,17 @@ func Render(in Input) string {
 		nc[r.Status]++
 	}
 	spent, items := spend(in)
-	w("Run `%s` · %d scenarios: **%d pass**, %d fail, %d skip, %d error · NFRs: **%d pass**, %d fail, %d not measured · spend **$%.2f** of $%.0f.\n\n",
+	w("Run `%s` · %d scenarios: **%d pass**, %d fail, %d skip, %d error · NFRs: **%d pass**, %d fail, %d partial, %d not measured · spend **$%.2f** of $%.0f.\n\n",
 		in.RunID, len(in.Results), counts[harness.StatusPass], counts[harness.StatusFail], counts[harness.StatusSkip], counts[harness.StatusError],
-		nc[nfr.Pass], nc[nfr.Fail], nc[nfr.NotMeasured], spent, in.BudgetUSD)
+		nc[nfr.Pass], nc[nfr.Fail], nc[nfr.Partial], nc[nfr.NotMeasured], spent, in.BudgetUSD)
 
 	w("## NFR results\n\n| NFR | Target | Status | Measured | Scenarios |\n| --- | --- | --- | --- | --- |\n")
 	for _, r := range rows {
-		w("| %s | %s | %s | %s | %s |\n", r.ID, esc(r.Target), statusBadge(string(r.Status)), esc(measurements(r.Measurements)), strings.Join(r.From, ", "))
+		from := strings.Join(r.From, ", ")
+		if len(r.Missing) > 0 {
+			from += "; missing: " + strings.Join(r.Missing, ", ")
+		}
+		w("| %s | %s | %s | %s | %s |\n", r.ID, esc(r.Target), statusBadge(string(r.Status)), esc(measurements(r.Measurements)), from)
 	}
 
 	w("\n## Scenarios\n\n| ID | Scenario | Status | Duration | Cost class | Measured $ |\n| --- | --- | --- | --- | --- | --- |\n")
@@ -152,6 +156,9 @@ func trimFloat(f float64) string {
 func scenario(b *strings.Builder, r *harness.Result) {
 	fmt.Fprintf(b, "\n### %s — %s\n\n%s · %s · cost class %s · $%.2f measured ($%.2f reserved)\n",
 		r.ID, r.Title, statusBadge(string(r.Status)), r.Duration.Round(time.Second), r.CostClass, r.Cost.MeasuredUSD, r.Cost.EstimateUSD)
+	if r.MeasurementScope != "" {
+		fmt.Fprintf(b, "\nMeasurement scope: `%s`.\n", esc(r.MeasurementScope))
+	}
 	if r.SkipReason != "" {
 		fmt.Fprintf(b, "\nSkipped: %s\n", r.SkipReason)
 	}
@@ -164,6 +171,9 @@ func scenario(b *strings.Builder, r *harness.Result) {
 			res := "pass"
 			if !n.Pass {
 				res = "**fail**"
+			}
+			if n.Unqualified != "" {
+				res = "not qualified: " + esc(n.Unqualified)
 			}
 			fmt.Fprintf(b, "| %s | %s | %s %s | %s | %s |\n", n.ID, esc(n.Subject), trimFloat(n.Measured), n.Unit, esc(n.Target), res)
 		}

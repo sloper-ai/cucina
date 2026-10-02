@@ -30,10 +30,10 @@ var Catalog = []Def{
 	{ID: "NFR-P1", Target: "Cold start: Linux p50 ≤ 60 s, max ≤ 90 s; Windows (Fast Launch) p50 ≤ 120 s, max ≤ 180 s; macOS VM p50 ≤ 45 s, max ≤ 90 s", Scenarios: []string{"T1", "T4", "T13", "canary-exec"}},
 	{ID: "NFR-P2", Target: "Cold //absl/... build, pool max 4: excl. cold start ≤ 50 % of a local build on one worker-type instance; incl. cold start faster than it; speed-up vs the client VM reported", Scenarios: []string{"T1", "T4"}},
 	{ID: "NFR-P3", Target: "Warm rebuild after clean --expunge: ≥ 99 % remote cache hits, 0 workers launched, wall ≤ 25 % of the cold build", Scenarios: []string{"T2", "T5"}},
-	{ID: "NFR-P4", Target: "Queue time p95 ≤ 1 s while free slots exist; worker overhead (input root + output upload) p50 ≤ 100 ms with warm L1 (p95 reported)", Scenarios: []string{"T1", "T3", "T4"}},
+	{ID: "NFR-P4", Target: "Queue time p95 ≤ 1 s while free slots exist; worker overhead (input root + output upload) p50 ≤ 100 ms with warm L1 (p95 reported)", Scenarios: []string{"T3", "T6"}},
 	{ID: "NFR-M1", Target: "Control plane ≤ 2 GiB total RSS idle, ≤ 4 GiB under test load; no OOM kills", Scenarios: []string{"T0", "T1", "T7"}},
 	{ID: "NFR-M2", Target: "Actuals reported; limits: cucina-controller ≤ 256 MiB, cucina-hostd ≤ 100 MiB, bb_worker ≤ 1 GiB at full concurrency", Scenarios: []string{"T1", "T13"}},
-	{ID: "NFR-M3", Target: "Bazel client peak RSS with Build without the Bytes vs full downloads reported", Scenarios: []string{"T1", "T3"}, ReportOnly: true},
+	{ID: "NFR-M3", Target: "Bazel client peak RSS with Build without the Bytes vs full downloads reported", Scenarios: []string{"T2", "T5"}, ReportOnly: true},
 	{ID: "NFR-T1", Target: "Cold remote build with BwoB: client download bytes ≤ 10 % of total action output bytes", Scenarios: []string{"T1"}},
 	{ID: "NFR-T2", Target: "Second fresh client uploads ≤ 1 % of the first client's bytes (toolchain uploads reported separately)", Scenarios: []string{"T21"}},
 	{ID: "NFR-T3", Target: "L1: EC2 re-execution within one scale-out ≥ 90 % of input bytes from L1; after scale-to-zero from same-AZ L3; macOS after VM restart ≥ 90 % from L1", Scenarios: []string{"T3", "T6", "T13"}},
@@ -223,11 +223,11 @@ func Spend(spentUSD, budgetUSD float64) harness.NFRResult {
 func Routing(config string, compileOnPool, compileTotal, testsOnRunner, testsTotal int, testStep bool) []harness.NFRResult {
 	rows := []harness.NFRResult{
 		{ID: "NFR-X1", Subject: config + " compile/link on pool", Measured: pct(float64(compileOnPool), float64(compileTotal)), Unit: "%", Target: "≥ 99 %",
-			Pass: compileTotal == 0 || 100*compileOnPool >= 99*compileTotal, Detail: fmt.Sprintf("%d/%d", compileOnPool, compileTotal)},
+			Pass: compileTotal > 0 && 100*compileOnPool >= 99*compileTotal, Detail: fmt.Sprintf("%d/%d", compileOnPool, compileTotal)},
 	}
 	if testStep {
 		rows = append(rows, harness.NFRResult{ID: "NFR-X1", Subject: config + " tests on target runner", Measured: pct(float64(testsOnRunner), float64(testsTotal)), Unit: "%", Target: "100 %",
-			Pass: testsOnRunner == testsTotal, Detail: fmt.Sprintf("%d/%d", testsOnRunner, testsTotal)})
+			Pass: testsTotal > 0 && testsOnRunner == testsTotal, Detail: fmt.Sprintf("%d/%d", testsOnRunner, testsTotal)})
 	}
 	return rows
 }
@@ -249,10 +249,14 @@ func Outcomes(config string, remote, local map[string]string, rootCauses map[str
 		labels = append(labels, l)
 	}
 	sort.Strings(labels)
-	unexplained := 0
+	unexplained, compared := 0, 0
 	for _, l := range labels {
 		lo, ok := local[l]
-		if !ok || normalize(lo) == normalize(remote[l]) {
+		if !ok {
+			continue
+		}
+		compared++
+		if normalize(lo) == normalize(remote[l]) {
 			continue
 		}
 		d := Deviation{Label: l, Remote: remote[l], Local: lo, RootCause: rootCauses[l]}
@@ -262,7 +266,7 @@ func Outcomes(config string, remote, local map[string]string, rootCauses map[str
 		devs = append(devs, d)
 	}
 	return harness.NFRResult{ID: "NFR-X2", Subject: config, Measured: float64(len(devs)), Unit: "deviations", Target: "0 unexplained",
-		Pass: unexplained == 0, Detail: fmt.Sprintf("%d deviations, %d without root cause", len(devs), unexplained)}, devs
+		Pass: compared > 0 && unexplained == 0, Detail: fmt.Sprintf("%d outcomes compared, %d deviations, %d without root cause", compared, len(devs), unexplained)}, devs
 }
 
 // normalize treats FLAKY (passed after retries) as PASSED for the outcome
@@ -297,6 +301,7 @@ const (
 	Pass        Status = "PASS"
 	Fail        Status = "FAIL"
 	NotMeasured Status = "NOT MEASURED"
+	Partial     Status = "PARTIAL"
 )
 
 // Row is one line of the report's NFR table.
@@ -304,21 +309,29 @@ type Row struct {
 	Def
 	Status       Status              `json:"status"`
 	Measurements []harness.NFRResult `json:"measurements"`
-	From         []string            `json:"from"` // scenario IDs
+	From         []string            `json:"from"`              // scenario IDs
+	Missing      []string            `json:"missing,omitempty"` // required catalog scenarios without measurements
 }
 
 // Aggregate builds the NFR table from scenario results: a row passes when it
-// has measurements and all pass; report-only rows pass when measured.
+// has measurements from every catalog scenario and all pass. Partial
+// Linux/Windows/macOS coverage is never reported as a campaign-wide PASS.
 func Aggregate(results []*harness.Result) []Row {
 	by := map[string]*Row{}
 	for _, d := range Catalog {
 		by[d.ID] = &Row{Def: d, Status: NotMeasured}
 	}
 	for _, r := range results {
-		if r.Status == harness.StatusSkip {
-			continue
-		}
 		for _, m := range r.NFRs {
+			if m.Unqualified != "" {
+				if row := by[m.ID]; row != nil {
+					row.Missing = append(row.Missing, r.ID+": "+m.Unqualified)
+				}
+				continue
+			}
+			if r.Status == harness.StatusSkip {
+				continue
+			}
 			row, ok := by[m.ID]
 			if !ok {
 				continue
@@ -339,6 +352,14 @@ func Aggregate(results []*harness.Result) []Row {
 					row.Status = Fail
 				}
 			}
+		}
+		for _, id := range d.Scenarios {
+			if !contains(row.From, id) {
+				row.Missing = append(row.Missing, id)
+			}
+		}
+		if row.Status == Pass && len(row.Missing) > 0 {
+			row.Status = Partial
 		}
 		out = append(out, *row)
 	}

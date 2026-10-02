@@ -37,6 +37,8 @@ type NFRResult struct {
 	Target   string  `json:"target"`
 	Pass     bool    `json:"pass"`
 	Detail   string  `json:"detail,omitempty"`
+	// Unqualified preserves diagnostic numbers without claiming acceptance.
+	Unqualified string `json:"unqualified,omitempty"`
 }
 
 // CheckResult is the outcome of one post-condition.
@@ -77,6 +79,7 @@ type Artifact struct {
 
 // CostRecord is the spend attributed to the scenario.
 type CostRecord struct {
+	Unpriced    []string           `json:"unpriced,omitempty"` // incomplete compute prices; never a zero-cost claim
 	EstimateUSD float64            `json:"estimateUSD"`
 	MeasuredUSD float64            `json:"measuredUSD"`
 	Items       map[string]float64 `json:"items,omitempty"` // e.g. "ec2:c8i.8xlarge", "ebs:gp3"
@@ -87,30 +90,31 @@ type CostRecord struct {
 
 // Result is the JSON report of one scenario run (R-TEST-8d).
 type Result struct {
-	ID         string            `json:"id"`
-	Title      string            `json:"title"`
-	Env        string            `json:"env"`
-	EnvKind    EnvKind           `json:"envKind"`
-	RunID      string            `json:"runId"`
-	Status     Status            `json:"status"`
-	SkipReason string            `json:"skipReason,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	Started    time.Time         `json:"started"`
-	Finished   time.Time         `json:"finished"`
-	Duration   time.Duration     `json:"duration"`
-	CostClass  CostClass         `json:"costClass"`
-	Cost       CostRecord        `json:"cost"`
-	Tags       map[string]string `json:"tags,omitempty"`
-	Steps      []StepResult      `json:"steps,omitempty"`
-	Metrics    map[string]Metric `json:"metrics,omitempty"`
-	Values     map[string]any    `json:"values,omitempty"` // structured collector outputs
-	NFRs       []NFRResult       `json:"nfrs,omitempty"`
-	Checks     []CheckResult     `json:"checks,omitempty"`
-	Queries    []QueryRecord     `json:"queries,omitempty"`
-	Artifacts  []Artifact        `json:"artifacts,omitempty"`
-	Logs       []string          `json:"logs,omitempty"`
-	Notes      []string          `json:"notes,omitempty"`
-	Timeline   []TimelineEvent   `json:"timeline,omitempty"`
+	ID               string            `json:"id"`
+	Title            string            `json:"title"`
+	Env              string            `json:"env"`
+	EnvKind          EnvKind           `json:"envKind"`
+	MeasurementScope string            `json:"measurementScope,omitempty"`
+	RunID            string            `json:"runId"`
+	Status           Status            `json:"status"`
+	SkipReason       string            `json:"skipReason,omitempty"`
+	Error            string            `json:"error,omitempty"`
+	Started          time.Time         `json:"started"`
+	Finished         time.Time         `json:"finished"`
+	Duration         time.Duration     `json:"duration"`
+	CostClass        CostClass         `json:"costClass"`
+	Cost             CostRecord        `json:"cost"`
+	Tags             map[string]string `json:"tags,omitempty"`
+	Steps            []StepResult      `json:"steps,omitempty"`
+	Metrics          map[string]Metric `json:"metrics,omitempty"`
+	Values           map[string]any    `json:"values,omitempty"` // structured collector outputs
+	NFRs             []NFRResult       `json:"nfrs,omitempty"`
+	Checks           []CheckResult     `json:"checks,omitempty"`
+	Queries          []QueryRecord     `json:"queries,omitempty"`
+	Artifacts        []Artifact        `json:"artifacts,omitempty"`
+	Logs             []string          `json:"logs,omitempty"`
+	Notes            []string          `json:"notes,omitempty"`
+	Timeline         []TimelineEvent   `json:"timeline,omitempty"`
 }
 
 // TimelineEvent is one timestamped event (instance lifecycle, scale-in, …).

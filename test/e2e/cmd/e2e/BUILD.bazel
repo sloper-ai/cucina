@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//test/e2e/harness",
+        "//test/e2e/infra",
         "//test/e2e/report",
         "//test/e2e/scenarios",
     ],

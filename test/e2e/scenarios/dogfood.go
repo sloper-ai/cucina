@@ -22,7 +22,7 @@ import (
 func t22() *harness.Scenario {
 	return &harness.Scenario{
 		ID: "T22", Title: "Dogfood: the Cucina repository built and tested through Cucina",
-		Requires: []harness.Requirement{harness.RequiresAWS, harness.RequiresLinuxClient, harness.RequiresCucinactl},
+		Requires: []harness.Requirement{harness.RequiresAWS, harness.RequiresLinuxClient, harness.RequiresWindowsClient, harness.RequiresMacHost, harness.RequiresCucinactl},
 		Cost:     harness.CostHigh, EstimateUSD: 15, MaxInstances: 10, Essential: true, Timeout: 6 * time.Hour,
 		Post: Guards,
 		Run:  runT22,
@@ -75,7 +75,7 @@ cd %[1]s && git fetch --quiet origin %[3]s && git checkout --quiet --detach %[3]
 	if err != nil {
 		return nil, err
 	}
-	res, err := h.Run(c, fmt.Sprintf("%s bazelrc --platform %s", quoteFor(h, cli), lane.Platform), remote.Opts{User: user})
+	res, err := h.Run(c, fmt.Sprintf("%s bazelrc --ci --disk-cache=none --helper-path %s --platform %s", quoteFor(h, cli), argFor(h, credentialHelper(h)), lane.Platform), remote.Opts{User: user})
 	if err != nil {
 		return nil, err
 	}
@@ -95,8 +95,11 @@ func (cc *cucinaCheckout) bazel(name, command string, fresh bool, extra ...strin
 
 func (cc *cucinaCheckout) bazelWith(name, command string, fresh bool, startup []string, extra ...string) (*bazelrun.Outcome, error) {
 	c := cc.lr.c
-	inv := bazelrun.Invocation{Name: c.Scenario.ID + "-" + name, Host: cc.lr.host, Workspace: cc.ws, User: cc.lr.user, Collect: true, Bazel: bazelBinary(c.Env, cc.lr.host),
+	inv := bazelrun.Invocation{Name: c.Scenario.ID + "-" + name, Host: cc.lr.host, Workspace: cc.ws, User: cc.lr.user, Collect: command != "clean", Bazel: bazelBinary(c.Env, cc.lr.host),
 		FreshServer: fresh, Startup: startup, Command: command, Args: append(append([]string{}, extra...), "--", "//...")}
+	if command == "clean" {
+		inv.Args = extra
+	}
 	var o *bazelrun.Outcome
 	err := c.Step(cc.lr.host.Name()+": bazel "+command+" "+strings.Join(extra, " "), func() error {
 		var err error
@@ -119,9 +122,13 @@ func runT22(c *harness.Context) error {
 		switch {
 		case err != nil:
 			failed = append(failed, what+": "+err.Error())
+		case o == nil:
+			failed = append(failed, what+": no outcome")
 		case !o.Succeeded():
 			failed = append(failed, fmt.Sprintf("%s: bazel exited %d", what, o.ExitCode))
-		case o.ExecLog != nil && minRemote > 0:
+		case o.ExecLog == nil || o.ExecLog.Spawns == 0:
+			failed = append(failed, what+": missing/nonempty execution log required")
+		case minRemote > 0:
 			r := o.ExecLog.RemoteRatio()
 			c.Check(harness.CheckResult{Name: what + ": ≥ 95 % remote", Kind: "bazel", Pass: r >= minRemote, Value: fmt.Sprintf("%.1f%%", 100*r)})
 			if r < minRemote {
@@ -146,7 +153,11 @@ func runT22(c *harness.Context) error {
 			}
 		}
 		// Warm rerun after clean --expunge.
-		if _, err := linux.bazel("expunge", "clean", false, "--expunge"); err != nil {
+		clean, err := linux.bazel("expunge", "clean", false, "--expunge")
+		if err != nil {
+			return err
+		}
+		if err = mustSucceed(clean, "dogfood expunge"); err != nil {
 			return err
 		}
 		o, err = linux.bazel("linux-warm", "test", true, "--config=cucina")
@@ -167,11 +178,16 @@ func runT22(c *harness.Context) error {
 			o, err := mac.bazel("macos-from-mac", "test", true, "--config=cucina-macos")
 			gate(o, err, "macOS lane from the dev Mac", 0)
 			if o != nil && o.ExecLog != nil {
-				c.Metric("dogfood.macos-from-mac.cache_hit_ratio", o.ExecLog.RemoteCacheHitRatio(), "")
+				c.NFR(nfr.CacheHits("NFR-X3", "dogfood macOS from second client", o.ExecLog.RemoteCacheHitRatio()))
 			}
 			// Local comparison: own output base, remote execution and caches off.
 			local, err := mac.bazelWith("local-on-mac", "test", true, []string{"--output_base=" + mac.ws + ".local-ob"},
 				"--remote_executor=", "--remote_cache=", "--disk_cache=")
+			if err != nil {
+				failed = append(failed, "local comparison: "+err.Error())
+			} else if err = mustSucceed(local, "local comparison"); err != nil {
+				failed = append(failed, err.Error())
+			}
 			if err == nil && o != nil {
 				c.Metric("dogfood.local-on-mac.wall_seconds", local.Wall.Seconds(), "s")
 				c.Note("dogfood on the dev Mac: through Cucina %s vs local %s", o.Wall.Round(time.Second), local.Wall.Round(time.Second))

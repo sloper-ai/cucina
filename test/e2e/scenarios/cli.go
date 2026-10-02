@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sloper-ai/cucina/internal/canary"
 	"github.com/sloper-ai/cucina/test/e2e/bazelrun"
 	"github.com/sloper-ai/cucina/test/e2e/collect/execlog"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
@@ -24,13 +25,13 @@ import (
 // (R-CLI-3; the mutating ones are exercised below with their own checks).
 var readOnlyCommands = [][]string{
 	{"status"}, {"pools", "list"}, {"workers", "list"}, {"hosts", "list"}, {"queues"}, {"ops", "list"},
-	{"keys", "list"}, {"cost"}, {"images"}, {"whoami"}, {"config"},
+	{"keys", "list"}, {"keys", "revocations"}, {"hosts", "enroll-token", "list"}, {"cost"}, {"images"}, {"whoami"}, {"config", "view"},
 }
 
 func t20() *harness.Scenario {
 	return &harness.Scenario{
 		ID: "T20", Title: "CLI/TUI: every cucinactl command against the live cluster, drain/undrain, key revocation, failed-action inspection, binaries on all clients, TUI in a PTY",
-		Requires: []harness.Requirement{harness.RequiresCucinactl, harness.RequiresKubernetes, harness.RequiresAWS, harness.RequiresLinuxClient},
+		Requires: []harness.Requirement{harness.RequiresCucinactl, harness.RequiresKubernetes, harness.RequiresAWS, harness.RequiresLinuxClient, harness.RequiresWindowsClient, harness.RequiresMacHost},
 		Cost:     harness.CostLow, EstimateUSD: 1, MaxInstances: 4, Essential: true, Timeout: 2 * time.Hour,
 		Post: Guards,
 		Run:  runT20,
@@ -91,32 +92,49 @@ func runT20(c *harness.Context) error {
 	if tui {
 		ok, why := tuiShowsChanges(transcript, pool)
 		check("TUI shows live queue and worker changes", ok, why)
+	} else {
+		check("TUI session started", false, "PTY or cucinactl unavailable; no TUI evidence")
 	}
 	if buildErr != nil {
 		check("build while draining", false, buildErr.Error())
 	}
 	// 3. Create and revoke a service key.
-	var created map[string]any
-	if err := svc.CucinactlJSON(c, &created, "keys", "create", "e2e-t20-"+c.Env.RunID); err != nil {
-		check("cucinactl keys create", false, err.Error())
-	} else if id := str(field(created, "id")); id != "" {
-		_, err := svc.Cucinactl(c, "keys", "revoke", id, "--yes")
-		check("cucinactl keys revoke", err == nil, errString(err))
+	control, err := campaignToken(c)
+	if err != nil {
+		return err
+	}
+	key, id, err := createServiceKey(c, svc, control.Subject, "e2e-t20")
+	if err != nil {
+		return err
+	}
+	defer revokeCreatedKey(c, svc, id)
+	_, err = svc.Cucinactl(c, "keys", "revoke", id, "--yes")
+	check("cucinactl keys revoke", err == nil, errString(err))
+	if err == nil {
+		code, oauthErr, err := exchange(c, c.Env, key, canary.ServiceKeyTokenType)
+		check("revoked service key cannot exchange", err == nil && code == 400 && oauthErr == "invalid_grant", fmt.Sprintf("HTTP %d %s", code, oauthErr))
+		check("valid control remains accessible", casAccess(c, c.Env, control.Raw) == nil, "same REAPI endpoint")
 	}
 	// 4. Inspect a failed action.
 	digest, err := failingAction(c, lr)
 	if err != nil {
 		check("a remotely failed action", false, err.Error())
 	} else {
-		var inspect any
+		var inspect struct {
+			Result *struct {
+				ExitCode int `json:"exit_code"`
+				Stderr   *struct {
+					Text string `json:"text"`
+				} `json:"stderr"`
+			} `json:"result"`
+		}
 		err := svc.CucinactlJSON(c, &inspect, "action", "inspect", digest)
-		s := jsonString(inspect)
-		check("cucinactl action inspect (failed action)", err == nil && strings.Contains(s, "boom") && strings.Contains(s, "3"), errString(err))
+		check("cucinactl action inspect (failed action)", err == nil && inspect.Result != nil && inspect.Result.ExitCode == 3 && inspect.Result.Stderr != nil && strings.Contains(inspect.Result.Stderr.Text, "boom"), errString(err))
 	}
 	// 5. The binaries run on every client.
 	for _, h := range []string{"linux-client", "windows-client"} {
 		if _, ok := c.Env.Clients[h]; !ok {
-			continue
+			return harness.Skip("T20 requires %s binary execution", h)
 		}
 		host, err := svc.Host(c, h)
 		if err != nil {
@@ -131,10 +149,11 @@ func runT20(c *harness.Context) error {
 		ok := err == nil && res.ExitCode == 0 && json.Valid(res.Stdout)
 		check("cucinactl status on "+h, ok, errString(err))
 	}
+	extendedErr := runT20Extended(c, svc, lr, node, digest)
 	if len(bad) > 0 {
 		return harness.Fail("%d CLI checks failed: %s", len(bad), strings.Join(bad, "; "))
 	}
-	return nil
+	return extendedErr
 }
 
 func readRC(c *harness.Context, lr *laneRun) string {
@@ -230,7 +249,7 @@ func failingAction(c *harness.Context, lr *laneRun) (string, error) {
 		return "", err
 	}
 	for _, s := range l.Spawns {
-		if s.ExitCode == 3 && !s.ActionDigest.IsZero() {
+		if s.Remote() && s.ExitCode == 3 && !s.ActionDigest.IsZero() {
 			return s.ActionDigest.String(), nil
 		}
 	}

@@ -177,7 +177,7 @@ func coldScenario(id string, lane Lane) *harness.Scenario {
 		ID: id, Title: fmt.Sprintf("%s cold: empty cache, pool at zero, fresh output base; build + test", title(lane.Name)),
 		Requires: []harness.Requirement{harness.RequiresAWS, harness.Requirement(lane.Host), harness.RequiresPrometheus, harness.RequiresCucinactl},
 		Cost:     harness.CostHigh, EstimateUSD: 12, MaxInstances: 6, Essential: true, Timeout: 3 * time.Hour,
-		DependsOn: []string{"T0"},
+		DependsOn: []string{"T0", "baseline-" + lane.Name},
 		NFRs:      []string{"NFR-P1", "NFR-P2", "NFR-T1", "NFR-T4", "NFR-T8", "NFR-M1", "NFR-M2", "NFR-C4"},
 		Post:      append([]harness.Check{ZeroResidueCheck("pool back at zero")}, Guards...),
 		Run:       func(c *harness.Context) error { return runCold(c, lane) },
@@ -185,16 +185,31 @@ func coldScenario(id string, lane Lane) *harness.Scenario {
 }
 
 func runCold(c *harness.Context, lane Lane) error {
+	workerBaseline, clientBaseline := baselineWalls(c, lane)
+	if workerBaseline <= 0 || clientBaseline <= 0 {
+		return harness.Skip("NFR-P2 requires successful baseline-%s on both %s and a %s-baseline worker-type host", lane.Name, lane.Host, lane.Name)
+	}
 	svc, err := infra.Of(c)
 	if err != nil {
 		return err
 	}
 	pool := lane.Pool(c.Env)
-	if r, err := poolInventory(svc, pool).Describe(c); err == nil && len(r.Instances) > 0 {
-		return harness.Fail("pool %s is not at zero before the cold build (%d instances)", pool, len(r.Instances))
+	before, err := poolInventory(svc, pool).Describe(c)
+	if err != nil {
+		return err
+	}
+	if len(before.Instances) > 0 {
+		return harness.Fail("pool %s is not at zero before the cold build (%d instances)", pool, len(before.Instances))
 	}
 	lr, err := openLane(c, lane)
 	if err != nil {
+		return err
+	}
+	clean, err := lr.bazel("cold-expunge", BuildOpts{Command: "clean", Extra: []string{"--expunge"}})
+	if err != nil {
+		return err
+	}
+	if err = mustSucceed(clean, "cold expunge"); err != nil {
 		return err
 	}
 	start := c.Now()
@@ -214,12 +229,18 @@ func runCold(c *harness.Context, lane Lane) error {
 	})
 	end := c.Now()
 	if build != nil && build.BEP != nil && build.BEP.RemoteCacheHitRatio() > 0.01 {
-		c.Note("the cache was not empty: %.1f%% remote cache hits on the cold build", 100*build.BEP.RemoteCacheHitRatio())
+		c.Check(harness.CheckResult{Name: "cold action cache", Kind: "bazel", Pass: false, Detail: fmt.Sprintf("cache was not empty: %.1f%% remote hits", 100*build.BEP.RemoteCacheHitRatio())})
 	}
 	if err != nil {
 		return err
 	}
 
+	if build.BEP == nil || build.ExecLog == nil || test.BEP == nil || test.ExecLog == nil {
+		return harness.Fail("cold build/test missing required BEP or execution-log evidence")
+	}
+	if err := requireRemoteExecution(build, "cold build"); err != nil {
+		return err
+	}
 	// NFR-P1: cold-start samples of this scale-out.
 	firstSubmit := build.BEP.Started.Add(build.TimeToFirstRemoteAction)
 	var samples []time.Duration
@@ -227,7 +248,7 @@ func runCold(c *harness.Context, lane Lane) error {
 		samples = coldStarts(pi.Starts, start, end, firstSubmit)
 		c.Record("starts", pi.Starts)
 	} else {
-		c.Note("pools describe: %v", err)
+		return err
 	}
 	addNFRs(c, nfr.ColdStart(lane.OSName, samples))
 	var coldStart time.Duration
@@ -258,7 +279,7 @@ func runCold(c *harness.Context, lane Lane) error {
 				}
 			}
 			q := fmt.Sprintf(`sum(increase(buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum{%s,storage_type="CAS",backend_type="grpc",operation="Get"}[%ds]))`,
-				workerSel, int(end.Sub(start).Seconds()))
+				workerSelector(c, lane.Name), int(end.Sub(start).Seconds()))
 			if fetched, ok := promScalar(c, q, end); ok {
 				c.NFR(nfr.Ratio("NFR-T8", lane.Name, fetched, float64(compileInputs), 20, true, "worker CAS Get bytes from L3 vs CppCompile input-root bytes (all remote actions' fetches counted: conservative)"))
 			}
@@ -284,7 +305,7 @@ func runCold(c *harness.Context, lane Lane) error {
 		c.Record(lane.Name+".aquery_summary", counts)
 		c.Metric(lane.Name+".actions_total", float64(counts["total"]), "")
 	} else {
-		c.Note("aquery --output=summary: %v", err)
+		return fmt.Errorf("required action-count evidence: %w", err)
 	}
 	// NFR-C4: what the controller launched.
 	costDefaults(c, svc, usage.Lifecycles)
@@ -502,7 +523,17 @@ func l1Scenario(id, dep string, lane Lane) *harness.Scenario {
 				}
 				return nil
 			})
-			return err
+			if err != nil {
+				return err
+			}
+			_, res, err := waitZero(c, scaleInLimit)
+			if err != nil {
+				return err
+			}
+			if !res.Zero() {
+				return harness.Fail("resources remain after idle/drain grace: %s", res)
+			}
+			return nil
 		},
 	}
 }

@@ -358,7 +358,7 @@ func planConfig(tg Target, client Lane, execPool string, scope Scope) (Config, e
 		}
 		cfg.TestStep = TestStepSmoke
 	case tg.Coverage == CoverageFull:
-		cfg.Steps = []Step{{Name: "test", Command: "test", Flags: timeouts, Patterns: bazelrun.AbseilTargets}}
+		cfg.Steps = []Step{{Name: "build", Command: "build", Patterns: bazelrun.AbseilTargets}, {Name: "test", Command: "test", Flags: timeouts, Patterns: bazelrun.AbseilTargets}}
 		cfg.TestStep = TestStepFull
 	default:
 		return Config{}, fmt.Errorf("target %s: coverage %q", tg.Name, tg.Coverage)
@@ -679,7 +679,7 @@ func runXplatcheck(c *harness.Context) (string, error) {
 	}
 	summary, failures := xplatcheckSummary(string(b))
 	if runErr != nil {
-		return summary, fmt.Errorf("%s (%v)%s", summary, runErr, failures)
+		return summary, fmt.Errorf("%s: %w%s", summary, runErr, failures)
 	}
 	return summary, nil
 }
@@ -871,7 +871,7 @@ func (m *matrix) windowsTestOverlay(ml *matrixLane) (string, error) {
 // crossRC returns `cucinactl bazelrc --cross --target <t> [--exec-pool <p>]`
 // (the pool only when it is not the target's default).
 func (m *matrix) crossRC(lr *laneRun, cfg Config) (string, error) {
-	args := "bazelrc --cross --target " + cfg.Target.Name
+	args := "bazelrc --ci --disk-cache=none --helper-path " + argFor(lr.host, credentialHelper(lr.host)) + " --cross --target " + cfg.Target.Name
 	if cfg.ExecPool != cfg.Target.ExecPlatforms[0] {
 		args += " --exec-pool " + cfg.ExecPool
 	}
@@ -998,8 +998,12 @@ func (m *matrix) one(cfg Config) ConfigResult {
 	// execution log (no local action-cache hits from an earlier attempt).
 	clean := base
 	clean.Name, clean.Command, clean.Args = m.c.Scenario.ID+"-"+safe+"-expunge", "clean", []string{"--expunge"}
-	if _, err := bazelrun.Run(m.c, clean, filepath.Join(m.c.Dir(), safe+"-expunge")); err != nil {
-		r.Error = "clean --expunge: " + err.Error()
+	co, err := bazelrun.Run(m.c, clean, filepath.Join(m.c.Dir(), safe+"-expunge"))
+	if err == nil {
+		err = mustSucceed(co, "clean --expunge")
+	}
+	if err != nil {
+		r.Error = err.Error()
 		return r
 	}
 	var spawns, remoteExec, hits int
@@ -1042,8 +1046,13 @@ func (m *matrix) one(cfg Config) ConfigResult {
 				}
 				r.Routing.Merge(rt)
 			} else {
-				m.c.Note("%s: execution log: %v", cfg.Name, err)
+				r.Error = "execution log evidence: " + err.Error()
 			}
+		} else {
+			r.Error = "missing compact execution log evidence"
+		}
+		if st.Command == "test" && len(r.Tests) == 0 {
+			r.Error = "test invocation produced no BEP test outcomes"
 		}
 		r.Steps = append(r.Steps, sr)
 	}
@@ -1197,6 +1206,7 @@ func outcomesVsBaseline(c *harness.Context, results []ConfigResult) {
 // first configuration of a toolchain, later configurations must not upload
 // the toolchain again (bytes sent stay small).
 func toolchainUploads(c *harness.Context, results []ConfigResult) {
+	c.Check(harness.CheckResult{Name: "NFR-X5 per-toolchain-version upload attribution", Kind: "coverage", Skipped: "BEP totals do not identify toolchain/SDK/CRT blobs; per-version upload attribution is not implemented (ADR 1006). Totals below are diagnostics, not proof."})
 	var sent []float64
 	for _, r := range results {
 		if r.Error == "" && r.NetworkBytesSent > 0 {

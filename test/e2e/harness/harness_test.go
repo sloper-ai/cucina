@@ -126,6 +126,9 @@ func TestRunnerStatus(t *testing.T) {
 		scenario(func(s *Scenario) { s.ID = "T5"; s.Run = func(*Context) error { return Fail("build failed") } }),
 		scenario(func(s *Scenario) { s.ID = "T6"; s.Run = func(*Context) error { panic("boom") } }),
 		scenario(func(s *Scenario) { s.ID = "T7"; s.Requires = []Requirement{RequiresIdP} }),
+		// Missing mandatory evidence must not be silently converted to PASS.
+		scenario(func(s *Scenario) { s.ID = "T8"; s.NFRs = []string{"NFR-X1"} }),
+		scenario(func(s *Scenario) { s.ID = "T9"; s.Post = []Check{unavailable, bad} }),
 	)
 	clock := time.Unix(1_790_000_000, 0)
 	r := &Runner{Registry: reg, Env: env, Now: func() time.Time { clock = clock.Add(time.Second); return clock }}
@@ -139,20 +142,38 @@ func TestRunnerStatus(t *testing.T) {
 		require.Equal(t, map[string]string{"cucina:env": "e2e", "cucina:run": "e2e-test"}, res.Tags)
 	}
 	require.Equal(t, map[string]Status{
-		"T1": StatusPass, "T2": StatusFail, "T3": StatusFail, "T4": StatusSkip,
-		"T5": StatusFail, "T6": StatusError, "T7": StatusSkip,
+		"T1": StatusSkip, "T2": StatusFail, "T3": StatusFail, "T4": StatusSkip,
+		"T5": StatusFail, "T6": StatusError, "T7": StatusSkip, "T8": StatusFail, "T9": StatusFail,
 	}, got)
 	require.Equal(t, "no windows AMI yet", results[3].SkipReason)
 	require.Contains(t, results[2].Error, "NFR-P1 (linux) missed")
 	require.Contains(t, results[6].SkipReason, "requires idp")
 	require.Len(t, results[0].Checks, 2)
+	// A successful small-runner timing ratio does not qualify the original
+	// max-four large-worker benchmark, even when its arithmetic target holds.
+	small := awsEnv()
+	small.MeasurementScope = ScopeSmallFunctional
+	reg2 := NewRegistry()
+	reg2.Register(scenario(func(s *Scenario) {
+		s.NFRs = []string{"NFR-P2"}
+		s.Run = func(c *Context) error {
+			c.NFR(NFRResult{ID: "NFR-P2", Pass: true, Measured: 40, Unit: "%", Target: "<=50%"})
+			return nil
+		}
+	}))
+	res, err := (&Runner{Registry: reg2, Env: small}).Run(context.Background(), "T1")
+	require.NoError(t, err)
+	require.Equal(t, StatusSkip, res.Status)
+	require.Equal(t, ScopeSmallFunctional, res.MeasurementScope)
+	require.NotEmpty(t, res.NFRs[0].Unqualified)
+	require.False(t, res.NFRs[0].Pass)
 }
 
 // Guards the descriptor contract: unknown fields fail fast, AWS environments
 // must carry the §12 tags and safety limits, prod-smoke is never destructive.
 func TestParseEnv(t *testing.T) {
 	ok := `{"name":"aws-e2e","kind":"aws-e2e","runId":"r","capabilities":["aws"],
-	  "aws":{"profile":"default","region":"us-west-1","tags":{"cucina:env":"e2e","cucina:run":"r"}},
+	  "aws":{"profile":"default","region":"us-west-1","tags":{"cucina:env":"e2e","cucina:run":"r","cucina:expires":"2026-10-09T00:00:00Z"}},
 	  "abseil":{"tag":"20260817.0","commit":"c"},"safety":{"maxSpendUSD":300,"maxInstances":12},"artifactsDir":"/tmp/x"}`
 	e, err := ParseEnv([]byte(ok))
 	require.NoError(t, err)
@@ -163,7 +184,7 @@ func TestParseEnv(t *testing.T) {
 		"unknown field":      `{"name":"x","kind":"kind","bogus":1}`,
 		"unknown kind":       `{"name":"x","kind":"staging"}`,
 		"aws without tags":   `{"name":"x","kind":"aws-e2e","capabilities":["aws"],"aws":{"region":"us-west-1"},"safety":{"maxSpendUSD":1,"maxInstances":1}}`,
-		"aws without limits": `{"name":"x","kind":"aws-e2e","capabilities":["aws"],"aws":{"region":"us-west-1","tags":{"cucina:env":"e2e","cucina:run":"r"}}}`,
+		"aws without limits": `{"name":"x","kind":"aws-e2e","capabilities":["aws"],"aws":{"region":"us-west-1","tags":{"cucina:env":"e2e","cucina:run":"r","cucina:expires":"2026-10-09T00:00:00Z"}}}`,
 		"destructive smoke":  `{"name":"x","kind":"prod-smoke","safety":{"allowDestructive":true}}`,
 		"bad client os":      `{"name":"x","kind":"kind","clients":{"c":{"os":"plan9","instanceId":"i"}}}`,
 	} {

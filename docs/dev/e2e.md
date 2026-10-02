@@ -1,106 +1,108 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 # The scenario harness and the acceptance campaign
 
-`test/e2e` is Cucina's one scenario harness (R-TEST-8d): the §10 campaign (T0–T22), local baselines, read-only production
-smoke checks and the canary scenarios run on it. It is plain Go `testing`, with no framework.
+`test/e2e` implements the §10 campaign as Go `testing` scenarios (R-TEST-8d). **Offline tooling tests are not acceptance results.** The lead owns provisioning, images, Helm values, credentials, approval to run the campaign and final teardown. No cloud resource is created by `e2e env` or `e2e check`.
 
 ## Layout
 
-| Path | What |
+| Path | Purpose |
 | --- | --- |
-| `test/e2e/harness` | Scenario registry, environment descriptor, SKIP logic, budget governor, JSON results |
-| `test/e2e/scenarios` | T0–T22, `baseline-*`, `canary-*`, `kind-t0`, `cli-smoke`, `pods-ready`, `zero-scale` |
-| `test/e2e/remote` | Hosts: SSM Run Command (Linux/Windows VMs), local (dev Mac); jobs, chunked output, transfers (ADR 1002) |
-| `test/e2e/bazelrun` | Bazel invocations with the §10.2 and §10.4 flags; Abseil checkout, overlay and per-host `.bazelrc` |
-| `test/e2e/collect/{bep,execlog,profile}` | Parsers: build event stream (JSON/binary), compact execution log, `--profile` trace |
-| `test/e2e/collect/{prom,awsinv,spend}` | Prometheus snapshotter, tag-filtered EC2 inventory + sampler, cost (via `internal/cost`) |
-| `test/e2e/nfr` | §8 catalogue and calculators: every NFR is computed, never eyeballed |
-| `test/e2e/report`, `test/e2e/cmd/e2e` | Report generator with redaction; `e2e list|env|report|redact-check` |
-| `test/e2e/abseil` | Abseil overlay (MODULE addition, `.bazelrc`) and local-baseline scripts |
-| `test/e2e/third_party/bazel` | Vendored `spawn.proto` and trimmed `build_event_stream.proto` (ADR 1001) |
-| `internal/canary` | Cache/exec canaries, `cucina_canary_*` metrics, `cucina-controller canary` command (ADR 1004) |
-| `slo/` | Recording rules and SLOs shared by scenarios, canaries and alerts (`rules.json`, `sloth.json`) |
-| `deploy/aws-e2e/scripts/campaign` | `run.sh` (phases), `port-forwards.sh`, `mock-oauth2-server.sh`, `baseline-host.sh` |
+| `test/e2e/harness` | Registry, typed descriptors, capability/dependency checks, budget governor, JSON results |
+| `test/e2e/scenarios` | T0–T22, baselines, canaries and smoke scenarios |
+| `test/e2e/remote` | SSM/local execution, detached jobs, cancellation, complete output and verified file transfer (ADR 1002) |
+| `test/e2e/bazelrun` | Bazel invocations, Abseil overlays, per-host rc files, artifact collection |
+| `test/e2e/collect/{bep,execlog,profile,prom,awsinv,spend}` | Bazel/Prometheus/lifecycle evidence and cost integration |
+| `test/e2e/nfr`, `test/e2e/report` | Calculators, complete/partial NFR aggregation and report redaction |
+| `test/e2e/cmd/e2e` | `list`, `env`, `check`, `report`, `redact-check` |
+| `test/e2e/abseil` | Native/cross rc configurations, extra freestanding example, local baseline scripts |
+| `deploy/aws-e2e/scripts/campaign` | Phase runner, port-forwards, mock issuer and baseline-host helpers |
+| `internal/canary`, `slo` | Shared canaries and SLO queries; canary/chart lifecycle has a separate owner |
 
-## Writing a scenario
+## Prerequisites and operator sequence
 
-A scenario declares what it needs and what it proves; the harness does the rest:
+**Current user override: small functional runners only.** The lead selects `.large` worker/client/control-plane shapes (2 vCPU / 8 GiB) and AWS pool maxima of one. The descriptor generator labels results `measurementScope: "small-functional"`; NFR-P2 timings remain diagnostic and cannot qualify the original max-four large-worker benchmark. `baseline-host.sh` has no large-instance fallback: it requires the chosen worker type and rejects shapes above the small limit before launch. Do not infer permission for larger shapes from the original §10 campaign descriptions below.
 
-```go
-&harness.Scenario{
-    ID: "T42", Title: "…", Requires: []harness.Requirement{harness.RequiresAWS, harness.RequiresLinuxClient},
-    Cost: harness.CostLow, EstimateUSD: 1, Timeout: time.Hour, NFRs: []string{"NFR-P3"},
-    Post: append([]harness.Check{ZeroResidueCheck("nothing left")}, Guards...),
-    Run: func(c *harness.Context) error {
-        lr, err := openLane(c, LinuxLane)          // Abseil + overlay + cucinactl bazelrc on the client
-        …
-        o, err := lr.bazel("warm", BuildOpts{Command: "build"})
-        c.NFR(nfr.CacheHits("NFR-P3", "linux", o.ExecLog.RemoteCacheHitRatio()))
-        return nil
-    },
-}
-```
+The following sequence is for the **lead's live campaign**, not an offline test. Its command-line interfaces are checked by the tooling tests; infrastructure readiness still requires live verification.
 
-* `Requires`: an unmet one is a SKIP with a reason (`aws`, `mac-host`, `idp`, `destructive`, `linux-client`, `windows-client`,
-  `kubernetes`, `prometheus`, `cucinactl`, `cross-matrix`, `hostd-pkg`). `Envs` limits the environment kinds
-  (`kind` ≤ 2 min per scenario, `prod-smoke` read-only only).
-* Return `harness.Fail(…)` for a product verdict, `harness.Skip(…)` for a prerequisite found at run time; anything else is an
-  environment error. Missed NFRs fail the scenario automatically.
-* `Post` checks run after `Run` (even when it failed): PromQL thresholds from `slo/`, tag-filtered AWS describes, CLI JSON.
-* Record numbers with `c.Metric`, structured outputs with `c.Record`, timelines with `c.Event`; every PromQL query is recorded
-  by the client `svc.Prom(c)` returns.
-* Register it in `scenarios/registry.go`; `TestRegistryCoversTheCampaign` checks IDs and NFR cross-references.
+1. Provision the tagged `default`/`us-west-1` environment using the AWS runbook. Prepare the worker images, controller image, kubeconfig, private Helm values and Prometheus deployment/scrapes. The harness does not install Prometheus. The local CLI binaries must be built for **darwin-arm64**, **linux-amd64** and **windows-amd64**; their descriptor paths are local files uploaded to clients when needed.
+2. Prepare a private JSON settings file with deployment-specific overrides. Typical fields are `kubernetes.valuesFiles`, `endpoints.prometheus`, per-pool `workerSelectors`, `devMac` hostd/package inputs, `images`, the accessible pinned `cucina` commit, and the client baselines. The default Prometheus URL is port 9090; override it if the lead uses another port. Jobs such as `cucina-workers` can be selected with `job="cucina-workers",pool="linux-x86-64"` (separate Windows/macOS selectors).
+3. Generate the descriptor. The file is atomically written under `~/.config/cucina/e2e/` with mode 0600. Existing descriptors require `--force`; preserve custom settings with `--settings`. Objects merge recursively and arrays replace. Unknown fields, wrong regions, mismatched campaign tags and unsafe descriptor names fail.
 
-## Environment descriptor
+   ```sh
+   export CUCINA_AGENT=e2e
+   source .work/env.sh
+   go run ./test/e2e/cmd/e2e env --name aws-e2e \
+     --base "$CUCINA_SECRETS_DIR/aws-e2e/base-outputs.json" \
+     --env "$CUCINA_SECRETS_DIR/aws-e2e/env-outputs.json" \
+     --values "$CUCINA_SECRETS_DIR/aws-e2e/values-endpoints.json" \
+     --values "$CUCINA_SECRETS_DIR/aws-e2e/values-campaign.yaml" \
+     --settings "$CUCINA_SECRETS_DIR/aws-e2e/settings.json" \
+     --cucinactl-darwin "$CLI_DARWIN" \
+     --cucinactl-linux "$CLI_LINUX" \
+     --cucinactl-windows "$CLI_WINDOWS" \
+     --allow-destructive --with-idp
+   ```
 
-`~/.config/cucina/e2e/<name>.json` (0600; it holds instance IDs and endpoints, never committed). Generate the AWS one from the
-OpenTofu outputs, then fill in what OpenTofu cannot know (cucinactl binaries per OS, the Cucina commit for T22, T12 image IDs,
-the T11 upgrade values file, the service-key files):
+   Set the three `CLI_*` variables to actual build outputs. `--with-idp` only configures the HTTPS mock issuer; it does not deploy or trust it. `--allow-destructive` is an explicit opt-in, not the default. `run.sh all` refuses to start without eligible teardown.
+
+4. Bind the local CLI to this deployment. **T0 needs authenticated management access after installation.** Either preconfigure the matching profile or provide `kubernetes.bootstrapCLI: ["/absolute/private/bootstrap-script"]`. T0 executes that lead-owned script after `helm install`/`helm test`, suppresses its output, then verifies the selected profile's STS, REAPI, management and CA paths against the descriptor. The script exports credentials to private files and configures the local CLI; the harness neither invents keys nor selects an unrelated ambient cluster. Example CLI shape is `cucinactl login <STS-URL> --ca-file <CA-FILE> --key <KEY-FILE>`: `--key` is a **filename**, not the key text.
+5. Establish the configured Prometheus port-forward, then check and run T0:
+
+   ```sh
+   go run ./test/e2e/cmd/e2e check --env aws-e2e --id T0
+   bazelisk run //test/e2e:scenario -- --env=aws-e2e --id=T0
+   ```
+
+   `check` examines local files, declared capabilities, prior results and (without a bootstrap hook) local CLI configuration. It does not call AWS/Kubernetes or certify live readiness. A pre-existing release makes T0 SKIP; manual preflight of an existing release is not an official T0 pass.
+6. Prepare **both client-type and worker-type baselines** for Linux/Windows. Add `clients.linux-baseline` / `clients.windows-baseline` with the corresponding worker instance type, then run `baseline-linux` / `baseline-windows` (`baseline-macos` for the Mac). NFR-P2 cannot pass with only the small client baseline. T1/T4 require positive baseline measurements before spending on a cold run. Run T1–T22 phases only after their inputs and independent review are ready.
+7. Run teardown even after failures, generate the report, then run `redact-check` before any report commit. Phase `all` attempts teardown/report on normal completion and interruption; any FAIL, ERROR or SKIP makes its exit nonzero. Single phases leave lifecycle control to the lead; do not omit T15.
+
+   ```sh
+   deploy/aws-e2e/scripts/campaign/run.sh --env aws-e2e preflight
+   deploy/aws-e2e/scripts/campaign/run.sh --env aws-e2e baselines linux
+   deploy/aws-e2e/scripts/campaign/run.sh --env aws-e2e teardown report
+   go run ./test/e2e/cmd/e2e redact-check docs/reports/e2e-*.md
+   ```
+
+For a compiler-independent run, the lead may freeze `go build -o <bin>/e2e ./test/e2e/cmd/e2e` and `go test -c -o <bin>/scenario.test ./test/e2e`; invoke the latter with `-test.run '^TestScenario$' -test.timeout 24h -env aws-e2e -id T0`. A no-environment invocation deliberately skips, not passes acceptance.
+
+## Descriptor details and safety
+
+* Files contain identifiers, not embedded secrets. `secrets.*` are private file paths. Temporary client keys use `remote.PutPrivate`, never SSM inline parameters; login supplies `--key FILE --ca-file FILE --credential-store=file`. The temporary key is deleted, while the CA remains for the profile and Bazel.
+* Client STS, `remoteExecution` and `management` fields use the control plane's **private address**. After login, the harness overrides the CLI's REAPI/management profile fields before generating rc files and installing a matching host-scoped helper. Discovery may still advertise a public **token endpoint**: the lead must verify authentication routing separately before claiming zero public-IP traffic.
+* Optional `devMac` client settings do not imply an enrolled Mac host. `mac-host` is enabled only with hostd binary/config inputs; packaging needs signed initial/upgrade packages, signer certificate, site approval and free VM slots. No system-wide installation is performed on the dev Mac.
+* T9 needs isolation SG/tags; T10 needs the HTTPS mock CA/trust setup, signing-key rotation command, read-only key and valid worker/host certificates for positive mTLS controls. T11 needs upgrade values, T12 distinct images, and T22 a commit actually reachable by the clients. T20 destructive command coverage requires explicit disposable `cli` fixtures, not production-like names guessed by the harness.
+* `safety.maxSpendUSD`, `maxInstances`, `allowDestructive` and `allowOverBudget` constrain execution. Only the user may authorize exceeding the budget. Raw artifacts are outside the repository; the descriptor is on the encrypted internal disk.
+
+## Cross matrix (T16–T19)
+
+See ADR 1006 and `docs/cross-compilation.md`. The runner consumes real `platforms/targets.json`/`pools.json` and generates each configuration through `cucinactl bazelrc --cross --target <P> [--exec-pool <pool>]`. It first runs the offline `xplatcheck -exec-pools` pre-check (17 target rows and three additional exec-pool rows at the current catalog). This check does not execute remote actions.
+
+* Full rows build then test `//absl/...`. qemu rows build all of Abseil, then test the smoke subset with the catalog's timeout multiplier (currently `600,3000,9000,36000`). wasm/BPF build the freestanding C example only and explicitly record **test step: not applicable**.
+* Compile/test routing is evaluated from REAPI properties, not platform names. macOS tests expect Xcode runner properties; generic macOS properties do not count. T17 moves each allowed non-default compile pool first without moving tests.
+* T16 and the Mac's T18 Windows tests first run `tools/xplat/windows-test-overlay.sh`. Windows clients need no overlay; T19 compiles Linux and MinGW targets on Linux and tests on their target runners. Cross Windows invocations unset `BAZEL_SH`.
+* Each configuration has a separate, expunged output base. Forced failure/re-execution scenarios additionally disable remote cache acceptance/test caching and require executed remote spawns. Cancellation stops the detached job, not just the poller.
+
+## Evidence and remaining acceptance gaps
+
+A missing declared NFR fails the scenario. An unavailable required check has an explicit reason and prevents PASS; known failures win over unavailable checks. Missing metric sources, logs and zero denominators are not measurements. The report marks incomplete catalog coverage **PARTIAL** rather than passing a Linux-only measurement for a multi-OS requirement.
+
+These MUST clauses remain unavailable without additional evidence and must not be signed off from the current diagnostics:
+
+* **T8 per-VM idle→actual termination latency:** management history records drain/terminate API-call completion, not idle transitions or EC2 disappearance. T8 currently records an unavailable timing check when the requisite pairs are absent. Live `idle_seconds` sampling correlated with provider disappearance is still needed; zero final residue alone proves only the final state.
+* **NFR-X5 per-toolchain-version upload attribution:** total BEP upload counters do not identify LLVM/SDK/CRT blobs. T16 reports totals but marks this check unavailable; it cannot claim a full T16 pass from totals alone. Dependent cache scenarios remain blocked by a nonpassing T16 unless the missing evidence is implemented.
+* **Campaign cost qualification:** the worker subtotal is not complete campaign spend. Baseline hosts, standing infrastructure, image builds, snapshots, Fast Launch and transfer charges require complete accounting; NFR-C3 remains unqualified without it. The original static standing-topology table does not qualify NFR-C2 for the new small topology. Unknown instance rates are explicitly incomplete, not zero-cost; the governor keeps the conservative reservation.
+* **Cold-start timing:** controller polling can miss a short action. A null first-action latency, including a partial set of launch samples, cannot establish NFR-P1's maximum. The controller/REAPI evidence must supply it; the harness will not substitute zero.
+* Hardware/MDM behavior that cannot be exercised inside the packaging VM still requires its manual checklist. A missing signed upgrade package, valid denial control, client lane, remote-execution log or isolated CLI fixture is an unmet prerequisite, not a successful test.
+
+Other NFR methods and their bounds are documented in ADR 1005. Review recorded queries/results and limitations before signing off; registered scenarios alone are not proof of implementation coverage.
+
+## Tooling verification
 
 ```sh
-go run ./test/e2e/cmd/e2e env --name aws-e2e \
-  --base ~/.config/cucina/aws-e2e/base-outputs.json --env ~/.config/cucina/aws-e2e/env-outputs.json
+go test ./test/e2e/... ./slo/...
+bazelisk test //test/e2e/... //slo/... --runs_per_test=20
+bazelisk run //tools/xplat/cmd/xplatcheck -- -workdir /tmp/xplatcheck -exec-pools
 ```
 
-Secrets are referenced by path (`secrets.serviceKeyFile`, `readOnlyKeyFile`, `adminKeyFile`) and reach client VMs only over the
-SSM port-forwarding path (`remote.PutPrivate`). `safety` holds `maxSpendUSD`, `maxInstances`, `allowDestructive` and
-`allowOverBudget` (set only after the user approved an overrun).
-
-## Running
-
-```sh
-source .work/env.sh                                     # profile default, us-west-1, run tags
-deploy/aws-e2e/scripts/campaign/run.sh preflight        # descriptor, AWS session, cluster, port-forwards
-deploy/aws-e2e/scripts/campaign/run.sh install linux    # T0, then T1–T3
-go test ./test/e2e -run TestScenario -args -env aws-e2e -id T9c     # one scenario
-bazel run //test/e2e:scenario -- --env=aws-e2e --id=T9c             # the same through Bazel
-go run ./test/e2e/cmd/e2e report --env aws-e2e          # docs/reports/e2e-<date>.md (redacted)
-go run ./test/e2e/cmd/e2e redact-check docs/reports/e2e-*.md        # gate before every commit of a report
-```
-
-Results: `<artifactsDir>/<runId>/results/result-<ID>.json` (+ `budget.json`, the governor's ledger); raw BEP, execution logs and
-profiles under `<artifactsDir>/<runId>/<ID>/` on the dev-storage volume. Bazel runs on the hosts with a minimal environment so
-the raw artifacts carry no credentials.
-
-The budget governor admits a scenario only if spent (max of the AWS-measured actual and the scenario ledger) + reserve + its
-estimate stays within $300; non-essential scenarios are skipped, essential ones are held until the user approves.
-
-## Collectors (§10.4)
-
-* **Bazel client**: BEP (wall, critical path, runner counts, NetworkMetrics, heap with `--memory_profile`), compact execution
-  log (per-spawn queue/setup/execution/output-upload time, input/output bytes, platform, action digest), profile (critical path,
-  slowest actions, phases, Bazel memory, network counters; Perfetto `trace_processor` SQL when `PERFETTO_TRACE_PROCESSOR` or
-  `trace_processor_shell` exists), Bazel server peak RSS (VmHWM / PeakWorkingSet64 after `bazel shutdown` + build).
-* **Control plane / workers**: PromQL over `slo/` recording rules and Buildbarn metrics (worker selectors per lane in
-  `workerSelectors`; default `job=~".*worker.*"`).
-* **AWS**: tag-filtered describes sampled every 10–15 s → instance lifecycles, instance-seconds by type, EBS GiB-hours,
-  public-IPv4 hours, duplicate launch tokens; priced by `internal/cost`.
-* Measurement definitions that needed a decision are in ADR 1005.
-
-## Tests of the tooling
-
-`go test ./test/e2e/... ./internal/canary/... ./slo/...` — parsers against real Bazel 9.2.0 fixtures (≤ 50 lines each, scrubbed),
-calculators and redaction tables, governor and SKIP logic (unit); the POSIX job/transfer scripts, the Bazel collection pipeline
-with a fake `bazel`, and both canaries against the pinned `bb_storage`/`bb_scheduler` (integration, localhost only). Nothing
-needs AWS. Regenerate the vendored protos with `cd test/e2e/third_party/bazel && buf generate` (protoc-gen-go v1.36.12) and the
-SLO files with `go run ./slo/cmd/slogen`.
+Tests cover the parsers, NFR/budget/status logic, descriptor generation, private client setup, real local job cancellation, CLI boundary failures and matrix planning. They make no AWS calls. Canary implementation/tests and kind lifecycle are maintained separately; do not conflate their offline success with live campaign evidence.
