@@ -7,8 +7,9 @@
 //! part of the text snapshot; the screens are rendered with the plain palette.
 //! Review changes with `cargo insta review` (or `INSTA_UPDATE=always` + diff).
 
+use cucina_api::proto::cucina::v1 as pb;
 use cucinactl::tui::fake::{FakeManagement, keys};
-use cucinactl::tui::{State, Theme, render};
+use cucinactl::tui::{Event, State, StreamEvent, Theme, render, update};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -48,4 +49,105 @@ fn key_screens() {
             );
         }
     }
+}
+
+// Guards: R-CLI-4 — PoolSummary.registered already includes its busy/idle subsets.
+// T1's single idle VM must render READY=1 and ACTUAL=1, not 2. Count what the API
+// reports; never hide a real above-max count by clamping it to configured capacity.
+#[test]
+fn pool_counts_do_not_double_count_registered_subsets() {
+    let base = pb::PoolSummary {
+        name: "pool-a".into(),
+        provider: "ec2".into(),
+        max: 1,
+        condition: "Ready".into(),
+        ..Default::default()
+    };
+    let cases = [
+        (
+            "one idle VM",
+            pb::PoolSummary {
+                registered: 1,
+                idle: 1,
+                ..base.clone()
+            },
+            "1",
+            "1",
+        ),
+        (
+            "one busy VM",
+            pb::PoolSummary {
+                desired: 1,
+                registered: 1,
+                busy: 1,
+                ..base.clone()
+            },
+            "1",
+            "1",
+        ),
+        (
+            "draining and booting count separately; stopped does not run",
+            pb::PoolSummary {
+                desired: 3,
+                max: 3,
+                launching: 1,
+                registered: 1,
+                idle: 1,
+                draining: 1,
+                stopped: 2,
+                ..base.clone()
+            },
+            "1",
+            "2+1",
+        ),
+        (
+            "reported capacity above max stays visible",
+            pb::PoolSummary {
+                desired: 1,
+                registered: 2,
+                idle: 2,
+                ..base
+            },
+            "2",
+            "2",
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (name, pool, ready, actual) in cases {
+        for (width, height) in [(80, 24), (100, 30), (160, 48)] {
+            for (script, column, expected) in [("", 1, actual), ("2", 3, ready)] {
+                let mut state = State::new("counts", Theme::PLAIN, false, (width, height));
+                update(
+                    &mut state,
+                    Event::Overview(Box::new(StreamEvent::Data(pb::Overview {
+                        pools: vec![pool.clone()],
+                        ..Default::default()
+                    }))),
+                );
+                for event in keys(script) {
+                    update(&mut state, event);
+                }
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal.draw(|frame| render(&state, frame)).unwrap();
+                let text = terminal.backend().to_string();
+                let row = text
+                    .lines()
+                    .find(|line| line.contains("pool-a"))
+                    .expect("pool row");
+                let cells: Vec<_> = row
+                    .split_once("pool-a")
+                    .unwrap()
+                    .1
+                    .split_whitespace()
+                    .collect();
+                if cells[column] != expected {
+                    mismatches.push(format!(
+                        "{name}, {width}x{height}, tab {script:?}: expected {expected}, got {}",
+                        cells[column]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

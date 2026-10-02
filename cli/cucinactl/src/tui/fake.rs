@@ -117,7 +117,8 @@ fn pool(
         max,
         desired,
         launching,
-        registered: 0,
+        // Match PoolSummary's aggregate: busy/idle are subsets of registered.
+        registered: busy + idle,
         busy,
         idle,
         draining: 0,

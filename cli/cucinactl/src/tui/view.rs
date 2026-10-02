@@ -423,7 +423,8 @@ fn overview(s: &State, f: &mut Frame, body: Rect) {
     let prows = rows::pools(s)
         .into_iter()
         .map(|p| {
-            let running = p.registered + p.busy + p.idle + p.draining;
+            // Busy and idle partition registered; they are not additional VMs.
+            let running = p.registered + p.draining;
             let actual = if p.launching > 0 {
                 format!("{running}+{}", p.launching)
             } else {
@@ -619,7 +620,8 @@ fn pools(s: &State, f: &mut Frame, body: Rect) {
                 Cell::from(p.provider.clone()),
                 right(format!("{}/{}", p.desired, p.max)),
                 right(p.launching.to_string()),
-                right((p.registered + p.idle).to_string()),
+                // Registered includes the busy subset shown in the next column.
+                right(p.registered.to_string()),
                 right(p.busy.to_string()),
                 right(p.draining.to_string()),
                 Cell::from(format::dash(&p.image_generation)),
