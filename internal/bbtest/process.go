@@ -106,7 +106,9 @@ func Start(t testing.TB, name, binary string, config []byte, opts ...Option) *Pr
 		close(p.done)
 	}()
 	t.Cleanup(func() {
-		p.Stop()
+		if err := p.StopContext(context.Background()); err != nil {
+			t.Errorf("stop %s: %v", name, err)
+		}
 		if t.Failed() {
 			t.Logf("--- %s output (tail) ---\n%s", name, Tail(p.Logs(), 60))
 		}
@@ -114,12 +116,21 @@ func Start(t testing.TB, name, binary string, config []byte, opts ...Option) *Pr
 	return p
 }
 
-// Stop terminates the process (SIGTERM, then SIGKILL after a grace period)
-// and waits for it; stopping a stopped process does nothing.
-func (p *Process) Stop() {
+// Stop terminates the process (SIGTERM, then SIGKILL after a grace period).
+// A process that cannot be reaped is reported by Start's test cleanup. Use
+// StopContext when the caller needs the shutdown error before its own cleanup.
+func (p *Process) Stop() { _ = p.StopContext(context.Background()) }
+
+// StopContext terminates only this child and waits for it. Shutdown is bounded
+// by the shorter of ctx and the configured grace plus five seconds to reap a
+// killed child. In particular, cleanup must not wait forever on a child stuck
+// on a dead filesystem. Repeated calls after exit do nothing.
+func (p *Process) StopContext(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, p.stopGrace+stopGrace)
+	defer cancel()
 	select {
 	case <-p.done:
-		return
+		return nil
 	default:
 	}
 	terminate(p.cmd)
@@ -127,9 +138,16 @@ func (p *Process) Stop() {
 	defer timer.Stop()
 	select {
 	case <-p.done:
+		return nil
 	case <-timer.C:
-		kill(p.cmd)
-		<-p.done
+	case <-ctx.Done():
+	}
+	kill(p.cmd)
+	select {
+	case <-p.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("%s did not exit after SIGKILL: %w", p.Name, ctx.Err())
 	}
 }
 
@@ -274,7 +292,11 @@ func ShortTempDir(t testing.TB) string {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove short temporary directory: %v", err)
+		}
+	})
 	return dir
 }
 

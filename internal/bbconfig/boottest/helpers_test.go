@@ -9,14 +9,13 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/buildbarn/bb-remote-execution/pkg/proto/remoteworker"
 	"github.com/stretchr/testify/require"
@@ -28,6 +27,7 @@ import (
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
 	"github.com/sloper-ai/cucina/internal/bbconfig"
 	"github.com/sloper-ai/cucina/internal/bbtest"
+	"github.com/sloper-ai/cucina/internal/workeragent/hostos"
 )
 
 const (
@@ -165,15 +165,18 @@ func startWorker(t *testing.T, config []byte, dir string, plan *bbconfig.WorkerP
 	if plan.BuildDirectory != bbconfig.BuildDirectoryNFSv4 {
 		return bbtest.Start(t, "bb_worker", bbtest.Binary(t, bbtest.EnvWorker), config, bbtest.WithDir(dir))
 	}
-	// A graceful stop unmounts; a killed bb_worker leaves a mount whose server
-	// is gone, and anything that stats it hangs. So: plenty of time to stop,
-	// then a forced unmount found through the mount table (no stat).
-	w := bbtest.Start(t, "bb_worker", bbtest.Binary(t, bbtest.EnvWorker), config, bbtest.WithDir(dir), bbtest.WithStopGrace(30*time.Second))
+	// Remember the canonical directory while it is still local. After the
+	// worker stops, even resolving a symlink through a stale NFS root can hang.
+	mount, err := bbtest.TrackNFSMount(context.Background(), hostos.Exec{}, plan.MountPath)
+	require.NoError(t, err)
+	w := bbtest.Start(t, "bb_worker", bbtest.Binary(t, bbtest.EnvWorker), config, bbtest.WithDir(dir))
 	t.Cleanup(func() {
-		w.Stop()
-		if mounted(plan.MountPath) {
-			_ = exec.Command("/sbin/umount", "-f", plan.MountPath).Run()
-		}
+		// SIGTERM gets the normal graceful-unmount opportunity, bounded by
+		// StopContext. If it exits with a mount still present (or needs KILL),
+		// remove only this test's NFS mount before TempDir cleanup runs.
+		stopErr := w.StopContext(context.Background())
+		mountErr := mount.Cleanup(context.Background())
+		require.NoError(t, errors.Join(stopErr, mountErr))
 	})
 	return w
 }
@@ -194,13 +197,6 @@ func waitRegistered(t *testing.T, w *bbtest.Process, ready bbtest.Readiness) {
 	default:
 	}
 	t.Fatal(err)
-}
-
-// mounted reports whether path is a mount point, from the mount table: it
-// must not touch the path itself, which may be a stale NFS mount.
-func mounted(path string) bool {
-	out, err := exec.Command("/sbin/mount").Output()
-	return err == nil && strings.Contains(string(out), " on "+path+" (")
 }
 
 func platformKey(req *remoteworker.SynchronizeRequest) string {
