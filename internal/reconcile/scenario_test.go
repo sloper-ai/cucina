@@ -141,6 +141,156 @@ func TestScenarioScaleFromZeroToZero(t *testing.T) {
 	assert.InDelta(t, today, resumed, 1e-6)
 }
 
+// Guards: NFR-C1, R-SCALE-3/7 — the cost-leak gauge must not flag normal idle
+// time, drain grace or an explicit floor, but must expose overdue live workers
+// even when their drain/termination fails (e2e audit regression).
+func TestScenarioIdleCostLeakGauge(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		initial     int32
+		floor       int32
+		floorKind   string
+		idleTimeout time.Duration
+		blocked     string
+		wantLeaks   float64
+	}{
+		{"normal idle and termination", 1, 0, "minRunning", time.Minute, "", 0},
+		{"failed drain", 1, 0, "minRunning", time.Minute, "AddDrain", 1},
+		{"failed termination", 1, 0, "minRunning", 3 * time.Minute, "Terminate", 1},
+		{"allowed minRunning", 2, 2, "minRunning", time.Minute, "Terminate", 0},
+		{"excess above minRunning", 2, 1, "minRunning", time.Minute, "Terminate", 1},
+		{"excess above scheduled floor", 2, 1, "schedule", time.Minute, "Terminate", 1},
+		{"allowed temporary floor", 2, 2, "temporary", time.Minute, "Terminate", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, 17)
+			wp := linuxPool("linux", tc.initial)
+			wp.Spec.Capacity.MinRunning = tc.initial
+			wp.Spec.Timers.IdleTimeout = &metav1.Duration{Duration: tc.idleTimeout}
+			rt := h.addPool(wp)
+			pool := rt.Spec.Name
+			for range 90 {
+				h.step()
+				if snap, _ := h.comps.Fleet.Snapshot(pool); snap.Counts["registered"] == int(tc.initial) {
+					break
+				}
+			}
+			snap, ok := h.comps.Fleet.Snapshot(pool)
+			require.True(t, ok)
+			require.Equal(t, int(tc.initial), snap.Counts["idle"])
+			gauge := h.metrics.IdleInstancesWithEmptyQueue.WithLabelValues(string(pool))
+			require.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "freshly idle floor workers are not cost leaks")
+
+			wp.Spec.Capacity.MinRunning = 0
+			switch tc.floorKind {
+			case "minRunning":
+				wp.Spec.Capacity.MinRunning = tc.floor
+			case "schedule":
+				wp.Spec.FloorSchedule = []v1alpha1.FloorWindow{{
+					Name: "office", Days: []string{"Fri"}, Start: "09:00", End: "18:00", MinRunning: tc.floor,
+				}}
+			case "temporary":
+				wp.Annotations = map[string]string{reconcile.AnnFloorOverride: `{"minRunning":2,"expiresAt":"2026-10-02T10:00:00Z"}`}
+			}
+			h.addPool(wp)
+			faults := h.compute.Faults
+			if tc.blocked == "AddDrain" {
+				faults = h.bq.Faults
+			}
+			if tc.blocked != "" {
+				faults.FailRate(tc.blocked, 1, ports.ErrThrottled)
+			}
+			h.step()
+			nonFloorSince := h.clock.Now() // first observation under the new floor
+			advanceTo := func(at time.Time) {
+				for h.clock.Now().Before(at) {
+					h.step()
+				}
+			}
+			for _, age := range []time.Duration{tc.idleTimeout - time.Second, tc.idleTimeout, tc.idleTimeout + 2*time.Minute} {
+				advanceTo(nonFloorSince.Add(age))
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "no cost leak at idle age %s (idle timeout %s plus 2m grace)", age, tc.idleTimeout)
+			}
+			advanceTo(nonFloorSince.Add(tc.idleTimeout + 2*time.Minute + time.Second))
+			assert.InDelta(t, tc.wantLeaks, testutil.ToFloat64(gauge), 0, "only overdue non-floor workers are leaks")
+			if tc.blocked != "" {
+				assert.Len(t, h.alive(pool), int(tc.initial), "the failed operation leaves real instances running")
+			}
+			remaining := int(tc.floor)
+			if tc.floor == tc.initial {
+				snap, _ = h.comps.Fleet.Snapshot(pool)
+				assert.True(t, snap.IdleEmptySince.IsZero(), "allowed floor must not trigger the management cost-leak alert")
+
+				// Time spent legitimately protecting a floor must not make its
+				// first ordinary drain look overdue when the operator releases it.
+				wp.Spec.Capacity.MinRunning = 0
+				wp.Spec.FloorSchedule = nil
+				wp.Annotations = nil
+				h.addPool(wp)
+				h.step()
+				released := h.clock.Now()
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "removing a floor starts fresh non-floor evidence")
+				advanceTo(released.Add(tc.idleTimeout + 2*time.Minute))
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "released floor still gets idle/drain grace")
+				h.step()
+				assert.InDelta(t, float64(tc.initial), testutil.ToFloat64(gauge), 0, "failed termination after floor release eventually leaks")
+				remaining = 0
+			}
+
+			if tc.blocked == "AddDrain" {
+				// A failed drain can race newly assigned work. Even with an empty
+				// queue and an old drain, executing workers are never idle leaks.
+				started := h.clock.Now()
+				duration := tc.idleTimeout + 3*time.Minute
+				_, err := h.bq.Submit(rt.Queues[0], duration, "work-after-failed-drain")
+				require.NoError(t, err)
+				h.step()
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "busy worker clears idle evidence")
+				advanceTo(started.Add(tc.idleTimeout + 2*time.Minute + time.Second))
+				snap, _ = h.comps.Fleet.Snapshot(pool)
+				require.Positive(t, snap.VMs[0].Busy)
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "idle grace never limits busy drain time")
+				advanceTo(started.Add(duration + time.Second))
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "fresh idleness cannot inherit the old leak age")
+			}
+
+			// Losing scheduler evidence must clear the gauge, not reuse stale idle
+			// time. A stopping VM must still be detected after observations recover.
+			if tc.name == "failed termination" {
+				h.bq.FailNext("ListWorkers", ports.ErrThrottled)
+				h.step()
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "unknown workers are not confirmed idle")
+				h.step()
+				observedAgain := h.clock.Now()
+				advanceTo(observedAgain.Add(tc.idleTimeout + 2*time.Minute))
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "idle evidence starts again after the gap")
+				h.step()
+				assert.InDelta(t, 1.0, testutil.ToFloat64(gauge), 0, "the still-running stopping VM becomes overdue again")
+
+				wp.Spec.Paused = true // keep the queued probe from launching a replacement
+				h.addPool(wp)
+				op, err := h.bq.Submit(rt.Queues[0], time.Second, "new-queued-work")
+				require.NoError(t, err)
+				h.step()
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "a nonempty queue breaks continuous empty-queue evidence")
+				require.NoError(t, h.bq.KillOperations(h.ctx, ports.KillFilter{OperationName: op}, 1, "cancel queued test work"))
+				h.step()
+				assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "an empty queue cannot inherit the old leak age")
+			}
+
+			if tc.blocked != "" {
+				faults.FailRate(tc.blocked, 0, nil)
+			}
+			for range 60 {
+				h.step()
+			}
+			assert.Len(t, h.alive(pool), remaining, "recovery removes excess workers but preserves the allowed floor")
+			assert.InDelta(t, 0.0, testutil.ToFloat64(gauge), 0, "cost-leak gauge clears after recovery")
+			h.noViolations()
+		})
+	}
+}
+
 // Guards the Tart path of the loop (R-POOL-6 placement spread, R-MAC-3 at most
 // 2 VMs per host and persistent VMs, R-SCALE-3 Tart scale-in = stop with the
 // disk kept, and restart of the same VM — warm L1 — when work returns).

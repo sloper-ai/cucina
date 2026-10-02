@@ -123,6 +123,19 @@ prices from `Compute.InstancePrices`, 60 s minimum per launch) into `cucina_cost
 `cucina_standing_cost_usd_per_month{category}`, and backs `GetCost`. The usage lives on the leader: after a leader change
 month-to-date figures restart from the stored usage (below).
 
+`cucina_idle_instances_with_empty_queue{pool}` is an **overdue idle-worker count**, not the raw number of idle VMs.
+A worker must be observed running by the provider and idle by the scheduler, with every pool queue continuously empty,
+for **longer than the resolved `idleTimeout` plus 2 minutes** of idle drain/termination grace. Draining or stopping workers
+still reported running remain eligible; busy, launching, stopped, terminated and unavailable workers do not. The 2-minute
+grace is not the busy-worker `drainTimeout` (normally 30 minutes): executing workers are excluded regardless of age.
+The planner's effective floor (`minRunning`, active scheduled or temporary override, bounded by max and disabled while
+paused/deleting) protects active capacity; a stuck retiring worker does not satisfy that floor. Normal idle capacity is
+still visible in `cucina_pool_vms{state="idle"}`. Time spent protecting a floor is excluded: releasing it starts fresh
+non-floor evidence instead of flagging the first ordinary drain. Per-VM evidence also restarts after work, queued arrivals,
+unknown scheduler or provider observations, or a leader restart. The registered-idle timestamp used by management alerts
+excludes protected floor workers too. A zero gauge is **not proof of zero cloud residue**: acceptance must also check tag-filtered instances,
+volumes, ENIs and public IPs after idle/drain grace.
+
 Cost details: launch volumes are the pool's root volume (the AMI size when unset) and data volume for the instance's
 lifetime; public IPv4 for EC2 pools with `associatePublicIP`; the current and previous AMI of each pool (rollback,
 R-OPS-2) as standing snapshot storage; EC2 Fast Launch pre-provisioned snapshots (standing, from the Fast Launch
@@ -167,6 +180,7 @@ get/list/watch/delete. `SelfSubjectAccessReview` create is granted to every auth
 | `internal/controller/canary` `TestCacheCanary` | unit | R-TEST-7 cache canary (pass, corrupted read, rejected token), R-CP-7 |
 | `internal/reconcile` `TestPlacementProperties` | unit (rapid) | R-POOL-6, R-MAC-3 |
 | `internal/reconcile` `TestScenarioScaleFromZeroToZero`, `TestScenarioTartSpreadStopRestart` | integration (fakes) | full loop: R-SCALE-1..3, NFR-C1, R-POOL-6, R-MAC-3, R-OBS-5 (priced usage) |
+| `internal/reconcile` `TestScenarioIdleCostLeakGauge` | integration (fakes) | NFR-C1, R-SCALE-3/7: configured idle timeout + grace, stuck drain/terminate, allowed floors, busy/queued work and evidence resets |
 | `internal/reconcile` `TestCRDValidation`, `TestWorkerPoolLifecycleAndUninstall`, `TestPoolConditionsFailFast`, `TestMacHostReconcile` | integration (envtest) | CEL rules, finalizers, conditions, R-OPS-3, R-RE-2, R-MAC-6 |
 
 Bazel: `//internal/pools:pools_test` and `//internal/reconcile:reconcile_test` need `platforms/pools.json` and

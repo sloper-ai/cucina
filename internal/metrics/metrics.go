@@ -112,7 +112,7 @@ func New(reg prometheus.Registerer) (*Metrics, error) {
 		ScaleDecisions:              counter("cucina_scale_decisions_total", "Autoscaler decisions executed, by action.", "pool", "action"),
 		InvariantViolations:         counter("cucina_invariant_violations_total", "Production invariant violations (R-TEST-7); any increase is a bug.", "invariant"),
 		Orphans:                     gauge("cucina_orphans", "Orphaned pool-tagged resources found by the last sweep.", "kind"),
-		IdleInstancesWithEmptyQueue: gauge("cucina_idle_instances_with_empty_queue", "Registered idle VMs while every queue of the pool is empty (cost-leak signal).", "pool"),
+		IdleInstancesWithEmptyQueue: gauge("cucina_idle_instances_with_empty_queue", "Live idle worker VMs above the effective floor with continuously empty pool queues beyond idleTimeout plus 2 minutes of drain/termination grace.", "pool"),
 		Hosts:                       gauge("cucina_hosts", "Mac hosts by phase.", "phase"),
 		HostHeartbeatAgeSeconds:     gauge("cucina_host_heartbeat_age_seconds", "Seconds since the last heartbeat of a Mac host.", "serial"),
 	}

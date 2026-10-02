@@ -41,7 +41,10 @@ type poolLoop struct {
 	attempted map[string]time.Time
 	// pendingTart are VMs started earlier in the current decision.
 	pendingTart []string
-	// idleEmptySince: idle VMs while every pool queue is empty, since when.
+	// idleEmpty tracks continuous idle-and-empty-queue evidence per non-floor VM,
+	// including draining/stopping VMs whose provider call has not taken effect.
+	idleEmpty map[string]time.Time
+	// idleEmptySince is the oldest non-floor registered VM's idleEmpty time.
 	idleEmptySince time.Time
 	last           struct {
 		scale time.Time
@@ -658,22 +661,13 @@ func (l *poolLoop) publish(now time.Time, rt *PoolRuntime, d scaling.Decision, o
 			counts[metrics.StateFailed]++
 		}
 	}
-	idleWithEmpty := 0
-	if queuesEmpty(obs) {
-		idleWithEmpty = counts[metrics.StateIdle]
-	}
-	switch {
-	case idleWithEmpty == 0:
-		l.idleEmptySince = time.Time{}
-	case l.idleEmptySince.IsZero():
-		l.idleEmptySince = now
-	}
+	idleLeaks := l.idleCostLeaks(now, rt, d, obs)
 	if m := l.f.o.Metrics; m != nil {
 		p := string(l.name)
 		m.PoolDesired.WithLabelValues(p).Set(float64(d.Desired))
 		m.PoolMax.WithLabelValues(p).Set(float64(rt.Spec.Max))
 		m.SetPoolVMs(p, counts)
-		m.IdleInstancesWithEmptyQueue.WithLabelValues(p).Set(float64(idleWithEmpty))
+		m.IdleInstancesWithEmptyQueue.WithLabelValues(p).Set(float64(idleLeaks))
 	}
 	snap := Snapshot{
 		At:                   now,
@@ -701,6 +695,88 @@ func (l *poolLoop) publish(now time.Time, rt *PoolRuntime, d scaling.Decision, o
 	if l.f.o.Notify != nil && statusChanged(prev, snap) {
 		l.f.o.Notify(l.name)
 	}
+}
+
+// idleDrainGrace allows idle drain/termination calls and provider observations
+// to converge. It is not drainTimeout: busy workers never count as idle leaks.
+const idleDrainGrace = 2 * time.Minute
+
+func (l *poolLoop) idleCostLeaks(now time.Time, rt *PoolRuntime, d scaling.Decision, obs scaling.Observation) int {
+	previous := l.idleEmpty
+	l.idleEmpty = nil
+	l.idleEmptySince = time.Time{}
+	if !queuesEmpty(obs) || !obs.WorkersKnown || !obs.ProviderKnown {
+		return 0 // Unknown observations are not evidence of continuous idleness.
+	}
+
+	// A requested stop is not a completed stop. Keep counting a stuck drain or
+	// terminate while the provider still reports the worker running, but never
+	// count stale scheduler registrations after it has shut down.
+	running := map[string]bool{}
+	for _, in := range obs.Instances {
+		if in.State == ports.InstanceRunning {
+			running[in.ID] = true
+		}
+	}
+	for _, host := range obs.Hosts {
+		if !host.Online {
+			continue
+		}
+		for _, vm := range host.VMs {
+			switch vm.State {
+			case domain.VMLaunching, domain.VMRegistered, domain.VMDraining:
+				running[vm.ID] = true
+			}
+		}
+	}
+
+	capacity := 0
+	var idle []domain.VM
+	l.idleEmpty = map[string]time.Time{}
+	for _, vm := range d.VMs {
+		if vm.State == domain.VMLaunching || vm.State == domain.VMRegistered {
+			capacity++
+		}
+		switch vm.State {
+		case domain.VMRegistered, domain.VMDraining, domain.VMStopping:
+		default:
+			continue
+		}
+		if !running[vm.ID] || vm.Threads == 0 || vm.Busy > 0 {
+			continue
+		}
+		idle = append(idle, vm)
+	}
+
+	// The floor protects active capacity, not a stuck retiring worker. Busy and
+	// launching VMs already contribute to it; exempt the youngest remaining
+	// registered idle VMs, leaving the oldest eligible for scale-in.
+	excess := max(0, capacity-d.Demand.Floor)
+	slices.SortStableFunc(idle, func(a, b domain.VM) int {
+		return a.IdleSince.Compare(b.IdleSince)
+	})
+	leaks := 0
+	for _, vm := range idle {
+		if vm.State == domain.VMRegistered {
+			if excess == 0 {
+				continue
+			}
+			excess--
+		}
+		// Do not carry protected floor time into a later normal scale-in.
+		since := previous[vm.ID]
+		if since.IsZero() {
+			since = now
+		}
+		l.idleEmpty[vm.ID] = since
+		if vm.State == domain.VMRegistered && (l.idleEmptySince.IsZero() || since.Before(l.idleEmptySince)) {
+			l.idleEmptySince = since
+		}
+		if now.Sub(since) > rt.Spec.IdleTimeout+idleDrainGrace {
+			leaks++
+		}
+	}
+	return leaks
 }
 
 func summarize(as []scaling.Action) string {
