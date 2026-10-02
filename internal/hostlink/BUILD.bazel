@@ -59,6 +59,8 @@ cucina_go_test(
         "//internal/providers/tart/faketart",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@com_github_prometheus_common//expfmt",
+        "@com_github_prometheus_common//model",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials",

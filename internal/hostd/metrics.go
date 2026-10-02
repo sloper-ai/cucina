@@ -19,7 +19,9 @@ import (
 	"github.com/prometheus/common/expfmt"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	hostmetrics "github.com/sloper-ai/cucina/internal/hostd/metrics"
 	"github.com/sloper-ai/cucina/internal/hostlink/metrictext"
+	"github.com/sloper-ai/cucina/internal/ports"
 )
 
 type loopbackAdmission struct{}
@@ -75,6 +77,16 @@ func (a *Agent) relayMetrics(ctx context.Context, registry prometheus.Gatherer) 
 						raw, err = registryText(registry)
 					} else {
 						raw, err = scrapeMetrics(ctx, &client, t.addr)
+					}
+					if err == nil && t.source == cucinav1.MetricsSnapshot_SOURCE_WORKER {
+						// Native Darwin Buildbarn exposition may lack RSS. This is
+						// separately named, freshly measured OS evidence, never a
+						// synthesized process_resident_memory_bytes family.
+						if rss, rssErr := hostmetrics.WorkerResidentMemory(ctx, func(ctx context.Context, c ports.Command) (ports.ExecResult, error) {
+							return a.o.Runtime.GuestExec(ctx, a.o.Config.VMNamePrefix+t.vm, c)
+						}); rssErr == nil {
+							raw = append(raw, []byte(fmt.Sprintf("\n# TYPE cucina_worker_resident_memory_bytes gauge\ncucina_worker_resident_memory_bytes{source=\"guest-ps\"} %d\n", rss))...)
+						}
 					}
 					if err == nil {
 						raw, err = metrictext.Filter(t.source, raw)

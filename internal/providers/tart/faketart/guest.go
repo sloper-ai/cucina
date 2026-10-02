@@ -41,6 +41,8 @@ type Guest struct {
 	Busy bool
 	// SpotlightOff is set by the activation script.
 	SpotlightOff bool
+	workerPID    int
+	workerRSSKiB uint64
 }
 
 // DefaultImageJSON is the image manifest of a v1 golden image.
@@ -56,7 +58,7 @@ func NewGuest() *Guest {
 			"/usr/local/cucina/launchd/ai.sloper.cucina.bb-worker.plist": {Data: []byte("<plist/>"), Mode: 0o644},
 			"/usr/local/cucina/launchd/ai.sloper.cucina.bb-runner.plist": {Data: []byte("<plist/>"), Mode: 0o644},
 		},
-		running: map[string]bool{},
+		running: map[string]bool{}, workerPID: 4242, workerRSSKiB: 16 << 10,
 	}
 }
 
@@ -93,6 +95,13 @@ func (g *Guest) File(p string) (GuestFile, bool) {
 	defer g.mu.Unlock()
 	f, ok := g.Files[p]
 	return f, ok
+}
+
+// SetWorkerRSS changes the emulated ps measurement (zero = unavailable).
+func (g *Guest) SetWorkerRSS(kib uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.workerRSSKiB = kib
 }
 
 // SetFile writes a guest file (test setup, e.g. a broken image manifest).
@@ -164,11 +173,20 @@ func (g *Guest) Handle(argv []string, stdin []byte) ports.ExecResult {
 		if len(argv) == 3 && argv[1] == "print" {
 			label := argv[2][strings.LastIndex(argv[2], "/")+1:]
 			if g.running[label] {
+				if label == "ai.sloper.cucina.bb-worker" {
+					return ok(fmt.Sprintf("%s = {\n\tstate = running\n\tprogram = /usr/local/cucina/bin/bb_worker\n\tpid = %d\n}\n", argv[2], g.workerPID))
+				}
 				return ok(fmt.Sprintf("%s = {\n\tstate = running\n}\n", argv[2]))
 			}
 			return fail(113, "Could not find service %q in domain for system", label)
 		}
 		return fail(1, "launchctl: unsupported")
+	case "/bin/ps":
+		if !root || len(argv) != 5 || argv[1] != "-p" || argv[2] != strconv.Itoa(g.workerPID) || argv[3] != "-o" || argv[4] != "pid=,uid=,rss=,comm=" || !g.running["ai.sloper.cucina.bb-worker"] {
+			return fail(1, "ps: owned worker unavailable")
+		}
+		uid := g.Files["/private/etc/cucina/pki/worker.key"].UID
+		return ok(fmt.Sprintf("%d %d %d /usr/local/cucina/bin/bb_worker\n", g.workerPID, uid, g.workerRSSKiB))
 	case "/usr/bin/pgrep":
 		if g.Busy {
 			return ok("4242\n")

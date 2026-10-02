@@ -646,7 +646,7 @@ pub struct MetricsSnapshotView<'a> {
     ///
     /// Field 2: `vm_name`
     pub vm_name: &'a str,
-    /// Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+    /// Prometheus text format 0.0.4. Maximum 256 KiB; unsupported families, excessive
     /// cardinality and malformed snapshots are rejected, never silently truncated.
     ///
     /// Field 3: `prometheus_text`
@@ -918,7 +918,7 @@ impl MetricsSnapshotOwnedView {
     pub fn vm_name(&self) -> &'_ str {
         self.0.reborrow().vm_name
     }
-    /// Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+    /// Prometheus text format 0.0.4. Maximum 256 KiB; unsupported families, excessive
     /// cardinality and malformed snapshots are rejected, never silently truncated.
     ///
     /// Field 3: `prometheus_text`

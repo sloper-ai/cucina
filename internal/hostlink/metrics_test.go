@@ -23,6 +23,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -33,6 +35,7 @@ import (
 	"github.com/sloper-ai/cucina/internal/hostlink"
 	"github.com/sloper-ai/cucina/internal/hostlink/hostlinktest"
 	cproto "github.com/sloper-ai/cucina/internal/proto"
+	"github.com/sloper-ai/cucina/internal/providers/tart/faketart"
 )
 
 // Guards: T13 / R-OBS-1 — the controller exposes authenticated outbound host
@@ -168,6 +171,28 @@ func TestMetricsRelayTrustAndFreshness(t *testing.T) {
 		}
 		const path = "/metrics/hosts/TESTSERIAL01/worker/vm-1"
 		require.Equal(t, http.StatusNotFound, request(path).Code)
+		// The real post-action worker selected 153,598 bytes across these
+		// histogram shapes. Synthetic labels/counts preserve that cardinality
+		// without placing private environment samples in the repository.
+		large := workerHistogramSnapshot()
+		require.Greater(t, len(large), 128<<10)
+		require.Less(t, len(large), 256<<10)
+		send(cucinav1.MetricsSnapshot_SOURCE_WORKER, "vm-1", large)
+		largeResponse := request(path)
+		require.Equal(t, http.StatusOK, largeResponse.Code, "observed post-action histogram cardinality must fit the approved bounded snapshot")
+		parser := expfmt.NewTextParser(model.LegacyValidation)
+		families, err := parser.TextToMetricFamilies(strings.NewReader(largeResponse.Body.String()))
+		require.NoError(t, err)
+		for name, shape := range map[string][2]int{
+			"buildbarn_blobstore_blob_access_operations_blob_size_bytes":  {18, 34},
+			"buildbarn_blobstore_blob_access_operations_duration_seconds": {14, 20},
+			"buildbarn_builder_build_executor_duration_seconds":           {3, 20},
+		} {
+			require.Len(t, families[name].GetMetric(), shape[0], name)
+			for _, metric := range families[name].GetMetric() {
+				require.Len(t, metric.GetHistogram().GetBucket(), shape[1], "every bucket is preserved, not truncated")
+			}
+		}
 		send(cucinav1.MetricsSnapshot_SOURCE_WORKER, "vm-1", text)
 		w := request(path)
 		require.Equal(t, http.StatusOK, w.Code)
@@ -201,9 +226,12 @@ func TestMetricsRelayTrustAndFreshness(t *testing.T) {
 			{"spoofed job", "process_resident_memory_bytes{job=\"controller\"} 1\n"},
 			{"spoofed instance", "process_resident_memory_bytes{instance=\"other\"} 1\n"},
 			{"spoofed namespace", "process_resident_memory_bytes{namespace=\"other\"} 1\n"},
-			{"oversize", strings.Repeat("x", (128<<10)+1)},
+			{"oversize", strings.Repeat("x", (256<<10)+1)},
 			{"malformed", "this is not metrics\n"},
 			{"unsupported family", "host_secret_token 1\n"},
+			{"unproven RSS source", "# TYPE cucina_worker_resident_memory_bytes gauge\ncucina_worker_resident_memory_bytes{source=\"heap-estimate\"} 1\n"},
+			{"missing RSS provenance", "# TYPE cucina_worker_resident_memory_bytes gauge\ncucina_worker_resident_memory_bytes 1\n"},
+			{"zero RSS is not evidence", "# TYPE cucina_worker_resident_memory_bytes gauge\ncucina_worker_resident_memory_bytes{source=\"guest-ps\"} 0\n"},
 			{"duplicate sample", text + "process_resident_memory_bytes 456\n"},
 			{"untrusted timestamp", "process_resident_memory_bytes 123 123456789\n"},
 			{"oversize label", "process_resident_memory_bytes{stage=\"" + strings.Repeat("x", 257) + "\"} 1\n"},
@@ -256,6 +284,32 @@ func TestMetricsRelayTrustAndFreshness(t *testing.T) {
 		require.NoError(t, json.Unmarshal(request("/sd/hosts").Body.Bytes(), &groups))
 		require.Len(t, groups, 4)
 	})
+}
+
+func workerHistogramSnapshot() string {
+	var b strings.Builder
+	for _, shape := range []struct {
+		name            string
+		series, buckets int
+	}{
+		{"buildbarn_blobstore_blob_access_operations_blob_size_bytes", 18, 34},
+		{"buildbarn_blobstore_blob_access_operations_duration_seconds", 14, 20},
+		{"buildbarn_builder_build_executor_duration_seconds", 3, 20},
+	} {
+		fmt.Fprintf(&b, "# TYPE %s histogram\n", shape.name)
+		for i := range shape.series {
+			labels := fmt.Sprintf(`stage="synthetic-stage-%02d",result="synthetic-result",grpc_code="OK"`, i)
+			if strings.Contains(shape.name, "blobstore") {
+				labels = fmt.Sprintf(`storage_type="CAS",backend_type="synthetic-backend-%02d",operation="Get"`, i)
+			}
+			for bucket := range shape.buckets - 1 {
+				fmt.Fprintf(&b, "%s_bucket{%s,le=\"%d\"} %d\n", shape.name, labels, bucket+1, bucket+1)
+			}
+			fmt.Fprintf(&b, "%s_bucket{%s,le=\"+Inf\"} %d\n", shape.name, labels, shape.buckets)
+			fmt.Fprintf(&b, "%s_count{%s} %d\n%s_sum{%s} %d\n", shape.name, labels, shape.buckets, shape.name, labels, shape.buckets)
+		}
+	}
+	return b.String()
 }
 
 // Guards: R-OBS-1 — the controller's 16 MiB metric-text budget is global across
@@ -331,6 +385,11 @@ func TestHostdRelaysOnlyFreshScrapes(t *testing.T) {
 	ef := hostlinktest.NewEnroll(t)
 	synctest.Test(t, func(t *testing.T) {
 		e := newEnv(t, ef)
+		e.tart.NewGuest = func(string) *faketart.Guest {
+			g := faketart.NewGuest()
+			g.SetFile("/usr/local/cucina/image.json", []byte(strings.Replace(faketart.DefaultImageJSON, `"buildUser":"admin"`, `"buildUser":"admin","workerUser":"root"`, 1)))
+			return g
+		}
 		var failed atomic.Bool
 		registry := prometheus.NewRegistry()
 		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: "go_goroutines", Help: "Synthetic process telemetry."})
@@ -359,8 +418,16 @@ func TestHostdRelaysOnlyFreshScrapes(t *testing.T) {
 		const path = "/metrics/hosts/TESTSERIAL01/worker/vm-1"
 		advanceUntil(t, "worker metrics relayed", 2*time.Minute, func() bool { return get(path).Code == http.StatusOK })
 		require.Contains(t, get(path).Body.String(), "process_resident_memory_bytes 123")
+		require.Contains(t, get(path).Body.String(), `cucina_worker_resident_memory_bytes{source="guest-ps"}`)
 		require.NotContains(t, get(path).Body.String(), "unrelated_family")
 		require.Equal(t, http.StatusOK, get("/metrics/hosts/TESTSERIAL01/hostd").Code)
+		guestProcess := e.tart.VM("cucina-vm-vm-1").Guest
+		guestProcess.SetWorkerRSS(0)
+		<-time.After(20 * time.Second)
+		synctest.Wait()
+		require.NotContains(t, get(path).Body.String(), "cucina_worker_resident_memory_bytes", "a failed OS measurement must not refresh old RSS or emit zero")
+		require.Contains(t, get(path).Body.String(), "process_resident_memory_bytes 123", "real native metrics are not replaced by the supplement")
+		guestProcess.SetWorkerRSS(16 << 10)
 		failed.Store(true)
 		<-time.After(time.Minute)
 		synctest.Wait()

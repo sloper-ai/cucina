@@ -134,12 +134,21 @@ the elected controller; per-target metric addresses still identify the pod holdi
 is Prometheus text format 0.0.4. Hostd sends it only after a `Welcome` with protocol minor >= 1; protocol 1.0 peers continue
 using the existing heartbeat aggregates. Failed scrapes must not resend a cached snapshot as fresh.
 
-Limits: 128 KiB per snapshot, at most four targets per host (hostd, L2, two VMs), a 15-second scrape cadence and a 16 MiB
+Limits: 256 KiB per snapshot, at most four targets per host (hostd, L2, two VMs), a 15-second scrape cadence and a 16 MiB
 controller-wide raw snapshot cache. The implementation also bounds metric families, samples and labels. Oversized, malformed,
 unowned or unsupported snapshots are rejected, never truncated; there is no log/configuration/credential payload. Identity labels
 (`serial`, `pool`, `node`, `job`, `instance`) cannot be supplied by the metric text: the controller derives authoritative source
 labels from the certificate/session and VM inventory. Snapshots expire within 45 seconds of receipt or immediately when the host
-disconnects; their absence is missing telemetry, not a measured zero.
+disconnects; their absence is missing telemetry, not a measured zero. The 256 KiB bound replaces 128 KiB after a real
+2-vCPU / 8-GiB macOS worker's post-action scrape measured 153,598 selected bytes, eight families and 1,027 samples
+(raw 370,849 bytes); complete blob and staging histograms are retained. Other limits remain 1 MiB local scrape input,
+64 selected families, 4,096 samples, 16 labels per series and 256 bytes per label value. **Roll out the controller first,
+then hostd**: earlier protocol-1.1 controllers still enforce 128 KiB and will reject larger snapshots during mixed-version operation.
+
+Darwin workers may not expose native `process_resident_memory_bytes`. Hostd supplements the worker target with
+`cucina_worker_resident_memory_bytes{source="guest-ps"}` only after a fresh bounded guest-OS measurement verifies the
+known system launchd worker job's PID, root ownership and executable before/after `ps`; failed, ambiguous or zero
+observations are omitted. This is separately named OS evidence, never a fabricated native metric or a Go-heap estimate.
 
 The controller metrics listener exposes `/sd/hosts` for Prometheus HTTP discovery and a separate per-target scrape path
 `/metrics/hosts/<serial>/<source>[/<vm>]`. Separating targets avoids collisions between the processes' own `process_*` and `go_*`

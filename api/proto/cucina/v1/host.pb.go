@@ -233,7 +233,7 @@ type MetricsSnapshot struct {
 	Source MetricsSnapshot_Source `protobuf:"varint,1,opt,name=source,proto3,enum=cucina.v1.MetricsSnapshot_Source" json:"source,omitempty"`
 	// Required only for SOURCE_WORKER; must name a running VM owned by this host.
 	VmName string `protobuf:"bytes,2,opt,name=vm_name,json=vmName,proto3" json:"vm_name,omitempty"`
-	// Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+	// Prometheus text format 0.0.4. Maximum 256 KiB; unsupported families, excessive
 	// cardinality and malformed snapshots are rejected, never silently truncated.
 	PrometheusText []byte `protobuf:"bytes,3,opt,name=prometheus_text,json=prometheusText,proto3" json:"prometheus_text,omitempty"`
 	unknownFields  protoimpl.UnknownFields

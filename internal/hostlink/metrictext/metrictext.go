@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	MaxSnapshotBytes = 128 << 10
+	MaxSnapshotBytes = 256 << 10
 	MaxScrapeBytes   = 1 << 20
 	MaxFamilies      = 64
 	MaxSamples       = 4096
@@ -68,7 +68,7 @@ func allowed(source cucinav1.MetricsSnapshot_Source, name string) bool {
 		"buildbarn_blobstore_blob_access_operations_duration_seconds",
 		"buildbarn_blobstore_old_current_new_location_blob_map_last_removed_old_block_insertion_time_seconds":
 		return true
-	case "buildbarn_builder_build_executor_duration_seconds":
+	case "buildbarn_builder_build_executor_duration_seconds", "cucina_worker_resident_memory_bytes":
 		return source == cucinav1.MetricsSnapshot_SOURCE_WORKER
 	}
 	return false
@@ -118,6 +118,10 @@ func normalize(source cucinav1.MetricsSnapshot_Source, raw []byte, filter bool) 
 		mf.Help = proto.String("Relayed " + name + ".")
 		seen := map[string]bool{}
 		for _, m := range mf.GetMetric() {
+			workerRSS := name == "cucina_worker_resident_memory_bytes"
+			if workerRSS && (mf.GetType() != dto.MetricType_GAUGE || len(m.Label) != 1 || m.Label[0].GetName() != "source" || m.Label[0].GetValue() != "guest-ps" || m.GetGauge().GetValue() <= 0) {
+				return nil, errors.New("invalid measured worker RSS provenance")
+			}
 			if m.TimestampMs != nil || len(m.Label) > MaxLabels {
 				return nil, errors.New("timestamp or excessive labels in metrics")
 			}
@@ -125,7 +129,7 @@ func normalize(source cucinav1.MetricsSnapshot_Source, raw []byte, filter bool) 
 			var key strings.Builder
 			last := ""
 			for _, l := range m.Label {
-				if !allowedLabel(l.GetName()) || l.GetName() == last || len(l.GetValue()) > MaxLabelBytes || strings.ContainsAny(l.GetValue(), "\r\n\x00") {
+				if (!allowedLabel(l.GetName()) && !workerRSS) || l.GetName() == last || len(l.GetValue()) > MaxLabelBytes || strings.ContainsAny(l.GetValue(), "\r\n\x00") {
 					return nil, errors.New("forbidden, duplicate or excessive metric label")
 				}
 				last = l.GetName()

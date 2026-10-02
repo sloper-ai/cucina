@@ -58,7 +58,7 @@ message MetricsSnapshot {
   Source source = 1;
   // Required only for SOURCE_WORKER; must name a running VM owned by this host.
   string vm_name = 2;
-  // Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+  // Prometheus text format 0.0.4. Maximum 256 KiB; unsupported families, excessive
   // cardinality and malformed snapshots are rejected, never silently truncated.
   bytes prometheus_text = 3;
 }

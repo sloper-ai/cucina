@@ -1,15 +1,33 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 
 load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
 
 go_library(
     name = "metrics",
-    srcs = ["metrics.go"],
+    srcs = [
+        "metrics.go",
+        "rss.go",
+    ],
     importpath = "github.com/sloper-ai/cucina/internal/hostd/metrics",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/hostd/guest",
+        "//internal/ports",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/collectors",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
+    ],
+)
+
+cucina_go_test(
+    name = "metrics_test",
+    srcs = ["rss_test.go"],
+    tier = "unit",
+    deps = [
+        ":metrics",
+        "//internal/fakes",
+        "//internal/ports",
+        "@com_github_stretchr_testify//require",
     ],
 )

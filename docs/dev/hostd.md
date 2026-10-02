@@ -359,11 +359,20 @@ snapshots over the outbound mTLS link. Failed scrapes send nothing. Snapshots qu
   `buildbarn_builder_build_executor_duration_seconds` (worker), `buildbarn_blobstore_blob_access_operations_blob_size_bytes`,
   `buildbarn_blobstore_blob_access_operations_duration_seconds`, and the blobstore retention timestamp (worker/L2).
   The four aggregate families above are excluded from the raw hostd target to prevent double counting.
-* Bounds: 1 MiB input per local scrape; 128 KiB per selected snapshot; at most 64 families, 4,096 emitted samples,
+  Darwin worker RSS is supplemented as `cucina_worker_resident_memory_bytes{source="guest-ps"}`: a five-second
+  bounded root GuestExec probe reads the known system launchd worker job, checks its PID/program, reads only that
+  PID's UID/RSS/executable with `ps`, and rechecks launchd identity. Only a stable root-owned `bb_worker` yields
+  bytes (Darwin KiB × 1024); ambiguity, failure or zero is omitted. The native RSS family is never synthesized.
+  Consumers prefer native process RSS when present, otherwise this explicit OS-source family; they do not sum both.
+* Bounds: 1 MiB input per local scrape; 256 KiB per selected snapshot; at most 64 families, 4,096 emitted samples,
   16 labels per series and 256 bytes per label value. Only operational labels of the selected families are allowed;
   metric-owned identity, job, instance, namespace and discovery labels are rejected. HELP text is canonicalized.
   Oversized or invalid selected data fails as a whole, never truncates. The controller has a **global 16 MiB** raw
   cache, at most four targets per host, and expires samples within 45 seconds or the shorter host stale interval.
+  The prior 128 KiB bound rejected the measured 2-vCPU / 8-GiB worker after one action: 153,598 selected bytes,
+  eight families, 1,027 samples (370,849 raw bytes). Of that, blob-size histograms used 94,756 bytes, blob-operation
+  duration 49,613 and builder staging 8,230; all remain complete. **Upgrade controller support before hostd**:
+  an older protocol-1.1 controller rejects snapshots larger than 128 KiB. The 16 MiB global budget is unchanged.
 * `/sd/hosts` on the controller's internal metrics listener returns per-target HTTP discovery entries, with
   `namespace`, `serial`, `pool`, `node`, `cucina_component` and `__metrics_path__`. Worker `node` is `<serial>/<vm>`;
   the pool comes from the session's running VM inventory. The scrape path is

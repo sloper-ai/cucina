@@ -549,7 +549,7 @@ pub struct MetricsSnapshot {
         skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_str"
     )]
     pub vm_name: ::buffa::alloc::string::String,
-    /// Prometheus text format 0.0.4. Maximum 128 KiB; unsupported families, excessive
+    /// Prometheus text format 0.0.4. Maximum 256 KiB; unsupported families, excessive
     /// cardinality and malformed snapshots are rejected, never silently truncated.
     ///
     /// Field 3: `prometheus_text`
