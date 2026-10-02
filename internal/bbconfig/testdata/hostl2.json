@@ -1,0 +1,198 @@
+{
+  "grpcServers": [
+    {
+      "listenAddresses": [
+        "192.0.2.1:8981"
+      ],
+      "authenticationPolicy": {
+        "tlsClientCertificate": {
+          "clientCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+          "validationJmespathExpression": {
+            "expression": "length(uris) == `1` \u0026\u0026 starts_with(uris[0], 'spiffe://cucina/worker/') \u0026\u0026 contains(uris[0], '/TESTSERIAL01/')"
+          },
+          "metadataExtractionJmespathExpression": {
+            "expression": "{public: {user: uris[0]}, private: {sub: uris[0]}}"
+          }
+        }
+      },
+      "tls": {
+        "serverKeyPair": {
+          "files": {
+            "certificatePath": "/var/db/cucina/pki/l2-server.crt",
+            "privateKeyPath": "/var/db/cucina/pki/l2-server.key",
+            "refreshInterval": "300s"
+          }
+        }
+      },
+      "maximumReceivedMessageSizeBytes": 16777216
+    }
+  ],
+  "contentAddressableStorage": {
+    "backend": {
+      "readCaching": {
+        "slow": {
+          "grpc": {
+            "client": {
+              "address": "workers.cucina.example.com:8981",
+              "tls": {
+                "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+                "serverName": "workers.cucina.example.com",
+                "clientKeyPair": {
+                  "files": {
+                    "certificatePath": "/var/db/cucina/pki/host.crt",
+                    "privateKeyPath": "/var/db/cucina/pki/host.key",
+                    "refreshInterval": "300s"
+                  }
+                }
+              },
+              "keepalive": {
+                "time": "60s",
+                "timeout": "20s",
+                "permitWithoutStream": true
+              }
+            },
+            "enableCompression": true
+          }
+        },
+        "fast": {
+          "local": {
+            "keyLocationMap": {
+              "onBlockDevice": {
+                "file": {
+                  "path": "/var/db/cucina/l2/key_location_map",
+                  "sizeBytes": 1730150400
+                }
+              },
+              "maximumGetAttempts": 16,
+              "maximumPutAttempts": 64
+            },
+            "oldBlocks": 8,
+            "currentBlocks": 24,
+            "newBlocks": 3,
+            "blocksOnBlockDevice": {
+              "source": {
+                "file": {
+                  "path": "/var/db/cucina/l2/blocks",
+                  "sizeBytes": 214748364766
+                }
+              },
+              "spareBlocks": 3,
+              "dataIntegrityValidationCache": {
+                "cacheSize": 100000,
+                "cacheDuration": "14400s",
+                "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
+              }
+            },
+            "persistent": {
+              "stateDirectoryPath": "/var/db/cucina/l2/state",
+              "minimumEpochInterval": "300s"
+            }
+          }
+        },
+        "replicator": {
+          "deduplicating": {
+            "concurrencyLimiting": {
+              "base": {
+                "local": {}
+              },
+              "maximumConcurrency": 64
+            }
+          }
+        }
+      }
+    },
+    "getAuthorizer": {
+      "allow": {}
+    },
+    "putAuthorizer": {
+      "allow": {}
+    },
+    "findMissingAuthorizer": {
+      "allow": {}
+    }
+  },
+  "actionCache": {
+    "backend": {
+      "grpc": {
+        "client": {
+          "address": "workers.cucina.example.com:8981",
+          "tls": {
+            "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+            "serverName": "workers.cucina.example.com",
+            "clientKeyPair": {
+              "files": {
+                "certificatePath": "/var/db/cucina/pki/host.crt",
+                "privateKeyPath": "/var/db/cucina/pki/host.key",
+                "refreshInterval": "300s"
+              }
+            }
+          },
+          "keepalive": {
+            "time": "60s",
+            "timeout": "20s",
+            "permitWithoutStream": true
+          }
+        }
+      }
+    },
+    "getAuthorizer": {
+      "allow": {}
+    },
+    "putAuthorizer": {
+      "allow": {}
+    }
+  },
+  "fileSystemAccessCache": {
+    "backend": {
+      "grpc": {
+        "client": {
+          "address": "workers.cucina.example.com:8981",
+          "tls": {
+            "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+            "serverName": "workers.cucina.example.com",
+            "clientKeyPair": {
+              "files": {
+                "certificatePath": "/var/db/cucina/pki/host.crt",
+                "privateKeyPath": "/var/db/cucina/pki/host.key",
+                "refreshInterval": "300s"
+              }
+            }
+          },
+          "keepalive": {
+            "time": "60s",
+            "timeout": "20s",
+            "permitWithoutStream": true
+          }
+        }
+      }
+    },
+    "getAuthorizer": {
+      "allow": {}
+    },
+    "putAuthorizer": {
+      "allow": {}
+    }
+  },
+  "zstdPool": {
+    "maximumEncoders": 16,
+    "maximumDecoders": 32,
+    "encoderLevel": 3
+  },
+  "global": {
+    "diagnosticsHttpServer": {
+      "httpServers": [
+        {
+          "listenAddresses": [
+            "127.0.0.1:9981"
+          ],
+          "authenticationPolicy": {
+            "allow": {}
+          }
+        }
+      ],
+      "enablePrometheus": true
+    }
+  },
+  "maximumMessageSizeBytes": 16777216
+}
+

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+cucina_go_test(
+    name = "boottest_test",
+    timeout = "short",
+    srcs = [
+        "boot_test.go",
+        "helpers_test.go",
+        "hostl2_test.go",
+        "roundtrip_test.go",
+    ],
+    data = [
+        "//tools:bb_runner",
+        "//tools:bb_scheduler",
+        "//tools:bb_storage",
+        "//tools:bb_worker",
+    ],
+    env = {
+        "BB_RUNNER": "$(rootpath //tools:bb_runner)",
+        "BB_SCHEDULER": "$(rootpath //tools:bb_scheduler)",
+        "BB_STORAGE": "$(rootpath //tools:bb_storage)",
+        "BB_WORKER": "$(rootpath //tools:bb_worker)",
+    },
+    tier = "integration",
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "//internal/bbconfig",
+        "//internal/bbtest",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/remoteworker",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/emptypb",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

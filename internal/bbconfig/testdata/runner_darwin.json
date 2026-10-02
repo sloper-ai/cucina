@@ -1,0 +1,17 @@
+{
+  "buildDirectoryPath": "/Volumes/CucinaBuild/build",
+  "grpcServers": [
+    {
+      "listenPaths": [
+        "/var/run/cucina-runner/runner.sock"
+      ],
+      "authenticationPolicy": {
+        "allow": {}
+      }
+    }
+  ],
+  "setTmpdirEnvironmentVariable": true,
+  "appleXcodeDeveloperDirectories": {
+    "27.0.0.27A266a": "/Applications/Xcode.app/Contents/Developer"
+  }
+}

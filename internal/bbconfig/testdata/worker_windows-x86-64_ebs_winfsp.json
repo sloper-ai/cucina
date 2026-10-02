@@ -1,0 +1,195 @@
+{
+  "blobstore": {
+    "contentAddressableStorage": {
+      "readCaching": {
+        "slow": {
+          "grpc": {
+            "client": {
+              "address": "workers.cucina.example.com:8981",
+              "tls": {
+                "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+                "serverName": "workers.cucina.example.com",
+                "clientKeyPair": {
+                  "files": {
+                    "certificatePath": "C:\\ProgramData\\cucina\\pki\\worker.crt",
+                    "privateKeyPath": "C:\\ProgramData\\cucina\\pki\\worker.key",
+                    "refreshInterval": "300s"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "fast": {
+          "local": {
+            "keyLocationMapOnBlockDevice": {
+              "file": {
+                "path": "D:\\l1\\key_location_map",
+                "sizeBytes": "1038090240"
+              }
+            },
+            "keyLocationMapMaximumGetAttempts": 16,
+            "keyLocationMapMaximumPutAttempts": "64",
+            "oldBlocks": 8,
+            "currentBlocks": 24,
+            "newBlocks": 3,
+            "blocksOnBlockDevice": {
+              "source": {
+                "file": {
+                  "path": "D:\\l1\\blocks",
+                  "sizeBytes": "128849018852"
+                }
+              },
+              "spareBlocks": 3,
+              "dataIntegrityValidationCache": {
+                "cacheSize": "100000",
+                "cacheDuration": "14400s",
+                "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
+              }
+            },
+            "persistent": {
+              "stateDirectoryPath": "D:\\l1\\state",
+              "minimumEpochInterval": "300s"
+            }
+          }
+        },
+        "replicator": {
+          "deduplicating": {
+            "concurrencyLimiting": {
+              "base": {
+                "local": {}
+              },
+              "maximumConcurrency": "32"
+            }
+          }
+        }
+      }
+    },
+    "actionCache": {
+      "grpc": {
+        "client": {
+          "address": "workers.cucina.example.com:8981",
+          "tls": {
+            "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+            "serverName": "workers.cucina.example.com",
+            "clientKeyPair": {
+              "files": {
+                "certificatePath": "C:\\ProgramData\\cucina\\pki\\worker.crt",
+                "privateKeyPath": "C:\\ProgramData\\cucina\\pki\\worker.key",
+                "refreshInterval": "300s"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "maximumMessageSizeBytes": "16777216",
+  "scheduler": {
+    "address": "workers.cucina.example.com:8983",
+    "tls": {
+      "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+      "serverName": "workers.cucina.example.com",
+      "clientKeyPair": {
+        "files": {
+          "certificatePath": "C:\\ProgramData\\cucina\\pki\\worker.crt",
+          "privateKeyPath": "C:\\ProgramData\\cucina\\pki\\worker.key",
+          "refreshInterval": "300s"
+        }
+      }
+    }
+  },
+  "global": {
+    "diagnosticsHttpServer": {
+      "httpServers": [
+        {
+          "listenAddresses": [
+            ":9986"
+          ],
+          "authenticationPolicy": {
+            "allow": {}
+          }
+        }
+      ],
+      "enablePrometheus": true
+    }
+  },
+  "buildDirectories": [
+    {
+      "virtual": {
+        "mount": {
+          "mountPath": "\\\\.\\B:",
+          "winfsp": {}
+        },
+        "maximumExecutionTimeoutCompensation": "3600s",
+        "maximumWritableFileUploadDelay": "60s",
+        "caseInsensitive": true
+      },
+      "runners": [
+        {
+          "endpoint": {
+            "address": "unix:C:\\ProgramData\\cucina\\run\\runner.sock"
+          },
+          "concurrency": "8",
+          "instanceNamePrefix": "main",
+          "platform": {
+            "properties": [
+              {
+                "name": "ISA",
+                "value": "x86-64"
+              },
+              {
+                "name": "OSFamily",
+                "value": "windows"
+              }
+            ]
+          },
+          "sizeClass": 1,
+          "maximumFilePoolFileCount": "100000",
+          "maximumFilePoolSizeBytes": "4294967296",
+          "workerId": {
+            "node": "i-0a1b2c3d4e5f60718",
+            "pool": "windows"
+          }
+        }
+      ]
+    }
+  ],
+  "filePool": {
+    "blockDevice": {
+      "file": {
+        "path": "D:\\filepool\\pool",
+        "sizeBytes": "34359738368"
+      }
+    }
+  },
+  "outputUploadConcurrency": "16",
+  "directoryCache": {
+    "maximumCount": "10000",
+    "maximumSizeBytes": "16777216",
+    "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
+  },
+  "prefetching": {
+    "fileSystemAccessCache": {
+      "grpc": {
+        "client": {
+          "address": "workers.cucina.example.com:8981",
+          "tls": {
+            "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+            "serverName": "workers.cucina.example.com",
+            "clientKeyPair": {
+              "files": {
+                "certificatePath": "C:\\ProgramData\\cucina\\pki\\worker.crt",
+                "privateKeyPath": "C:\\ProgramData\\cucina\\pki\\worker.key",
+                "refreshInterval": "300s"
+              }
+            }
+          }
+        }
+      }
+    },
+    "bloomFilterBitsPerPath": 14,
+    "bloomFilterMaximumSizeBytes": 65536
+  },
+  "inputDownloadConcurrency": "32"
+}

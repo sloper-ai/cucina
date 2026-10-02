@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "render-goldens_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/bbconfig/cmd/render-goldens",
+    visibility = ["//visibility:private"],
+    deps = ["//internal/bbconfig/bbconfigtest"],
+)
+
+go_binary(
+    name = "render-goldens",
+    embed = [":render-goldens_lib"],
+    visibility = ["//:__subpackages__"],
+)

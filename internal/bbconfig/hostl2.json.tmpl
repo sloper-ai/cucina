@@ -1,0 +1,93 @@
+{{- /* SPDX-License-Identifier: FSL-1.1-ALv2 */ -}}
+{{- /*
+Host L2 bb_storage configuration, pinned bb-storage 20260930T153215Z-086b011:
+NEW nested keyLocationMap (lossymap) schema. Field references:
+docs/dev/buildbarn.md "Host L2". Every string goes through `json`.
+*/ -}}
+{{- define "upstream" -}}
+{
+  "address": {{json .UpstreamAddress}},
+  "tls": {
+    "serverCertificateAuthorities": {{json .CABundlePEM}},
+    {{- if .UpstreamServerName}}
+    "serverName": {{json .UpstreamServerName}},
+    {{- end}}
+    "clientKeyPair": {"files": {
+      "certificatePath": {{json .ClientCertificatePath}},
+      "privateKeyPath": {{json .ClientPrivateKeyPath}},
+      "refreshInterval": "300s"
+    }}
+  },
+  "keepalive": {"time": "60s", "timeout": "20s", "permitWithoutStream": true}
+}
+{{- end -}}
+{{- define "allow" -}}{"allow": {}}{{- end -}}
+{
+  "grpcServers": [{
+    "listenAddresses": {{json .ListenAddresses}},
+    "authenticationPolicy": {"tlsClientCertificate": {
+      "clientCertificateAuthorities": {{json .CABundlePEM}},
+      "validationJmespathExpression": {"expression": {{json .ValidationExpression}}},
+      "metadataExtractionJmespathExpression": {"expression": "{public: {user: uris[0]}, private: {sub: uris[0]}}"}
+    }},
+    "tls": {"serverKeyPair": {"files": {
+      "certificatePath": {{json .ServerCertificatePath}},
+      "privateKeyPath": {{json .ServerPrivateKeyPath}},
+      "refreshInterval": "300s"
+    }}},
+    "maximumReceivedMessageSizeBytes": {{.MaximumMessageSizeBytes}}
+  }],
+  "contentAddressableStorage": {
+    "backend": {"readCaching": {
+      "slow": {"grpc": {
+        "client": {{template "upstream" .}}
+        {{- if .Compression}},
+        "enableCompression": true
+        {{- end}}
+      }},
+      "fast": {"local": {
+        "keyLocationMap": {
+          "onBlockDevice": {"file": {"path": {{json .KeyLocationMapPath}}, "sizeBytes": {{.Blocks.KeyLocationMapBytes}}}},
+          "maximumGetAttempts": 16,
+          "maximumPutAttempts": 64
+        },
+        "oldBlocks": {{.Blocks.OldBlocks}},
+        "currentBlocks": {{.Blocks.CurrentBlocks}},
+        "newBlocks": {{.Blocks.NewBlocks}},
+        "blocksOnBlockDevice": {
+          "source": {"file": {"path": {{json .BlocksPath}}, "sizeBytes": {{.Blocks.BlocksBytes}}}},
+          "spareBlocks": {{.Blocks.SpareBlocks}},
+          "dataIntegrityValidationCache": {"cacheSize": 100000, "cacheDuration": "14400s", "cacheReplacementPolicy": "LEAST_RECENTLY_USED"}
+        },
+        "persistent": {"stateDirectoryPath": {{json .StatePath}}, "minimumEpochInterval": "300s"}
+      }},
+      "replicator": {"deduplicating": {"concurrencyLimiting": {
+        "base": {"local": {}},
+        "maximumConcurrency": {{.ReplicationConcurrency}}
+      }}}
+    }},
+    "getAuthorizer": {{template "allow"}},
+    "putAuthorizer": {{template "allow"}},
+    "findMissingAuthorizer": {{template "allow"}}
+  },
+  "actionCache": {
+    "backend": {"grpc": {"client": {{template "upstream" .}}}},
+    "getAuthorizer": {{template "allow"}},
+    "putAuthorizer": {{template "allow"}}
+  },
+  "fileSystemAccessCache": {
+    "backend": {"grpc": {"client": {{template "upstream" .}}}},
+    "getAuthorizer": {{template "allow"}},
+    "putAuthorizer": {{template "allow"}}
+  },
+  {{- if .Compression}}
+  "zstdPool": {"maximumEncoders": {{.MaximumEncoders}}, "maximumDecoders": {{.MaximumDecoders}}, "encoderLevel": {{.WANEncoderLevel}}},
+  {{- end}}
+  {{- if .MetricsListenAddress}}
+  "global": {"diagnosticsHttpServer": {
+    "httpServers": [{"listenAddresses": [{{json .MetricsListenAddress}}], "authenticationPolicy": {{template "allow"}}}],
+    "enablePrometheus": true
+  }},
+  {{- end}}
+  "maximumMessageSizeBytes": {{.MaximumMessageSizeBytes}}
+}

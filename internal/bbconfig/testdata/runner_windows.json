@@ -1,0 +1,14 @@
+{
+  "buildDirectoryPath": "B:\\",
+  "grpcServers": [
+    {
+      "listenPaths": [
+        "C:\\ProgramData\\cucina\\run\\runner.sock"
+      ],
+      "authenticationPolicy": {
+        "allow": {}
+      }
+    }
+  ],
+  "setTmpdirEnvironmentVariable": true
+}

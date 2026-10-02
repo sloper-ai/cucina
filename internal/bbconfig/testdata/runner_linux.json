@@ -1,0 +1,19 @@
+{
+  "buildDirectoryPath": "/var/lib/cucina/build",
+  "grpcServers": [
+    {
+      "listenPaths": [
+        "/run/cucina/runner.sock"
+      ],
+      "authenticationPolicy": {
+        "allow": {}
+      }
+    }
+  ],
+  "setTmpdirEnvironmentVariable": true,
+  "cleanProcessTable": true,
+  "runCommandsAs": {
+    "userId": 2000,
+    "groupId": 2000
+  }
+}

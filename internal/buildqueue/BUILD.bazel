@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+go_library(
+    name = "buildqueue",
+    srcs = ["buildqueue.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/buildqueue",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/domain",
+        "//internal/ports",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/buildqueuestate",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/anypb",
+        "@org_golang_google_protobuf//types/known/emptypb",
+    ],
+)
+
+cucina_go_test(
+    name = "buildqueue_test",
+    timeout = "short",
+    srcs = ["buildqueue_test.go"],
+    data = [
+        "//tools:bb_scheduler",
+        "//tools:bb_storage",
+    ],
+    env = {
+        "BB_SCHEDULER": "$(rootpath //tools:bb_scheduler)",
+        "BB_STORAGE": "$(rootpath //tools:bb_storage)",
+    },
+    tier = "integration",
+    deps = [
+        ":buildqueue",
+        "//internal/bbtest",
+        "//internal/domain",
+        "//internal/ports",
+        "//internal/ports/porttest",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)

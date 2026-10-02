@@ -1,0 +1,249 @@
+{
+  "blobstore": {
+    "contentAddressableStorage": {
+      "readCaching": {
+        "slow": {
+          "grpc": {
+            "client": {
+              "address": "workers.cucina.example.com:8981",
+              "tls": {
+                "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+                "serverName": "workers.cucina.example.com",
+                "clientKeyPair": {
+                  "files": {
+                    "certificatePath": "/var/db/cucina/pki/worker.crt",
+                    "privateKeyPath": "/var/db/cucina/pki/worker.key",
+                    "refreshInterval": "300s"
+                  }
+                }
+              }
+            },
+            "enableCompression": true
+          }
+        },
+        "fast": {
+          "local": {
+            "keyLocationMapOnBlockDevice": {
+              "file": {
+                "path": "/var/db/cucina/l1/key_location_map",
+                "sizeBytes": "346030080"
+              }
+            },
+            "keyLocationMapMaximumGetAttempts": 16,
+            "keyLocationMapMaximumPutAttempts": "64",
+            "oldBlocks": 8,
+            "currentBlocks": 24,
+            "newBlocks": 3,
+            "blocksOnBlockDevice": {
+              "source": {
+                "file": {
+                  "path": "/var/db/cucina/l1/blocks",
+                  "sizeBytes": "42949672938"
+                }
+              },
+              "spareBlocks": 3,
+              "dataIntegrityValidationCache": {
+                "cacheSize": "100000",
+                "cacheDuration": "14400s",
+                "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
+              }
+            },
+            "persistent": {
+              "stateDirectoryPath": "/var/db/cucina/l1/state",
+              "minimumEpochInterval": "300s"
+            }
+          }
+        },
+        "replicator": {
+          "deduplicating": {
+            "concurrencyLimiting": {
+              "base": {
+                "local": {}
+              },
+              "maximumConcurrency": "32"
+            }
+          }
+        }
+      }
+    },
+    "actionCache": {
+      "grpc": {
+        "client": {
+          "address": "workers.cucina.example.com:8981",
+          "tls": {
+            "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+            "serverName": "workers.cucina.example.com",
+            "clientKeyPair": {
+              "files": {
+                "certificatePath": "/var/db/cucina/pki/worker.crt",
+                "privateKeyPath": "/var/db/cucina/pki/worker.key",
+                "refreshInterval": "300s"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "maximumMessageSizeBytes": "16777216",
+  "scheduler": {
+    "address": "192.0.2.1:8983",
+    "tls": {
+      "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+      "serverName": "workers.cucina.example.com",
+      "clientKeyPair": {
+        "files": {
+          "certificatePath": "/var/db/cucina/pki/worker.crt",
+          "privateKeyPath": "/var/db/cucina/pki/worker.key",
+          "refreshInterval": "300s"
+        }
+      }
+    }
+  },
+  "global": {
+    "prometheusPushgateway": {
+      "url": "http://192.0.2.1:9091",
+      "job": "bb_worker",
+      "grouping": {
+        "node": "TESTSERIAL01/vm-1",
+        "pool": "macos"
+      },
+      "pushInterval": "30s"
+    },
+    "diagnosticsHttpServer": {
+      "httpServers": [
+        {
+          "listenAddresses": [
+            ":9986"
+          ],
+          "authenticationPolicy": {
+            "allow": {}
+          }
+        }
+      ],
+      "enablePrometheus": true
+    }
+  },
+  "buildDirectories": [
+    {
+      "virtual": {
+        "mount": {
+          "mountPath": "/Volumes/CucinaBuild/build",
+          "nfsv4": {
+            "darwin": {
+              "socketPath": "/var/db/cucina/nfsv4.sock"
+            },
+            "enforcedLeaseTime": "120s",
+            "announcedLeaseTime": "60s"
+          }
+        },
+        "maximumExecutionTimeoutCompensation": "3600s",
+        "maximumWritableFileUploadDelay": "60s"
+      },
+      "runners": [
+        {
+          "endpoint": {
+            "address": "unix:///var/run/cucina-runner/runner.sock"
+          },
+          "concurrency": "8",
+          "instanceNamePrefix": "main",
+          "platform": {
+            "properties": [
+              {
+                "name": "ISA",
+                "value": "arm-a64"
+              },
+              {
+                "name": "OSFamily",
+                "value": "macos"
+              },
+              {
+                "name": "xcode-version",
+                "value": "27.0"
+              }
+            ]
+          },
+          "sizeClass": 1,
+          "maximumFilePoolFileCount": "100000",
+          "maximumFilePoolSizeBytes": "4294967296",
+          "workerId": {
+            "node": "TESTSERIAL01/vm-1",
+            "pool": "macos"
+          },
+          "buildDirectoryOwnerUserId": 501,
+          "buildDirectoryOwnerGroupId": 20
+        },
+        {
+          "endpoint": {
+            "address": "unix:///var/run/cucina-runner/runner.sock"
+          },
+          "concurrency": "8",
+          "instanceNamePrefix": "main",
+          "platform": {
+            "properties": [
+              {
+                "name": "ISA",
+                "value": "arm-a64"
+              },
+              {
+                "name": "OSFamily",
+                "value": "macos"
+              }
+            ]
+          },
+          "sizeClass": 1,
+          "maximumFilePoolFileCount": "100000",
+          "maximumFilePoolSizeBytes": "4294967296",
+          "workerId": {
+            "node": "TESTSERIAL01/vm-1",
+            "pool": "macos"
+          },
+          "buildDirectoryOwnerUserId": 501,
+          "buildDirectoryOwnerGroupId": 20
+        }
+      ]
+    }
+  ],
+  "filePool": {
+    "blockDevice": {
+      "file": {
+        "path": "/var/db/cucina/filepool/pool",
+        "sizeBytes": "68719476736"
+      }
+    }
+  },
+  "outputUploadConcurrency": "16",
+  "directoryCache": {
+    "maximumCount": "10000",
+    "maximumSizeBytes": "16777216",
+    "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
+  },
+  "prefetching": {
+    "fileSystemAccessCache": {
+      "grpc": {
+        "client": {
+          "address": "workers.cucina.example.com:8981",
+          "tls": {
+            "serverCertificateAuthorities": "-----BEGIN CERTIFICATE-----\nPLACEHOLDER-FOR-THE-CUCINA-CA-BUNDLE\n-----END CERTIFICATE-----\n",
+            "serverName": "workers.cucina.example.com",
+            "clientKeyPair": {
+              "files": {
+                "certificatePath": "/var/db/cucina/pki/worker.crt",
+                "privateKeyPath": "/var/db/cucina/pki/worker.key",
+                "refreshInterval": "300s"
+              }
+            }
+          }
+        }
+      }
+    },
+    "bloomFilterBitsPerPath": 14,
+    "bloomFilterMaximumSizeBytes": 65536
+  },
+  "inputDownloadConcurrency": "32",
+  "zstdPool": {
+    "maximumEncoders": "16",
+    "maximumDecoders": "32",
+    "encoderLevel": 3
+  }
+}

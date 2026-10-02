@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+load("@bazel_lib//lib:write_source_files.bzl", "write_source_files")
+load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
+
+# Goldens (R-TEST-8e): rendered by //internal/bbconfig/cmd/render-goldens and
+# checked in under testdata/. `bazel run //:update_goldens` (or
+# `bazel run //internal/bbconfig:goldens`) refreshes them; the tier-static diff
+# tests fail on drift. Keep this list equal to bbconfigtest.GoldenFiles.
+_GOLDENS = [
+    "hostl2.json",
+    "runner_darwin.json",
+    "runner_linux.json",
+    "runner_windows.json",
+    "worker_linux-aarch64_memory_fuse.json",
+    "worker_linux-x86-64_instance-store_fuse.json",
+    "worker_macos_vm-disk_native_l2.json",
+    "worker_macos_vm-disk_nfsv4_wan.json",
+    "worker_windows-x86-64_ebs_winfsp.json",
+]
+
+genrule(
+    name = "goldens_gen",
+    outs = ["golden/" + f for f in _GOLDENS],
+    cmd = "$(execpath //internal/bbconfig/cmd/render-goldens) $(RULEDIR)/golden",
+    tools = ["//internal/bbconfig/cmd/render-goldens"],
+)
+
+write_source_files(
+    name = "goldens",
+    files = {"testdata/" + f: "golden/" + f for f in _GOLDENS},
+    tags = ["tier-static"],
+)
+
+go_library(
+    name = "bbconfig",
+    srcs = [
+        "doc.go",
+        "hostl2.go",
+        "machine.go",
+        "plan.go",
+        "runner.go",
+        "worker.go",
+    ],
+    embedsrcs = ["hostl2.json.tmpl"],
+    importpath = "github.com/sloper-ai/cucina/internal/bbconfig",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//api/proto/cucina/v1:cucina",
+        "@com_github_bazelbuild_remote_apis//build/bazel/remote/execution/v2:execution",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/bb_runner",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/bb_worker",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/cas",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/credentials",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/filesystem",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/filesystem/virtual",
+        "@com_github_buildbarn_bb_storage//pkg/proto/auth",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/blobstore",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/blockdevice",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/digest",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/eviction",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/global",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/grpc",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/http/server",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/tls",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/zstd",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/known/durationpb",
+        "@org_golang_google_protobuf//types/known/emptypb",
+    ],
+)
+
+cucina_go_test(
+    name = "bbconfig_test",
+    srcs = [
+        "contract_test.go",
+        "fixtures_test.go",
+        "golden_test.go",
+        "render_test.go",
+    ],
+    data = ["//platforms:pools.json"],
+    tier = "unit",
+    deps = [
+        ":bbconfig",
+        "//api/proto/cucina/v1:cucina",
+        "//api/v1alpha1",
+        "//internal/bbconfig/bbconfigtest",
+        "//internal/config",
+        "//internal/pools",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/bb_runner",
+        "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/bb_worker",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/bb_storage",
+        "@com_github_buildbarn_bb_storage//pkg/proto/configuration/blobstore",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@net_pgregory_rapid//:rapid",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
