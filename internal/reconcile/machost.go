@@ -63,8 +63,13 @@ func (r *MacHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	deleting := !mh.DeletionTimestamp.IsZero()
 	if !deleting && !controllerutil.ContainsFinalizer(&mh, v1alpha1.Finalizer) {
+		// Patch only metadata.finalizers: a full-object Update would rewrite the
+		// user's spec through the Go types ("168h" becomes "168h0m0s", zero values
+		// appear) and make the controller own those fields, so the next server-side
+		// apply of the spec (Helm 4) conflicts with it.
+		before := mh.DeepCopy()
 		controllerutil.AddFinalizer(&mh, v1alpha1.Finalizer)
-		if err := r.Client.Update(ctx, &mh); err != nil {
+		if err := r.Client.Patch(ctx, &mh, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -92,7 +97,7 @@ func (r *MacHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// Stopped, or offline: an offline host's VMs power themselves off (R-POOL-7).
 		before := mh.DeepCopy()
 		controllerutil.RemoveFinalizer(&mh, v1alpha1.Finalizer)
-		if err := r.Client.Patch(ctx, &mh, client.MergeFrom(before)); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Client.Patch(ctx, &mh, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, r.exportHostMetrics(ctx, mh.Namespace)

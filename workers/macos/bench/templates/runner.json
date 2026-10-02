@@ -1,0 +1,6 @@
+{
+  "buildDirectoryPath": "@BUILD@",
+  "grpcServers": [ { "listenPaths": ["@RUNNER_SOCKET@"], "authenticationPolicy": { "allow": {} } } ],
+  "setTmpdirEnvironmentVariable": true,
+  "appleXcodeDeveloperDirectories": { "@XCODE_OVERRIDE@": "/Applications/Xcode.app/Contents/Developer" }
+}

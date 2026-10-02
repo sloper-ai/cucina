@@ -1,21 +1,65 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
-# Defaults that matter: CRDs installed from templates and kept on uninstall (R-OPS-1),
-# monitoring objects only on request, NetworkPolicies on, hooks bound to the right phases.
+# Defaults that matter: CRDs from crds/ on install and re-applied from the controller image
+# before every install/upgrade (R-OPS-1, ADR 0406), monitoring objects only on request,
+# NetworkPolicies on, hooks bound to the right phases.
 suite: toggles and hooks
 tests:
-  - it: installs the CRDs from templates, kept on uninstall
-    template: templates/crds.yaml
+  - it: applies the CRDs from the controller image before install and upgrade (ADR 0406)
+    template: templates/hooks/crds.yaml
     asserts:
       - hasDocuments: {count: 3}
       - equal:
-          path: 'metadata.annotations["helm.sh/resource-policy"]'
-          value: keep
-  - it: can leave CRDs to someone else
-    template: templates/crds.yaml
+          path: 'metadata.annotations["helm.sh/hook"]'
+          value: pre-install,pre-upgrade
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook-delete-policy"]'
+          value: before-hook-creation,hook-succeeded
+  - it: runs the CRD Job after its RBAC and before the bootstrap hook
+    template: templates/hooks/crds.yaml
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - equal: {path: metadata.name, value: RELEASE-NAME-cucina-crds}
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook-weight"]'
+          value: "-8"
+      - equal: {path: spec.template.spec.serviceAccountName, value: RELEASE-NAME-cucina-hooks}
+      - equal:
+          path: 'spec.template.spec.containers[0].args'
+          value: [crds, apply]
+  - it: lets the CRD hook only get, create and patch Cucina's own CRDs
+    template: templates/hooks/crds.yaml
+    documentSelector: {path: kind, value: ClusterRole}
+    asserts:
+      - equal: {path: metadata.name, value: RELEASE-NAME-cucina-crds-NAMESPACE}
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [apiextensions.k8s.io]
+              resources: [customresourcedefinitions]
+              resourceNames: [machosts.cucina.sloper.ai, trustpolicies.cucina.sloper.ai, workerpools.cucina.sloper.ai]
+              verbs: [get, create, patch]
+  - it: binds the CRD ClusterRole to the hook ServiceAccount only
+    template: templates/hooks/crds.yaml
+    documentSelector: {path: kind, value: ClusterRoleBinding}
+    asserts:
+      - equal: {path: roleRef.name, value: RELEASE-NAME-cucina-crds-NAMESPACE}
+      - equal:
+          path: subjects
+          value: [{kind: ServiceAccount, name: RELEASE-NAME-cucina-hooks, namespace: NAMESPACE}]
+  - it: can leave CRD upgrades to someone else (with helm --skip-crds)
+    template: templates/hooks/crds.yaml
     set:
       crds.install: false
     asserts:
       - hasDocuments: {count: 0}
+  - it: keeps the hook ServiceAccount when only the CRD hook runs
+    template: templates/hooks/bootstrap.yaml
+    set:
+      hooks.bootstrap.enabled: false
+      hooks.uninstallPrep.enabled: false
+    documentSelector: {path: kind, value: ServiceAccount}
+    asserts:
+      - equal: {path: metadata.name, value: RELEASE-NAME-cucina-hooks}
   - it: renders no monitoring objects by default
     templates:
       - templates/monitoring/monitors.yaml
@@ -54,3 +98,12 @@ tests:
     asserts:
       # small: one frontend and one controller, two shards and two STS replicas.
       - hasDocuments: {count: 2}
+  - it: removes a passed helm test Pod (kept on failure for its logs)
+    template: templates/tests/canary.yaml
+    asserts:
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook"]'
+          value: test
+      - equal:
+          path: 'metadata.annotations["helm.sh/hook-delete-policy"]'
+          value: before-hook-creation,hook-succeeded

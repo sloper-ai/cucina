@@ -203,6 +203,7 @@
             "source": {
               "enum": [
                 "action-cache",
+                "execute-response",
                 "historical-execute-response"
               ]
             },

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Pinned upstream inputs of the macOS host package (mirror of macos/pkg/pins.env; update both together).
+# Wire-up (bazel agent): add `include("//macos/pkg:deps.MODULE.bazel")` to the root MODULE.bazel, then the genrule in
+# docs/mdm/pkg.md#bazel builds the unsigned package from @cucina_pkg_tart and @cucina_pkg_bb_storage_darwin_arm64.
+
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+# Tart 2.40.1 official release tarball (tart.app + LICENSE), shipped exactly as released (never re-signed).
+http_file(
+    name = "cucina_pkg_tart",
+    downloaded_file_path = "tart.tar.gz",
+    sha256 = "363e2701154a8155cbc1bb6d845430c9b42697d2a186bc49574471ca2877db46",
+    url = "https://github.com/openai/tart/releases/download/2.40.1/tart.tar.gz",
+)
+
+# bb_storage darwin/arm64 for the host L2 cache (bb-storage 20260930T153215Z-086b011, new nested local schema).
+http_file(
+    name = "cucina_pkg_bb_storage_darwin_arm64",
+    downloaded_file_path = "bb_storage",
+    executable = True,
+    sha256 = "ca879430c4383cb723144eef3e3069ff8cf58422bd7f0a54c7e4290603139bc3",
+    url = "https://github.com/buildbarn/bb-storage/releases/download/20260930T153215Z-086b011/bb_storage.darwin_arm64",
+)

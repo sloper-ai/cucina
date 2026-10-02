@@ -1,0 +1,11 @@
+{
+  "Type": "com.apple.activation.simple",
+  "Identifier": "ai.sloper.cucina.ddm.activation.ring1-canary",
+  "ServerToken": "cucina-activation-ring1-v1",
+  "Payload": {
+    "StandardConfigurations": [
+      "ai.sloper.cucina.ddm.softwareupdate.settings.ring1-canary",
+      "ai.sloper.cucina.ddm.softwareupdate.enforcement.ring1-canary"
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "Type": "com.apple.configuration.softwareupdate.settings",
+  "Identifier": "ai.sloper.cucina.ddm.softwareupdate.settings.ring2-fleet",
+  "ServerToken": "cucina-su-settings-ring2-v1",
+  "Payload": {
+    "Notifications": false,
+    "Deferrals": {
+      "MajorPeriodInDays": 90,
+      "MinorPeriodInDays": 14,
+      "SystemPeriodInDays": 7
+    },
+    "AutomaticActions": {
+      "Download": "AlwaysOn",
+      "InstallOSUpdates": "AlwaysOff",
+      "InstallSecurityUpdate": "AlwaysOn"
+    },
+    "RapidSecurityResponse": {
+      "Enable": true,
+      "EnableRollback": true
+    },
+    "AllowStandardUserOSUpdates": false,
+    "Beta": {
+      "ProgramEnrollment": "AlwaysOff"
+    }
+  }
+}

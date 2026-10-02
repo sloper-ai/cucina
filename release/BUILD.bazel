@@ -1,0 +1,371 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# The Cucina release (R-OPS-7, R-BUILD-3; ADR 0150, ADR 0151): every artifact is built by Bazel.
+#
+#   bazel build --stamp --workspace_status_command=release/workspace-status.sh //release:all
+#
+# builds everything on a macOS host (Linux and Windows targets cross-build); CI splits it into
+# //release:macos (macOS runner) and //release:linux (Linux runner). Unstamped builds are version
+# 0.0.0-dev. Every target is `manual`, so `bazel build //...` does not cross-build the release.
+# release/dry-run.sh builds and checks it all without publishing; see docs/operations/releasing.md.
+
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("//bazel:tiers.bzl", "cucina_sh_test")
+load(
+    "//bazel/release:defs.bzl",
+    "cucina_buildinfo",
+    "cucina_chart_package",
+    "cucina_host_pkg",
+    "cucina_release_archive",
+    "cucina_release_dist",
+    "cucina_release_finalize",
+    "cucina_release_image",
+    "release_binary",
+)
+
+package(default_visibility = ["//visibility:private"])
+
+exports_files(
+    [
+        "homebrew/cucinactl.rb.tmpl",
+        "workspace-status.sh",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+_MANUAL = ["manual"]
+
+_MACOS = ["@platforms//os:macos"]
+
+# Licence documents shipped in every archive, image and the macOS package (R-ARTIFACT).
+_DOCS = [
+    "//:LICENSE.md",
+    "//:THIRD_PARTY_NOTICES.md",
+]
+
+# The release version: STABLE_CUCINA_* in stamped builds, 0.0.0-dev otherwise.
+cucina_buildinfo(
+    name = "buildinfo",
+    tags = _MANUAL,
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "buildinfo_env",
+    srcs = [":buildinfo"],
+    output_group = "env",
+    tags = _MANUAL,
+)
+
+# --- cucinactl (R-CLI-1): macOS arm64 (macOS exec), Linux musl, Windows ------------------------
+# Windows targets MinGW/UCRT (gnullvm): rules_rs cannot link Rust for MSVC yet (ADR 0103).
+_CLI = {
+    "darwin_arm64": ("@rules_rs//rs/platforms:aarch64-apple-darwin", "cucinactl"),
+    "linux_amd64": ("@rules_rs//rs/platforms:x86_64-unknown-linux-musl", "cucinactl"),
+    "linux_arm64": ("@rules_rs//rs/platforms:aarch64-unknown-linux-musl", "cucinactl"),
+    "windows_amd64": ("@rules_rs//rs/platforms:x86_64-pc-windows-gnullvm", "cucinactl.exe"),
+}
+
+[
+    release_binary(
+        name = "cucinactl_" + p,
+        out = "bin/%s/%s" % (p, exe),
+        binary = "//cli/cucinactl",
+        platform = platform,
+        tags = _MANUAL,
+        target_compatible_with = _MACOS if p.startswith("darwin") else [],
+    )
+    for p, (platform, exe) in _CLI.items()
+]
+
+# Archives with the credential-helper alias next to cucinactl (R-AUTH-8).
+[
+    cucina_release_archive(
+        name = "cucinactl_%s_archive" % p,
+        binary = ":cucinactl_" + p,
+        docs = _DOCS,
+        exe_name = exe,
+        format = "zip" if p.startswith("windows") else "tar.gz",
+        links = [exe.replace("cucinactl", "cucina-credential-helper")],
+        tags = _MANUAL,
+        target_compatible_with = _MACOS if p.startswith("darwin") else [],
+        top = "cucinactl-{version}-" + p.replace("_", "-"),
+    )
+    for p, (_, exe) in _CLI.items()
+]
+
+# --- cucina-worker-agent (pure Go) for every worker OS ----------------------------------------
+_AGENT = [
+    "darwin_arm64",
+    "linux_amd64",
+    "linux_arm64",
+    "windows_amd64",
+]
+
+[
+    release_binary(
+        name = "agent_" + p,
+        out = "bin/%s/cucina-worker-agent%s" % (
+            p,
+            ".exe" if p.startswith("windows") else "",
+        ),
+        binary = "//cmd/cucina-worker-agent",
+        platform = "@rules_go//go/toolchain:" + p,
+        tags = _MANUAL,
+    )
+    for p in _AGENT
+]
+
+# --- cucina-hostd: darwin/arm64 with cgo (managed preferences, keychain, os_log), macOS exec --
+release_binary(
+    name = "hostd_darwin_arm64",
+    out = "bin/darwin_arm64/cucina-hostd",
+    binary = "//cmd/cucina-hostd",
+    cgo = True,
+    platform = "@llvm//platforms:macos_aarch64",
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+)
+
+# --- Images: public GHCR, linux/amd64 + linux/arm64, distroless static nonroot (R-OPS-7) ------
+cucina_release_image(
+    name = "controller_image",
+    binary = "//cmd/cucina-controller",
+    description = "Cucina fleet controller: autoscaler, enrollment, management API and STS (Buildbarn distribution)",
+    docs = _DOCS,
+    tags = _MANUAL,
+    title = "cucina-controller",
+)
+
+# The STS is a subcommand of the controller binary (R-AUTH-1); the chart runs it with
+# `args: [sts, ...]` on either image.
+cucina_release_image(
+    name = "sts_image",
+    binary = "//cmd/cucina-controller",
+    description = "Cucina STS (RFC 8693 token exchange): the cucina-controller binary, run as `cucina-controller sts`",
+    docs = _DOCS,
+    tags = _MANUAL,
+    title = "cucina-sts",
+)
+
+# --- Helm chart: helm package --version/--app-version, controller image pinned by digest -----
+cucina_chart_package(
+    name = "chart",
+    chart = "//charts/cucina:chart",
+    chart_root = "charts/cucina",
+    image = ":controller_image",
+    tags = _MANUAL,
+)
+
+# --- macOS host package (R-MAC-8): unsigned here; signing is local-only (R-MAC-9) -------------
+cucina_host_pkg(
+    name = "host_pkg",
+    bb_storage = "@bb_release//:bb_storage",
+    exec_compatible_with = _MACOS,
+    hostd = ":hostd_darwin_arm64",
+    license = "//:LICENSE.md",
+    notices = "//:THIRD_PARTY_NOTICES.md",
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+    tart = "@cucina_pkg_tart//file",
+)
+
+_PKG_INPUTS = {
+    "--bb-storage": "@bb_release//:bb_storage",
+    "--buildinfo-env": ":buildinfo_env",
+    "--hostd": ":hostd_darwin_arm64",
+    "--license": "//:LICENSE.md",
+    "--make-manifest": "//macos/pkg:scripts/make-manifest.sh",
+    "--notices": "//:THIRD_PARTY_NOTICES.md",
+    "--sign-script": "//macos/pkg:scripts/sign.sh",
+    "--tart-tarball": "@cucina_pkg_tart//file",
+}
+
+# bazel run --stamp --workspace_status_command=release/workspace-status.sh //release:pkg_sign -- \
+#     --identity "<signing identity>" [--keychain PATH] --out DIR
+sh_binary(
+    name = "pkg_sign",
+    srcs = ["//bazel/release:sign_pkg.sh"],
+    args = [
+        a
+        for flag, label in _PKG_INPUTS.items()
+        for a in [
+            flag,
+            "$(rootpath %s)" % label,
+        ]
+    ],
+    data = _PKG_INPUTS.values() + ["//macos/pkg:build_inputs"],
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+)
+
+# Inputs of the CI signing job (copied by release/build.sh to <out>/pkg-inputs/).
+filegroup(
+    name = "pkg_inputs",
+    srcs = [
+        ":buildinfo",
+        ":hostd_darwin_arm64",
+        "@bb_release//:bb_storage",
+        "@cucina_pkg_tart//file",
+    ] + _DOCS,
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+)
+
+# --- Release directories ------------------------------------------------------------------
+cucina_release_dist(
+    name = "dist_macos",
+    files = {
+        ":agent_darwin_arm64": "cucina-worker-agent-{version}-darwin-arm64",
+        ":cucinactl_darwin_arm64_archive": "cucinactl-{version}-darwin-arm64.tar.gz",
+        ":hostd_darwin_arm64": "cucina-hostd-{version}-darwin-arm64",
+    },
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+    trees = [":host_pkg"],
+)
+
+cucina_release_dist(
+    name = "dist_linux",
+    files = {
+        ":agent_linux_amd64": "cucina-worker-agent-{version}-linux-amd64",
+        ":agent_linux_arm64": "cucina-worker-agent-{version}-linux-arm64",
+        ":agent_windows_amd64": "cucina-worker-agent-{version}-windows-amd64.exe",
+        ":chart": "cucina-{version}.tgz",
+        ":cucinactl_linux_amd64_archive": "cucinactl-{version}-linux-amd64.tar.gz",
+        ":cucinactl_linux_arm64_archive": "cucinactl-{version}-linux-arm64.tar.gz",
+        ":cucinactl_windows_amd64_archive": "cucinactl-{version}-windows-amd64.zip",
+    },
+    images = {
+        ":controller_image": "cucina-controller",
+        ":sts_image": "cucina-sts",
+    },
+    tags = _MANUAL,
+)
+
+# assets/ (+ SHA256SUMS) and meta/ (buildinfo.json, images.json, cucinactl.rb).
+cucina_release_finalize(
+    name = "release",
+    dists = [
+        ":dist_macos",
+        ":dist_linux",
+    ],
+    formula_template = "homebrew/cucinactl.rb.tmpl",
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+)
+
+filegroup(
+    name = "all",
+    srcs = [
+        ":controller_image",
+        ":release",
+        ":sts_image",
+    ],
+    tags = _MANUAL,
+)
+
+filegroup(
+    name = "macos",
+    srcs = [
+        ":dist_macos",
+        ":pkg_inputs",
+    ],
+    tags = _MANUAL,
+)
+
+filegroup(
+    name = "linux",
+    srcs = [
+        ":controller_image",
+        ":dist_linux",
+        ":sts_image",
+    ],
+    tags = _MANUAL,
+)
+
+# --- Release-lane checks (run by release/build.sh, release/dry-run.sh and the workflow) -------
+# Version agreement of every artifact of one stamped build, archive contents (credential-helper
+# hard link), image labels and notices, chart lint and digest pin, pkg version and manifests.
+_VERIFY_DATA = [
+    "//bazel/release/tool",
+    "@helm//:helm",
+]
+
+_OCI_ARGS = [
+    "--oci",
+    "cucina-controller=$(rootpath :controller_image)",
+    "--oci",
+    "cucina-sts=$(rootpath :sts_image)",
+    "--helm",
+    "$(rootpath @helm//:helm)",
+    "--exec-native",
+]
+
+cucina_sh_test(
+    name = "verify_test",
+    timeout = "short",
+    srcs = ["verify_test.sh"],
+    args = [
+        "$(rootpath //bazel/release/tool)",
+        "verify",
+        "--dir",
+        "$(rootpath :release)",
+        "--final",
+        "--expect",
+        "macos",
+        "--expect",
+        "pkg",
+        "--expect",
+        "linux",
+    ] + _OCI_ARGS,
+    data = _VERIFY_DATA + [
+        ":controller_image",
+        ":release",
+        ":sts_image",
+    ],
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+    tier = "integration",
+)
+
+cucina_sh_test(
+    name = "verify_macos_test",
+    timeout = "short",
+    srcs = ["verify_test.sh"],
+    args = [
+        "$(rootpath //bazel/release/tool)",
+        "verify",
+        "--dir",
+        "$(rootpath :dist_macos)",
+        "--expect",
+        "macos",
+        "--expect",
+        "pkg",
+        "--exec-native",
+    ],
+    data = _VERIFY_DATA + [":dist_macos"],
+    tags = _MANUAL,
+    target_compatible_with = _MACOS,
+    tier = "integration",
+)
+
+cucina_sh_test(
+    name = "verify_linux_test",
+    timeout = "short",
+    srcs = ["verify_test.sh"],
+    args = [
+        "$(rootpath //bazel/release/tool)",
+        "verify",
+        "--dir",
+        "$(rootpath :dist_linux)",
+        "--expect",
+        "linux",
+    ] + _OCI_ARGS,
+    data = _VERIFY_DATA + [
+        ":controller_image",
+        ":dist_linux",
+        ":sts_image",
+    ],
+    tags = _MANUAL,
+    tier = "integration",
+)

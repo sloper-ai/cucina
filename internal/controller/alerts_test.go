@@ -49,8 +49,12 @@ func TestDeriveAlerts(t *testing.T) {
 			poolWith("b", cond(v1alpha1.ConditionQueueDeclared, "Unknown", "SchedulerUnreachable")),
 		}}, []string{controller.AlertSchedulerUnreachable}},
 		{"fleet problems", controller.AlertInputs{Hosts: []v1alpha1.MacHost{offline}, Orphans: 3, Violations: 1,
-			Canary: &canary.Result{Kind: canary.KindCache, Success: false, Error: "cas-read: mismatch"}},
+			Canary: &canary.Result{Kind: canary.KindCache, Success: false, Error: "cas-read: mismatch"}, CanaryFailures: 2},
 			[]string{controller.AlertInvariant, controller.AlertCanary, controller.AlertHostOffline, controller.AlertOrphans}}, // severity, then name
+		// Found by the kind smoke test: the leader's first run right after `helm install`
+		// fails while the STS Pods start, and one failed run is no alert yet.
+		{"one failed canary run is not an alert", controller.AlertInputs{
+			Canary: &canary.Result{Kind: canary.KindCache, Success: false, Error: "token: connection refused"}, CanaryFailures: 1}, nil},
 		{"cost leak only after the idle timeout", controller.AlertInputs{
 			Pools: []v1alpha1.WorkerPool{poolWith("linux"), poolWith("windows")},
 			Snapshots: map[domain.PoolName]reconcile.Snapshot{

@@ -127,6 +127,7 @@ cucina_go_test(
         "@com_github_aws_aws_sdk_go_v2_service_ssm//types",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@io_k8s_api//authorization/v1:authorization",
         "@io_k8s_api//core/v1:core",
         "@io_k8s_api//rbac/v1:rbac",
         "@io_k8s_apimachinery//pkg/api/errors",

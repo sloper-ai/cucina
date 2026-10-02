@@ -10,7 +10,9 @@
 pub mod fake_auth;
 pub mod fake_mgmt;
 pub mod fake_reapi;
+pub mod net;
 pub mod schema;
+pub mod test_ca;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,6 +96,17 @@ const SCRUB: &[&str] = &[
     "ACTIONS_ID_TOKEN_REQUEST_URL",
     "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
     "CLICOLOR_FORCE",
+    // Trust and proxies come from the test, never from the developer's shell.
+    "CUCINA_CA_FILE",
+    "SSL_CERT_FILE",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
 ];
 
 /// A `cucinactl` command isolated to `config_dir` (file credential store, no colors).

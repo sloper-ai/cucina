@@ -65,6 +65,23 @@
                 "additionalProperties": false
               }
             ]
+          },
+          "test_timeout_scale": {
+            "description": "Multiplier of Bazel's test timeouts on emulated runners (null: 1).",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "excluded": {
+            "description": "Excluded by the user: `bazelrc --cross` refuses it with `reason`.",
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -75,7 +92,10 @@
           "abi",
           "default_exec_pool",
           "exec_pools",
-          "test"
+          "test",
+          "test_timeout_scale",
+          "excluded",
+          "reason"
         ],
         "additionalProperties": false
       }

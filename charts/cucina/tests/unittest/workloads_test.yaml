@@ -27,3 +27,34 @@ tests:
       - matchRegex: {path: 'spec.template.spec.containers[0].image', pattern: '^ghcr\.io/buildbarn/bb-storage@sha256:[0-9a-f]{64}$'}
       - equal: {path: spec.template.spec.securityContext.runAsNonRoot, value: true}
       - equal: {path: 'spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem', value: true}
+  - it: points the controller's in-process canary at the in-cluster Services
+    template: templates/controller/deployment.yaml
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - contains:
+          path: 'spec.template.spec.containers[0].env'
+          content: {name: CUCINA_CANARY_ENDPOINT, value: 'grpcs://RELEASE-NAME-cucina-frontend.NAMESPACE.svc.cluster.local:8980'}
+      - contains:
+          path: 'spec.template.spec.containers[0].env'
+          content: {name: CUCINA_CANARY_STS_URL, value: 'https://RELEASE-NAME-cucina-sts.NAMESPACE.svc.cluster.local:8443'}
+  - it: keeps the in-process canary on the public names when the certificate cannot carry Service names
+    template: templates/controller/deployment.yaml
+    documentSelector: {path: kind, value: Deployment}
+    set:
+      endpoints.client.host: cucina.example.com
+      tls.public.source: certManager
+      tls.public.certManager.issuerRef: {name: letsencrypt, kind: ClusterIssuer}
+      hooks.test.credentialSecret: canary-key
+    asserts:
+      - contains:
+          path: 'spec.template.spec.containers[0].env'
+          content: {name: CUCINA_CANARY_ENDPOINT, value: 'grpcs://cucina.example.com:443'}
+      - contains:
+          path: 'spec.template.spec.containers[0].env'
+          content: {name: CUCINA_CANARY_STS_URL, value: 'https://cucina.example.com:8443'}
+      - contains:
+          path: 'spec.template.spec.containers[0].env'
+          content: {name: CUCINA_CANARY_CA_FILE, value: /cucina/canary-ca/ca.crt}
+      - contains:
+          path: 'spec.template.spec.volumes'
+          content: {name: canary-key, secret: {secretName: canary-key, items: [{key: key, path: key}]}}

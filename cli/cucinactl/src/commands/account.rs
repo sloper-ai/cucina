@@ -227,10 +227,17 @@ pub async fn login(ctx: &Ctx, args: &LoginArgs) -> Result<()> {
     config::validate_profile_name(&name)?;
     let existing = config.profiles.get(&name).cloned();
 
-    let ca_file = args
+    // Private CA (T10a): --ca-file, else CUCINA_CA_FILE, else the profile's; stored
+    // (absolute) so the credential helper and `bazelrc` find it. SSL_CERT_FILE is
+    // trusted too but not stored (crate::tls).
+    let ca_file = match args
         .ca_file
         .clone()
-        .or_else(|| existing.as_ref().and_then(|p| p.ca_file.clone()));
+        .or_else(crate::tls::cucina_ca_file_env)
+    {
+        Some(p) => Some(std::path::absolute(&p).unwrap_or(p)),
+        None => existing.as_ref().and_then(|p| p.ca_file.clone()),
+    };
     let http = Http::new(ca_file.as_deref(), ctx.global.timeout)?;
     let doc = discovery::fetch(&http, &base).await?;
 

@@ -164,13 +164,13 @@ func TestControllerOverrides(t *testing.T) {
 		hs    *cucinav1.HostSettings
 		want  config.Tunables
 	}{
-		{"preferences only", 0, nil, config.Tunables{Slots: 1, L2SizeGiB: 300, LogLevel: "debug"}},
+		{"preferences only", 0, nil, config.Tunables{Slots: 1, L2SizeGiB: 300, LogLevel: "debug", MaximumMessageSizeBytes: 16 << 20}},
 		{"controller overrides", 2, &cucinav1.HostSettings{VmCpu: 6, VmMemoryGib: 20, L2SizeGib: 100, LogLevel: "warn",
-			CentralEndpoint: "storage:8981", SchedulerEndpoint: "sched:8983"},
+			CentralEndpoint: "storage:8981", SchedulerEndpoint: "sched:8983", MaximumMessageSizeBytes: 32 << 20},
 			config.Tunables{Slots: 2, VMCPU: 6, VMMemoryGiB: 20, L2SizeGiB: 100, LogLevel: "warn",
-				CentralEndpoint: "storage:8981", SchedulerEndpoint: "sched:8983"}},
+				CentralEndpoint: "storage:8981", SchedulerEndpoint: "sched:8983", MaximumMessageSizeBytes: 32 << 20}},
 		{"slots clamped to the Apple limit", 5, &cucinav1.HostSettings{LogLevel: "bogus"},
-			config.Tunables{Slots: 2, L2SizeGiB: 300, LogLevel: "debug"}},
+			config.Tunables{Slots: 2, L2SizeGiB: 300, LogLevel: "debug", MaximumMessageSizeBytes: 16 << 20}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

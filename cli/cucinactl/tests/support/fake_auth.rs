@@ -107,11 +107,17 @@ pub struct FakeAuth {
 
 impl FakeAuth {
     pub async fn start() -> FakeAuth {
+        FakeAuth::start_with(|addr| format!("http://{addr}")).await
+    }
+
+    /// Like [`FakeAuth::start`], with the public base URL (issuer, endpoints) derived
+    /// from the listening address, e.g. a TLS front's `https://name:port`.
+    pub async fn start_with(public_base: impl FnOnce(SocketAddr) -> String) -> FakeAuth {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
         let addr = listener.local_addr().unwrap();
-        let base = format!("http://{addr}");
+        let base = public_base(addr);
         let state = Arc::new(AuthState {
             base: base.clone(),
             idp_key: EcKey::generate("idp-1"),

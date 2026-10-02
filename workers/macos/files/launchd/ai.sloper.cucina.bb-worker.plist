@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- bb_worker as a LaunchDaemon (system domain: it needs the network and is exempt from Local Network privacy).
+     Installed outside /Library/LaunchDaemons on purpose: hostd bootstraps it after pushing config and credentials
+     (docs/dev/hostd.md §1.2-1.3), so nothing Buildbarn-related starts at boot. @BUILD_USER@ is set at image build. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.sloper.cucina.bb-worker</string>
+	<key>UserName</key>
+	<string>@BUILD_USER@</string>
+	<key>GroupName</key>
+	<string>staff</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/cucina/bin/bb_worker</string>
+		<string>/etc/cucina/bb/worker.json</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
+	</dict>
+	<key>HardResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>524288</integer>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/var/log/cucina/bb_worker.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/cucina/bb_worker.log</string>
+</dict>
+</plist>

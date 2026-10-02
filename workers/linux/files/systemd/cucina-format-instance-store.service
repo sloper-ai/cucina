@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Formats and mounts NVMe instance store (if the instance type has any) at /var/lib/cucina/ephemeral for the
+# L1 cache and filePool (R-CACHE-2). Without instance store nothing is mounted; the agent then picks an
+# ephemeral gp3 volume or memory.
+[Unit]
+Description=Cucina instance-store setup
+DefaultDependencies=no
+After=local-fs.target
+Before=bb-runner.service bb-worker.service cucina-worker-agent.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/cucina/bin/cucina-format-instance-store
+
+[Install]
+WantedBy=multi-user.target

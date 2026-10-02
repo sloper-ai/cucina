@@ -27,6 +27,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -77,7 +78,8 @@ type Endpoint struct {
 	Target       string
 	InstanceName string
 	// CAFile is a PEM bundle trusted for the endpoint and the STS (Cucina's
-	// private CA); empty means the system roots.
+	// private CA); empty or absent means the system roots (the chart mounts the
+	// public certificate's ca.crt as optional: public CAs such as ACME issue none).
 	CAFile string
 	// ServerName overrides TLS SNI/verification name.
 	ServerName string
@@ -88,6 +90,9 @@ func (e Endpoint) TLSConfig() (*tls.Config, error) {
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: e.ServerName}
 	if e.CAFile != "" {
 		pem, err := os.ReadFile(e.CAFile)
+		if errors.Is(err, fs.ErrNotExist) {
+			return cfg, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("canary: CA bundle: %w", err)
 		}

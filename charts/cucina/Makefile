@@ -46,11 +46,11 @@ slo-check:
 	  diff -u files/rules/slo.yaml $$tmp/slo.yaml && echo "ok: slo rules up to date"; rc=$$?; rm -rf $$tmp; exit $$rc; \
 	else echo "SKIP: sloth not found"; fi
 
-## sync: refresh the copies of platforms/pools.json and api/crds, then the generated
-## schema definitions and README values table
+## sync: refresh the copies of platforms/pools.json and api/crds (into crds/, ADR 0406),
+## then the generated schema definitions and README values table
 sync:
 	cp $(REPO)/platforms/pools.json files/platforms.json
-	cp $(REPO)/api/crds/*.yaml files/crds/
+	rm -f crds/*.yaml && cp $(REPO)/api/crds/*.yaml crds/
 	cd $(REPO) && go test ./charts/cucina/tests/static -run 'TestSchemaDefinitionsMatchCRDs|TestReadmeValuesTableUpToDate' -count=1 -update
 
 ## slo: regenerate files/rules/slo.yaml with Sloth v0.16.0

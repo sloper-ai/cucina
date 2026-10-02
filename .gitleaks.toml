@@ -22,3 +22,22 @@ paths = [
     '''internal/mgmt/(bundle|e2e|fakes)_test\.go$''',
     '''internal/hostd/redact/redact_test\.go$''',
 ]
+
+# Planted fake credentials that redaction/rejection tests feed to the code under
+# test (they must look real to exercise the detectors). Scoped to these test
+# files AND these fixture shapes only; anything else in them is still flagged.
+[[allowlists]]
+description = "Fake credentials planted by redaction/rejection tests"
+condition = "AND"
+paths = [
+    '''(^|/)internal/mgmt/(bundle|e2e|fakes)_test\.go$''',
+    '''(^|/)internal/hostd/redact/redact_test\.go$''',
+]
+regexTarget = "line"
+regexes = [
+    '''pa55w0rd-in-url''',
+    '''"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"''',
+    '''"AKIA[A-Z0-9]{16}"''',
+    '''plantedServiceKey = "cuc_sk_''',
+    '''-----BEGIN PRIVATE KEY-----''',
+]

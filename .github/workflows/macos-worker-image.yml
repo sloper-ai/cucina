@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# macOS worker VM image (R-MAC-7, R-OPS-7; ADR 0151): MANUAL ONLY, on a self-hosted Apple-silicon
+# Mac with Tart, Packer and the image's Xcode. Builds the Packer image, runs its smoke test and,
+# when asked, pushes it to the PRIVATE GHCR package ghcr.io/<owner>/cucina-worker-macos — never
+# public: Xcode's licence forbids redistribution. Hosts pull it with a separate read-only package
+# credential that the controller hands to hostd at pull time (ADR 0702). Not part of releases.
+name: macos-worker-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      xcode:
+        description: Xcode version of the image (an entry of workers/macos/versions.json)
+        type: string
+        required: true
+        default: "27.0"
+      push:
+        description: Push to the private GHCR package after a passing smoke test
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: macos-worker-image
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: build (+ push) cucina-worker-macos
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build and smoke-test the image (Packer + Tart)
+        env:
+          XCODE: ${{ inputs.xcode }}
+        run: make -C workers/macos image-macos XCODE="$XCODE" CUCINA_VERSION="$(tr -d '[:space:]' < VERSION)"
+      - name: push to the private package
+        if: inputs.push
+        env:
+          XCODE: ${{ inputs.xcode }}
+          OWNER: ${{ github.repository_owner }}
+          TART_REGISTRY_USERNAME: ${{ github.actor }}
+          TART_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          CUCINA_PUBLISH: "1"
+        run: |
+          owner="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          CUCINA_IMAGE_REPOSITORY="ghcr.io/$owner/cucina-worker-macos" \
+            make -C workers/macos push XCODE="$XCODE" CUCINA_VERSION="$(tr -d '[:space:]' < VERSION)"

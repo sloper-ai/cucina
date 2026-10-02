@@ -1,0 +1,11 @@
+{
+  "Type": "com.apple.activation.simple",
+  "Identifier": "ai.sloper.cucina.ddm.activation.ring2-fleet",
+  "ServerToken": "cucina-activation-ring2-v1",
+  "Payload": {
+    "StandardConfigurations": [
+      "ai.sloper.cucina.ddm.softwareupdate.settings.ring2-fleet",
+      "ai.sloper.cucina.ddm.softwareupdate.enforcement.ring2-fleet"
+    ]
+  }
+}

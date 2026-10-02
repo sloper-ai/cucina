@@ -215,14 +215,21 @@ func Spend(spentUSD, budgetUSD float64) harness.NFRResult {
 	return harness.NFRResult{ID: "NFR-C3", Subject: "campaign", Measured: spentUSD, Unit: "USD", Target: fmt.Sprintf("≤ $%.0f", budgetUSD), Pass: spentUSD <= budgetUSD}
 }
 
-// Routing evaluates NFR-X1 for one configuration.
-func Routing(config string, compileOnPool, compileTotal, testsOnRunner, testsTotal int) []harness.NFRResult {
-	return []harness.NFRResult{
+// Routing evaluates NFR-X1 for one configuration from the REAPI platform
+// properties of its spawns (execlog.RouteCheck): compile/link actions on the
+// selected compile pool's runner, test actions on the target's test runner.
+// Build-only configurations (testStep false: no OS to run tests on) have no
+// test clause.
+func Routing(config string, compileOnPool, compileTotal, testsOnRunner, testsTotal int, testStep bool) []harness.NFRResult {
+	rows := []harness.NFRResult{
 		{ID: "NFR-X1", Subject: config + " compile/link on pool", Measured: pct(float64(compileOnPool), float64(compileTotal)), Unit: "%", Target: "≥ 99 %",
 			Pass: compileTotal == 0 || 100*compileOnPool >= 99*compileTotal, Detail: fmt.Sprintf("%d/%d", compileOnPool, compileTotal)},
-		{ID: "NFR-X1", Subject: config + " tests on target runner", Measured: pct(float64(testsOnRunner), float64(testsTotal)), Unit: "%", Target: "100 %",
-			Pass: testsOnRunner == testsTotal, Detail: fmt.Sprintf("%d/%d", testsOnRunner, testsTotal)},
 	}
+	if testStep {
+		rows = append(rows, harness.NFRResult{ID: "NFR-X1", Subject: config + " tests on target runner", Measured: pct(float64(testsOnRunner), float64(testsTotal)), Unit: "%", Target: "100 %",
+			Pass: testsOnRunner == testsTotal, Detail: fmt.Sprintf("%d/%d", testsOnRunner, testsTotal)})
+	}
+	return rows
 }
 
 // Deviation is one test whose remote outcome differs from the local baseline.

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Release packaging rules (defs.bzl), version stamping helpers (stamp.bzl) and their tool
+# (//bazel/release/tool). The release graph itself is //release. See ADR 0150, ADR 0151 and
+# docs/operations/releasing.md.
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "build_pkg.sh",
+    "sign_pkg.sh",
+    # rules_rust env files (no comments allowed: one NAME=value per line).
+    "version_dev.env",
+    "version_stamped.env",
+])
+
+# True in `--stamp` builds: the release version comes from the workspace status.
+config_setting(
+    name = "stamp",
+    values = {"stamp": "1"},
+)

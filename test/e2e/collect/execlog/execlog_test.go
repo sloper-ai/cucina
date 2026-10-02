@@ -75,11 +75,32 @@ func TestRemoteTimingsAndRouting(t *testing.T) {
 	require.Equal(t, Distribution{N: 4, P50: 60 * time.Millisecond, P95: 100 * time.Millisecond, Max: 100 * time.Millisecond}, s.WorkerOverhead)
 	require.InDelta(t, 5.0/6, s.RemoteRatio(), 1e-9)
 
+	// Routing counts cache hits (their properties are part of the action key)
+	// and treats client-side executions as misrouted.
+	l.Spawns = append(l.Spawns,
+		Spawn{Mnemonic: "CppCompile", Runner: "remote cache hit", CacheHit: true, Platform: linux},
+		Spawn{Mnemonic: "TestRunner", Runner: "remote cache hit", CacheHit: true, Platform: win},
+		Spawn{Mnemonic: "CppCompile", Runner: "linux-sandbox", Platform: linux},
+	)
 	r := l.RouteCheck(linux, win)
-	require.Equal(t, 3, r.CompileLinkTotal)
-	require.Equal(t, 2, r.CompileLinkOnPool)
-	require.InDelta(t, 200.0/3, r.CompileLinkPercent, 1e-9)
-	require.Equal(t, 1, r.TestTotal)
+	require.Equal(t, 6, r.CompileLinkTotal)
+	require.Equal(t, 3, r.CompileLinkOnPool)
+	require.Equal(t, 2, r.CompileLinkCached)
+	require.InDelta(t, 50.0, r.CompileLinkPercent, 1e-9)
+	require.Equal(t, 2, r.TestTotal)
+	require.Equal(t, 2, r.TestOnRunner)
+	require.Equal(t, 1, r.TestCached)
 	require.InDelta(t, 100.0, r.TestPercent, 1e-9)
-	require.Equal(t, map[string]int{"ISA=x86-64;OSFamily=windows": 1}, r.Misrouted)
+	require.Equal(t, map[string]int{
+		"compile/link on ISA=x86-64;OSFamily=windows": 2,
+		"compile/link on local:linux-sandbox":         1,
+	}, r.Misrouted)
+
+	// A build-then-test configuration merges its two invocations.
+	smoke := (&Log{Spawns: []Spawn{{Mnemonic: "TestRunner", Runner: "remote", Platform: linux}}}).RouteCheck(linux, win)
+	r.Merge(smoke)
+	require.Equal(t, 3, r.TestTotal)
+	require.Equal(t, 2, r.TestOnRunner)
+	require.InDelta(t, 200.0/3, r.TestPercent, 1e-9)
+	require.Equal(t, 1, r.Misrouted["test on ISA=x86-64;OSFamily=linux"])
 }

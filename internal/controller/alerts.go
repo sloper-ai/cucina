@@ -39,6 +39,9 @@ const (
 // queues are reported (drain and terminate take a few polls).
 const costLeakGrace = 2 * time.Minute
 
+// canaryAlertAfter is how many consecutive failed canary runs raise the alert.
+const canaryAlertAfter = 2
+
 // AlertInputs is the controller state alerts are derived from.
 type AlertInputs struct {
 	Now       time.Time
@@ -54,6 +57,8 @@ type AlertInputs struct {
 	ViolationsSince time.Time
 	// Canary is the last in-process cache canary result (nil before the first).
 	Canary *canary.Result
+	// CanaryFailures counts the consecutive failed canary runs up to Canary.
+	CanaryFailures int
 }
 
 // DeriveAlerts turns controller state into alerts, sorted by severity and name.
@@ -121,8 +126,10 @@ func DeriveAlerts(in AlertInputs) []mgmt.Alert {
 	if in.Violations > 0 {
 		add(AlertInvariant, "critical", fmt.Sprintf("%d invariant violation(s) since the controller started (see its logs)", in.Violations), in.ViolationsSince, nil)
 	}
-	if in.Canary != nil && !in.Canary.Success {
-		add(AlertCanary, "warning", "the cache canary failed: "+in.Canary.Error, in.Canary.Started, nil)
+	// Two failed runs in a row (about 5 minutes): the leader's first run right
+	// after an install or a failover may race the STS and frontend Pods.
+	if in.Canary != nil && !in.Canary.Success && in.CanaryFailures >= canaryAlertAfter {
+		add(AlertCanary, "warning", fmt.Sprintf("the cache canary failed %d times in a row: %s", in.CanaryFailures, in.Canary.Error), in.Canary.Started, nil)
 	}
 	rank := map[string]int{"critical": 0, "warning": 1, "info": 2}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -175,7 +182,7 @@ func (a *alertSource) Alerts(ctx context.Context) ([]mgmt.Alert, error) {
 	in.Violations, in.ViolationsSince = violationLog.n, violationLog.since
 	violationLog.mu.Unlock()
 	if c, ok := Shared[*canaryLoop](a.d, sharedCanary); ok {
-		in.Canary = c.last()
+		in.Canary, in.CanaryFailures = c.last()
 	}
 	return DeriveAlerts(in), nil
 }

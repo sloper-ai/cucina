@@ -1,0 +1,20 @@
+{
+  "Type": "com.apple.configuration.services.background-tasks",
+  "Identifier": "ai.sloper.cucina.ddm.background-tasks.cucina-hostd",
+  "ServerToken": "cucina-bgtask-0.1.0-v1",
+  "Payload": {
+    "TaskType": "ai.sloper.cucina.hostd",
+    "TaskDescription": "Cucina host agent (cucina-hostd) and its one-shot host preparation",
+    "ExecutableAssetReference": "ai.sloper.cucina.ddm.asset.hostd-files",
+    "LaunchdConfigurations": [
+      {
+        "FileAssetReference": "ai.sloper.cucina.ddm.asset.hostd-launchd",
+        "Context": "daemon"
+      },
+      {
+        "FileAssetReference": "ai.sloper.cucina.ddm.asset.host-setup-launchd",
+        "Context": "daemon"
+      }
+    ]
+  }
+}

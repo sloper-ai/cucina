@@ -1,0 +1,25 @@
+{{!-- SPDX-License-Identifier: FSL-1.1-ALv2 --}}
+### Overview
+
+| Licence | Crates |
+| --- | --- |
+{{#each overview}}
+| {{{name}}} (`{{{id}}}`) | {{count}} |
+{{/each}}
+
+### Licence texts (Rust crates)
+
+{{#each licenses}}
+#### {{{name}}} (`{{{id}}}`)
+
+Used by:
+
+{{#each used_by}}
+- `{{{crate.name}}} {{{crate.version}}}`{{#if crate.repository}} ({{{crate.repository}}}){{/if}}
+{{/each}}
+
+~~~~text
+{{{text}}}
+~~~~
+
+{{/each}}

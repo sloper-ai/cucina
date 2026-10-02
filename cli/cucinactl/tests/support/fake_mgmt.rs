@@ -169,6 +169,8 @@ pub struct MgmtState {
     pub pools: Mutex<Vec<pb::PoolSummary>>,
     pub workers: Mutex<Vec<pb::WorkerSummary>>,
     pub operations: Mutex<Vec<pb::OperationSummary>>,
+    /// Serialized ExecuteResponse per completed operation name (GetOperation).
+    pub execute_responses: Mutex<HashMap<String, Vec<u8>>>,
     pub keys: Mutex<Vec<pb::ServiceKeyInfo>>,
     pub revocations: Mutex<Vec<pb::Revocation>>,
     pub fail: Mutex<HashMap<String, (ErrorCode, String)>>,
@@ -192,6 +194,7 @@ impl FakeMgmt {
                 pools: Mutex::new(vec![pool()]),
                 workers: Mutex::new(vec![worker()]),
                 operations: Mutex::new(vec![operation()]),
+                execute_responses: Mutex::new(HashMap::new()),
                 keys: Mutex::new(vec![pb::ServiceKeyInfo {
                     key_id: "k1".into(),
                     account: "ci-bot".into(),
@@ -700,6 +703,14 @@ impl ManagementService for FakeMgmt {
         match ops.into_iter().find(|o| o.name == name) {
             Some(op) => Response::ok(pb::GetOperationResponse {
                 operation: op.into(),
+                execute_response: self
+                    .state
+                    .execute_responses
+                    .lock()
+                    .unwrap()
+                    .get(&name)
+                    .cloned()
+                    .unwrap_or_default(),
                 ..Default::default()
             }),
             None => Err(ConnectError::new(

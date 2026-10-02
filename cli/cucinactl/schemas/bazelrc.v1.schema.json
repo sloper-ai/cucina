@@ -15,12 +15,20 @@
     },
     "text": {
       "type": "string"
+    },
+    "notes": {
+      "description": "Actions the user must take besides pasting the text (also present as comments in it).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "required": [
     "schema",
     "kind",
-    "text"
+    "text",
+    "notes"
   ],
   "additionalProperties": false
 }

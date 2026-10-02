@@ -409,7 +409,8 @@ pub struct LoginArgs {
     /// Where to store the refresh token or key.
     #[arg(long, value_enum)]
     pub credential_store: Option<CredentialStore>,
-    /// Extra CA bundle (PEM) for a private CA.
+    /// Extra CA bundle (PEM) for a private CA, stored in the profile (default:
+    /// $CUCINA_CA_FILE; $SSL_CERT_FILE is trusted too).
     #[arg(long)]
     pub ca_file: Option<PathBuf>,
 }
@@ -503,7 +504,8 @@ pub struct BazelrcArgs {
     /// Disk cache size limit.
     #[arg(long, default_value = "50G")]
     pub disk_cache_max_size: String,
-    /// Client OS (decides the Windows test environment for cross configurations).
+    /// Client OS (default: this one): Windows clients get the Linux/macOS action environment
+    /// in cross configurations, others the @bazel_tools overlay note for Windows tests.
     #[arg(long, value_enum)]
     pub client_os: Option<crate::bazelrc::Os>,
     /// Use platforms from this package (output of --emit-build-file) instead of @cucina_platforms.

@@ -1,0 +1,106 @@
+{
+  "$comment": "Components that are bundled or redistributed (or installed into worker images) but are not Go modules or Rust crates. Edit here, then run tools/notices/generate.sh. 'text' names a file in texts/ (without .txt) that is reproduced in THIRD_PARTY_NOTICES.md.",
+  "schema": 1,
+  "components": [
+    {
+      "name": "Buildbarn bb-storage",
+      "version": "20260930T153215Z-086b011",
+      "license": "Apache-2.0",
+      "url": "https://github.com/buildbarn/bb-storage",
+      "use": "Cache and storage daemon: frontend, storage shards and the Mac host L2 cache. Upstream release binary, unmodified.",
+      "shipped": "The Helm chart references the upstream container image by digest (not rebuilt or redistributed by Cucina). The macOS host package contains the darwin/arm64 binary.",
+      "text": "Apache-2.0"
+    },
+    {
+      "name": "Buildbarn bb-remote-execution (bb_scheduler, bb_worker, bb_runner)",
+      "version": "20260930T173749Z-1a3be95",
+      "license": "Apache-2.0",
+      "url": "https://github.com/buildbarn/bb-remote-execution",
+      "use": "Scheduler, worker and runner. Upstream release binaries, unmodified.",
+      "shipped": "The scheduler runs from the upstream container image. bb_worker and bb_runner are installed in the worker images (Linux and Windows AMIs, macOS Tart image), which each operator builds and which are not published.",
+      "text": "Apache-2.0"
+    },
+    {
+      "name": "Tart (tart.app)",
+      "version": "2.40.1",
+      "license": "FSL-1.1-ALv2",
+      "url": "https://github.com/openai/tart",
+      "use": "macOS virtual machine runtime on the Mac hosts.",
+      "shipped": "The macOS host package contains the official tart.app exactly as released (never re-signed) together with this licence.",
+      "text": "FSL-1.1-ALv2-Tart"
+    },
+    {
+      "name": "Go toolchain and standard library",
+      "version": "1.27.1",
+      "license": "BSD-3-Clause",
+      "url": "https://go.dev",
+      "use": "The Go runtime and standard library are linked into every Go binary (controller, STS, worker agent, host agent).",
+      "shipped": "Controller and STS container images, the macOS host package, the worker images.",
+      "text": "BSD-3-Clause-Go"
+    },
+    {
+      "name": "musl libc",
+      "version": "1.2.6",
+      "license": "MIT",
+      "url": "https://musl.libc.org",
+      "use": "Statically linked into the Linux release binaries of cucinactl, built with the hermetic-llvm musl sysroot.",
+      "shipped": "cucinactl release binaries for Linux (x86_64, arm64).",
+      "text": "MIT-musl-1.2.6-COPYRIGHT"
+    },
+    {
+      "name": "hermetic-llvm",
+      "version": "0.8.24",
+      "license": "MIT",
+      "url": "https://github.com/hermeticbuild/hermetic-llvm",
+      "use": "Bazel module providing the C/C++ toolchain (LLVM 23.1.2, licensed Apache-2.0 WITH LLVM-exception; its runtime libraries fall under the LLVM exception) and the target sysroots. A build-time dependency; not redistributed.",
+      "shipped": "Not shipped.",
+      "text": "MIT-hermetic-llvm"
+    },
+    {
+      "name": "Abseil (abseil-cpp)",
+      "version": "20260817.0",
+      "license": "Apache-2.0",
+      "url": "https://github.com/abseil/abseil-cpp",
+      "use": "The build under test in the acceptance campaign. Fetched by Bazel at test time, unmodified.",
+      "shipped": "Not shipped.",
+      "text": "Apache-2.0"
+    },
+    {
+      "name": "distroless static (Debian 13) base image",
+      "version": "pinned by digest in the image definitions",
+      "license": "various (Debian packages)",
+      "url": "https://github.com/GoogleContainerTools/distroless",
+      "use": "Base layer of the controller and STS container images. The licence of each Debian package in the image is in /usr/share/doc/<package>/copyright inside the image.",
+      "shipped": "Controller and STS container images.",
+      "text": null
+    },
+    {
+      "name": "WinFsp",
+      "version": "2.1",
+      "license": "GPL-3.0-only WITH FLOSS exception",
+      "url": "https://github.com/winfsp/winfsp",
+      "use": "File system proxy behind Buildbarn's virtual build directory on Windows workers. Installed from the official installer into the Windows worker image. Cucina does not link against it and does not redistribute it; worker images are built per operator and must not be published.",
+      "shipped": "Not shipped; installed into operator-built Windows AMIs.",
+      "text": "GPL-3.0-with-FLOSS-exception-WinFsp"
+    },
+    {
+      "name": "shawl",
+      "version": "1.9.0",
+      "license": "MIT",
+      "url": "https://github.com/mtkennerly/shawl",
+      "use": "Windows service wrapper (it sends Ctrl-C on stop so bb_worker drains). Installed into the Windows worker image; not redistributed.",
+      "shipped": "Not shipped; installed into operator-built Windows AMIs.",
+      "text": "MIT-shawl"
+    }
+  ],
+  "image_contents": {
+    "$comment": "Informational: software the image builds install from its vendors. Images are built per operator and are not published, so these licences bind the operator, not this repository.",
+    "items": [
+      {"name": "Ubuntu 26.04 LTS packages (incl. FUSE, chrony, qemu-user)", "license": "various (GPL, LGPL, BSD, ...)", "note": "Linux worker images. See /usr/share/doc/<package>/copyright in the image."},
+      {"name": "Amazon SSM Agent", "license": "Apache-2.0", "note": "Linux and Windows worker images."},
+      {"name": "Windows Server 2025, Visual Studio 2026 Build Tools, Windows SDK, VC++ Redistributable", "license": "Microsoft licence terms (accepted by the operator)", "note": "Windows worker images and the Windows client image. Not redistributable."},
+      {"name": "Git for Windows", "license": "GPL-2.0-only and others", "note": "Windows worker and client images."},
+      {"name": "macOS and Xcode", "license": "Apple licence terms", "note": "macOS worker images. Xcode must not be redistributed publicly: the macOS images live in a private registry package."}
+    ]
+  }
+}

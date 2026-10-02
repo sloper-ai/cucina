@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//! `cucinactl tui` end to end in a pseudo-terminal against the in-process fake
+//! management server (R-CLI-4, UC13; the scripted TUI session of T20): the live
+//! overview appears, views switch, a drain is opened and cancelled without reaching
+//! the API, and `q` restores the terminal and exits 0. Unix: rexpect; Windows:
+//! expectrl (ConPTY).
+//!
+//! Expectations are single words: the TUI redraws only changed cells, so a phrase
+//! may reach the PTY as pieces separated by cursor movements.
+
+mod support;
+
+use cucinactl::config::AuthMethod;
+use support::fake_mgmt::FakeMgmt;
+use support::{TempDir, fake_jwt, now, write_profile, write_token};
+
+/// Starts the fake server and a logged-in profile; returns (runtime, server, config dir).
+fn fixture() -> (tokio::runtime::Runtime, FakeMgmt, TempDir) {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let jwt = fake_jwt(&serde_json::json!({"sub": "test:admin", "exp": now() + 900}));
+    let mgmt = FakeMgmt::new(&jwt);
+    let url = rt.block_on(mgmt.serve());
+    let dir = TempDir::new();
+    write_profile(
+        dir.path(),
+        "t",
+        &support::profile(
+            "https://cucina.test.invalid",
+            &url,
+            "grpcs://cucina.test.invalid",
+            AuthMethod::ServiceKey,
+        ),
+    );
+    write_token(dir.path(), "t", &jwt, now() + 900, AuthMethod::ServiceKey);
+    (rt, mgmt, dir)
+}
+
+/// The fake saw no drain and the worker is not drained.
+fn assert_not_drained(mgmt: &FakeMgmt) {
+    let calls = mgmt.state.calls.lock().unwrap().clone();
+    assert!(calls.iter().any(|c| c == "watch_overview"), "{calls:?}");
+    assert!(calls.iter().any(|c| c == "get_pool"), "{calls:?}");
+    assert!(!calls.iter().any(|c| c == "drain_worker"), "{calls:?}");
+    assert!(
+        mgmt.state
+            .workers
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|w| !w.drained)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tui_session_in_a_pty() {
+    use rexpect::session::{Options, PtySession, spawn_with_options};
+
+    // Failures show the last 2 KiB of the screen stream, not all of it.
+    fn expect(p: &mut PtySession, what: &str) {
+        if let Err(e) = p.exp_string(what) {
+            let text = format!("{e:?}");
+            let tail: String = text
+                .chars()
+                .rev()
+                .take(2048)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            panic!("expected {what:?} on screen; output ended with: {tail}");
+        }
+    }
+    // `send` goes through a LineWriter: flush so single keys arrive.
+    fn key(p: &mut PtySession, k: &str) {
+        p.send(k).expect("send");
+        p.flush().expect("flush");
+    }
+
+    let (_rt, mgmt, dir) = fixture();
+    // A new PTY has no size: set one before the TUI starts.
+    let mut cmd = support::command_at(std::path::Path::new("/bin/sh"), dir.path());
+    cmd.arg("-c")
+        .arg("stty cols 100 rows 30 && exec \"$0\" tui")
+        .arg(support::bin())
+        .env("TERM", "xterm-256color");
+    let opts = Options::new().timeout_ms(Some(30_000));
+    let mut p = spawn_with_options(cmd, opts).expect("spawn cucinactl tui");
+
+    expect(&mut p, "Overview");
+    expect(&mut p, "linux-x86-64");
+    key(&mut p, "2");
+    expect(&mut p, "i-0123456789abcdef0");
+    key(&mut p, "\r");
+    key(&mut p, "d");
+    expect(&mut p, "Confirm");
+    key(&mut p, "n");
+    expect(&mut p, "cancelled:");
+    key(&mut p, "q");
+    p.exp_eof().expect("exits");
+    // nix's WaitStatus is not re-exported by rexpect: `Exited(Pid(n), 0)`.
+    let status = format!("{:?}", p.process().wait().expect("wait"));
+    assert!(
+        status.starts_with("Exited(") && status.ends_with(", 0)"),
+        "{status}"
+    );
+    assert_not_drained(&mgmt);
+}
+
+#[cfg(windows)]
+#[test]
+fn tui_session_in_a_pty() {
+    use expectrl::{Expect, Session};
+
+    let (_rt, mgmt, dir) = fixture();
+    let mut cmd = support::cmd(dir.path());
+    cmd.arg("tui");
+    let mut p = Session::spawn(cmd).expect("spawn cucinactl tui");
+    // ConPTY without a parent console starts tiny: give the TUI room.
+    p.get_process_mut().resize(100, 30).expect("resize");
+    p.set_expect_timeout(Some(std::time::Duration::from_secs(30)));
+
+    p.expect("Overview").expect("tab bar");
+    p.expect("linux-x86-64").expect("pool on the overview");
+    p.send("2").unwrap();
+    p.expect("i-0123456789abcdef0").expect("the pool's worker");
+    p.send("\r").unwrap();
+    p.send("d").unwrap();
+    p.expect("Confirm").expect("the drain asks first");
+    p.send("n").unwrap();
+    p.expect("cancelled:").expect("status line");
+    p.send("q").unwrap();
+    // ConPTY keeps its output pipe open after the child exits: wait for the process.
+    assert_eq!(p.get_process().wait(Some(30_000)).expect("exits"), 0);
+    assert_not_drained(&mgmt);
+}

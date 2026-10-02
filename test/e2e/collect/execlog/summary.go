@@ -132,50 +132,94 @@ func Classify(mnemonic string) ActionClass {
 	return ClassOther
 }
 
-// Routing is the NFR-X1 evidence for one configuration: how many remotely
-// executed actions of each class ran on a runner whose exec properties match
-// the expected set exactly (Buildbarn matches the whole property set).
+// Routing is the NFR-X1 evidence for one configuration: how many compile/link
+// and test spawns ran on the runner whose REAPI platform properties equal the
+// expected set exactly. Buildbarn routes an action to the queue whose property
+// set equals the action's (the whole set), so a spawn's platform properties
+// are the exec properties of the queue and worker that executed it; a cache
+// hit's properties are part of its action digest, so it was executed there
+// earlier. Spawns that ran on the client are misrouted ("local:<runner>").
 type Routing struct {
-	CompileLinkTotal   int            `json:"compileLinkTotal"`
-	CompileLinkOnPool  int            `json:"compileLinkOnPool"`
+	CompileLinkTotal  int `json:"compileLinkTotal"`
+	CompileLinkOnPool int `json:"compileLinkOnPool"`
+	// CompileLinkCached and TestCached count the cache hits among the totals.
+	CompileLinkCached  int            `json:"compileLinkCached"`
 	TestTotal          int            `json:"testTotal"`
 	TestOnRunner       int            `json:"testOnRunner"`
-	Misrouted          map[string]int `json:"misrouted,omitempty"` // platform key -> count
+	TestCached         int            `json:"testCached"`
+	Misrouted          map[string]int `json:"misrouted,omitempty"` // class + property key (or local:<runner>) -> count
 	CompileLinkPercent float64        `json:"compileLinkPercent"`
 	TestPercent        float64        `json:"testPercent"`
 }
 
-// RouteCheck evaluates routing of remote executions against the expected
-// compile-pool and test-runner property sets.
+// RouteCheck evaluates where the compile/link and test spawns ran against the
+// expected compile-pool and test-runner property sets.
 func (l *Log) RouteCheck(compile, test map[string]string) Routing {
-	r := Routing{Misrouted: map[string]int{}}
+	r := Routing{}
 	for _, sp := range l.Spawns {
-		if !sp.Remote() {
+		class := Classify(sp.Mnemonic)
+		if class == ClassOther {
 			continue
 		}
-		switch Classify(sp.Mnemonic) {
-		case ClassCompileLink:
-			r.CompileLinkTotal++
-			if equalProps(sp.Platform, compile) {
-				r.CompileLinkOnPool++
-			} else {
-				r.Misrouted[PropsKey(sp.Platform)]++
-			}
-		case ClassTest:
+		want := compile
+		if class == ClassTest {
+			want = test
+		}
+		where, ok := PropsKey(sp.Platform), false
+		switch {
+		case sp.CacheHit, sp.Runner == "remote":
+			ok = equalProps(sp.Platform, want)
+		default:
+			where = "local:" + sp.Runner
+		}
+		if class == ClassTest {
 			r.TestTotal++
-			if equalProps(sp.Platform, test) {
-				r.TestOnRunner++
-			} else {
-				r.Misrouted[PropsKey(sp.Platform)]++
+			r.TestOnRunner += b2i(ok)
+			r.TestCached += b2i(sp.CacheHit)
+		} else {
+			r.CompileLinkTotal++
+			r.CompileLinkOnPool += b2i(ok)
+			r.CompileLinkCached += b2i(sp.CacheHit)
+		}
+		if !ok {
+			if r.Misrouted == nil {
+				r.Misrouted = map[string]int{}
 			}
+			r.Misrouted[string(class)+" on "+where]++
 		}
 	}
+	r.percentages()
+	return r
+}
+
+// Merge adds another invocation's counts (a configuration that builds and
+// then tests in two invocations).
+func (r *Routing) Merge(o Routing) {
+	r.CompileLinkTotal += o.CompileLinkTotal
+	r.CompileLinkOnPool += o.CompileLinkOnPool
+	r.CompileLinkCached += o.CompileLinkCached
+	r.TestTotal += o.TestTotal
+	r.TestOnRunner += o.TestOnRunner
+	r.TestCached += o.TestCached
+	for k, v := range o.Misrouted {
+		if r.Misrouted == nil {
+			r.Misrouted = map[string]int{}
+		}
+		r.Misrouted[k] += v
+	}
+	r.percentages()
+}
+
+func (r *Routing) percentages() {
 	r.CompileLinkPercent = pct(r.CompileLinkOnPool, r.CompileLinkTotal)
 	r.TestPercent = pct(r.TestOnRunner, r.TestTotal)
-	if len(r.Misrouted) == 0 {
-		r.Misrouted = nil
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
 	}
-	return r
+	return 0
 }
 
 func pct(n, d int) float64 {

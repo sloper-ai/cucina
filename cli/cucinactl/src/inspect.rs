@@ -11,7 +11,10 @@
 //!   `…/<instance>/blobs/sha256/action/<hash>-<size>/` (cached result) or
 //!   `…/blobs/sha256/historical_execute_response/<hash>-<size>/` (uncached, e.g.
 //!   failed, result stored by `bb_worker` in the CAS);
-//! * anything else is an operation name, resolved through the management API.
+//! * anything else is an operation name, resolved through the management API; a
+//!   completed operation also carries the scheduler's `ExecuteResponse` (exit code,
+//!   stdout/stderr, timing of a just-failed action the action cache never stores),
+//!   otherwise the result comes from the action cache.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -128,7 +131,8 @@ pub struct Timing {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResultInfo {
-    /// `action-cache` or `historical-execute-response`.
+    /// `action-cache`, `execute-response` (the operation's, from the scheduler) or
+    /// `historical-execute-response`.
     pub source: String,
     pub exit_code: i32,
     pub worker: String,
@@ -306,23 +310,37 @@ pub async fn inspect(session: &Session, input: &str, opts: &InspectOptions) -> R
     let (subject, link_instance) = parse_subject(input);
     let mut instance = link_instance.unwrap_or_else(|| opts.instance.clone());
     let mut operation = None;
-    let mut historical: Option<re::ExecuteResponse> = None;
+    // A completed execution's response and where it came from.
+    let mut completed: Option<(re::ExecuteResponse, &'static str)> = None;
 
     let action_digest = match &subject {
         Subject::Action(d) => d.clone(),
         Subject::Operation(name) => {
-            let op = session
+            let response = session
                 .management
                 .get_operation(cucina_api::proto::cucina::v1::GetOperationRequest {
                     name: name.clone(),
                     ..Default::default()
                 })
                 .await
-                .with_context(|| format!("looking up operation {name:?}"))?
+                .with_context(|| format!("looking up operation {name:?}"))?;
+            let op = response
                 .operation
                 .as_option()
                 .cloned()
                 .ok_or_else(|| CliError::not_found(format!("operation {name:?} not found")))?;
+            if !response.execute_response.is_empty() {
+                let resp = <re::ExecuteResponse as buffa::Message>::decode_from_slice(
+                    &response.execute_response,
+                )
+                .with_context(|| format!("decoding the ExecuteResponse of operation {name:?}"))?;
+                let source = if resp.cached_result {
+                    "action-cache"
+                } else {
+                    "execute-response"
+                };
+                completed = Some((resp, source));
+            }
             let digest = parse_digest(&op.action_digest).ok_or_else(|| {
                 anyhow::anyhow!(
                     "operation {name:?} has an invalid action digest {:?}",
@@ -354,7 +372,11 @@ pub async fn inspect(session: &Session, input: &str, opts: &InspectOptions) -> R
         Subject::Historical(d) => {
             let reapi = session.reapi(&instance)?;
             let h: HistoricalExecuteResponse = reapi.read_proto(d).await?;
-            historical = h.execute_response.as_option().cloned();
+            completed = h
+                .execute_response
+                .as_option()
+                .cloned()
+                .map(|r| (r, "historical-execute-response"));
             h.action_digest
                 .as_option()
                 .cloned()
@@ -382,13 +404,13 @@ pub async fn inspect(session: &Session, input: &str, opts: &InspectOptions) -> R
     };
 
     let mut message = None;
-    let result = if let Some(resp) = &historical {
+    let result = if let Some((resp, source)) = &completed {
         message = (!resp.message.is_empty()).then(|| resp.message.clone());
         if let Some(st) = resp.status.as_option().filter(|s| s.code != 0) {
             message = Some(format!("status {}: {}", st.code, st.message));
         }
         match resp.result.as_option() {
-            Some(r) => Some(result_info(&reapi, r, "historical-execute-response", opts).await?),
+            Some(r) => Some(result_info(&reapi, r, source, opts).await?),
             None => None,
         }
     } else {
@@ -396,7 +418,8 @@ pub async fn inspect(session: &Session, input: &str, opts: &InspectOptions) -> R
             Some(r) => Some(result_info(&reapi, &r, "action-cache", opts).await?),
             None => {
                 message = Some(
-                    "no cached result: the action has not completed, failed (see the \
+                    "no cached result: the action has not completed, failed (inspect its \
+                     operation while the scheduler remembers it, or the \
                      historical_execute_response link Buildbarn printed), or was evicted"
                         .into(),
                 );

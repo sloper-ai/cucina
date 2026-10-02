@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# The manual checklists as data for //tools/ci:manual_tests_check.
+
+filegroup(
+    name = "files",
+    srcs = glob(["*.md"]),
+    visibility = ["//tools/ci:__pkg__"],
+)

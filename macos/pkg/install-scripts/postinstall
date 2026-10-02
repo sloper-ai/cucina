@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# postinstall — runs as root after the payload is laid down (R-MAC-8). All logic lives in the installed helper
+# /usr/local/cucina/bin/cucina-host-setup so administrators can re-run it ("cucina-host-setup install") and so the
+# exact same code path serves MDM installs, manual installs and repairs. Idempotent; no network.
+set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+TARGET=${3:-/}
+SETUP="${TARGET%/}/usr/local/cucina/bin/cucina-host-setup"
+
+if [ ! -x "$SETUP" ]; then
+	echo "cucina postinstall: error: $SETUP missing from the payload" >&2
+	exit 1
+fi
+exec "$SETUP" install --from-installer

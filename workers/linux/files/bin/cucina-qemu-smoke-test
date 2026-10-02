@@ -1,0 +1,32 @@
+#!/bin/bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# Runs the foreign-architecture hello binaries in DIR through qemu-user binfmt_misc (R-POOL-4, R-XPLAT-3):
+# hello-<arch>-static and hello-<arch>-dynamic for arch in riscv64 s390x armhf. Each must exit 0 and print
+# "hello from <arch>". The dynamic ones prove the cross glibc runtimes are found without QEMU_LD_PREFIX.
+#   cucina-qemu-smoke-test DIR
+set -euo pipefail
+
+dir=${1:?usage: cucina-qemu-smoke-test DIR}
+fail=0
+for arch in riscv64 s390x armhf; do
+  for kind in static dynamic; do
+    bin="$dir/hello-$arch-$kind"
+    if [[ ! -e "$bin" ]]; then
+      echo "MISSING $arch $kind"
+      fail=1
+      continue
+    fi
+    chmod +x "$bin"
+    if out=$(env -u QEMU_LD_PREFIX "$bin" 2>&1) && [[ "$out" == *"hello from $arch"* ]]; then
+      echo "PASS $arch $kind: $out"
+    else
+      echo "FAIL $arch $kind: $out"
+      fail=1
+    fi
+  done
+done
+for f in /proc/sys/fs/binfmt_misc/qemu-riscv64 /proc/sys/fs/binfmt_misc/qemu-s390x /proc/sys/fs/binfmt_misc/qemu-arm; do
+  if [[ -e "$f" ]]; then echo "binfmt ${f##*/}: $(grep -E '^(interpreter|flags)' "$f" | tr '\n' ' ')"; fi
+done
+exit "$fail"

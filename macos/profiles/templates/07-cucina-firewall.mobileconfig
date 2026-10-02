@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Cucina profile 07: application firewall on, stealth mode on. Never block all incoming connections: the VMs dial hostd's relays (TCP 8981/8983) over the vmnet bridge. hostd is signed with the trusted private certificate (AllowSignedApp) and listed explicitly by its code-signing identifier; verify VM-to-host connectivity on the first host (MT-001). -->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>EnableFirewall</key>
+			<true/>
+			<key>BlockAllIncoming</key>
+			<false/>
+			<!-- @if CUCINA_FIREWALL_STEALTH: <key>EnableStealthMode</key><${CUCINA_FIREWALL_STEALTH}/> -->
+			<key>AllowSigned</key>
+			<true/>
+			<key>AllowSignedApp</key>
+			<true/>
+			<key>Applications</key>
+			<array>
+				<dict>
+					<key>BundleID</key>
+					<string>ai.sloper.cucina.hostd</string>
+					<key>Allowed</key>
+					<true/>
+				</dict>
+			</array>
+			<key>PayloadDisplayName</key>
+			<string>Cucina application firewall</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.firewall.alf</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.firewall</string>
+			<key>PayloadUUID</key>
+			<string>CBE0570B-CD03-4785-95FB-83796EF9D399</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Cucina: application firewall and stealth mode, with incoming connections allowed for cucina-hostd.</string>
+	<key>PayloadDisplayName</key>
+	<string>Cucina 07 firewall</string>
+	<key>PayloadIdentifier</key>
+	<string>ai.sloper.cucina.profile.firewall</string>
+	<key>PayloadOrganization</key>
+	<string>${CUCINA_ORGANIZATION}</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>6DC7B1C5-4381-404E-A0E0-45DFA50B0D89</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

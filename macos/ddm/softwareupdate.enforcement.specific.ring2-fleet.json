@@ -1,0 +1,10 @@
+{
+  "Type": "com.apple.configuration.softwareupdate.enforcement.specific",
+  "Identifier": "ai.sloper.cucina.ddm.softwareupdate.enforcement.ring2-fleet",
+  "ServerToken": "cucina-su-enforce-ring2-27.1-v1",
+  "Payload": {
+    "TargetOSVersion": "27.1",
+    "TargetLocalDateTime": "2026-11-17T02:00:00",
+    "DetailsURL": "https://github.com/sloper-ai/cucina/blob/main/docs/macos/mac-mini-setup.md#macos-updates"
+  }
+}

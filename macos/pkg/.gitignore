@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Local package builds (make -C macos/pkg ...). Signed artifacts are published, never committed.
+/build/

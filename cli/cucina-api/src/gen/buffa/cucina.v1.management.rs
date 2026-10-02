@@ -10971,6 +10971,19 @@ pub struct GetOperationResponse {
         OperationSummary,
         ::buffa::Inline<OperationSummary>,
     >,
+    /// Serialized build.bazel.remote.execution.v2.ExecuteResponse of a completed operation (empty while
+    /// queued or executing, and once the scheduler has forgotten the operation). It carries the exit
+    /// code, stdout/stderr digests and timing of a just-failed action, which the action cache never
+    /// stores (`cucinactl action inspect <operation>`).
+    ///
+    /// Field 2: `execute_response`
+    #[serde(
+        rename = "executeResponse",
+        alias = "execute_response",
+        with = "::buffa::json_helpers::bytes",
+        skip_serializing_if = "::buffa::json_helpers::skip_if::is_empty_bytes"
+    )]
+    pub execute_response: ::buffa::alloc::vec::Vec<u8>,
     #[serde(skip)]
     #[doc(hidden)]
     pub __buffa_unknown_fields: ::buffa::UnknownFields,
@@ -10979,6 +10992,7 @@ impl ::core::fmt::Debug for GetOperationResponse {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         f.debug_struct("GetOperationResponse")
             .field("operation", &self.operation)
+            .field("execute_response", &self.execute_response)
             .finish()
     }
 }
@@ -11017,6 +11031,11 @@ impl ::buffa::Message for GetOperationResponse {
                 += 1u64 + ::buffa::encoding::varint_len(inner_size as u64) as u64
                     + inner_size as u64;
         }
+        if !self.execute_response.is_empty() {
+            size
+                += 1u64
+                    + ::buffa::types::bytes_encoded_len(&self.execute_response) as u64;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u64;
         ::buffa::saturate_size(size)
     }
@@ -11034,6 +11053,9 @@ impl ::buffa::Message for GetOperationResponse {
                 buf,
             );
             self.operation.write_to(__cache, buf);
+        }
+        if !self.execute_response.is_empty() {
+            ::buffa::types::put_shared_bytes_field(2u32, &self.execute_response, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -11059,6 +11081,13 @@ impl ::buffa::Message for GetOperationResponse {
                     ctx,
                 )?;
             }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                ::buffa::types::merge_bytes(&mut self.execute_response, buf)?;
+            }
             _ => {
                 self.__buffa_unknown_fields
                     .push(::buffa::encoding::decode_unknown_field(tag, buf, ctx)?);
@@ -11068,6 +11097,7 @@ impl ::buffa::Message for GetOperationResponse {
     }
     fn clear(&mut self) {
         self.operation = ::buffa::MessageField::none();
+        self.execute_response.clear();
         self.__buffa_unknown_fields.clear();
     }
 }

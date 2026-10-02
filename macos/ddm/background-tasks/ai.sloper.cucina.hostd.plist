@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- DDM background-tasks variant (macOS 15+, supervised): the hostd LaunchDaemon delivered as a launchd configuration asset of services.background-tasks.cucina-hostd.json. Same job as the package's plist, but the program lives in the tamper-resistant directory the declaration's executable asset expands into. Deploy EITHER the package OR this variant, never both (same label). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.sloper.cucina.hostd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/ai.sloper.cucina.hostd/bin/cucina-hostd</string>
+		<string>run</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>120</integer>
+	<key>ProcessType</key>
+	<string>Standard</string>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
+	</dict>
+	<key>HardResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
+	</dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/ai.sloper.cucina.hostd/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>StandardOutPath</key>
+	<string>/var/log/cucina-hostd.stderr.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/cucina-hostd.stderr.log</string>
+</dict>
+</plist>

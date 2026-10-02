@@ -284,7 +284,7 @@ func ensureCert(ctx context.Context, c client.Client, ns string, iss *Issuer, sp
 
 func issueSpec(iss *Issuer, spec CertSpec, pub crypto.PublicKey) (*Issued, error) {
 	if spec.role() == RoleController {
-		return iss.IssueController(pub)
+		return iss.IssueControllerTTL(pub, spec.Lifetime.Duration)
 	}
 	ips := make([]net.IP, 0, len(spec.IPAddresses))
 	for _, s := range spec.IPAddresses {

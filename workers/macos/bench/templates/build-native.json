@@ -1,0 +1,9 @@
+{
+  "native": {
+    "buildDirectoryPath": "@BUILD@",
+    "cacheDirectoryPath": "@NATIVE_CACHE@",
+    "maximumCacheFileCount": "262144",
+    "maximumCacheSizeBytes": "17179869184",
+    "cacheReplacementPolicy": "LEAST_RECENTLY_USED"
+  }
+}

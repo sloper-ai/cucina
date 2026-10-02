@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina host package (R-MAC-8/-9). scripts/build-pkg.sh is the build entry point: it takes every input as a file
+# (cucina-hostd, bb_storage darwin/arm64, the Tart release tarball, LICENSE.md, THIRD_PARTY_NOTICES.md) and writes an
+# UNSIGNED distribution package, so it can run as a genrule on macOS workers (R-BUILD-1 "macOS pkg"). The genrule and
+# the pinned http_file inputs (deps.MODULE.bazel) are wired by the bazel agent; see docs/mdm/pkg.md#bazel.
+# Signing needs keychain access and stays local-only (`make -C macos/pkg sign`, scripts/sign.sh).
+load("//bazel:tiers.bzl", "cucina_sh_test")
+
+_SOURCES = glob([
+    "install-scripts/*",
+    "payload/*",
+    "resources/*",
+    "scripts/*.sh",
+]) + ["pins.env"]
+
+exports_files(
+    _SOURCES + ["deps.MODULE.bazel"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "build_inputs",
+    srcs = _SOURCES,
+    visibility = ["//visibility:public"],
+)
+
+# R-MAC-8: the manifest generator emits the ManifestURL document for both InstallEnterpriseApplication and the
+# com.apple.configuration.package declaration. Needs macOS's pkgbuild/productbuild/plutil; pkgbuild writes through
+# system helpers that the darwin sandbox denies ("You don't have permission to save the file"), hence no-sandbox.
+cucina_sh_test(
+    name = "manifest_test",
+    srcs = ["test/manifest_test.sh"],
+    data = [":build_inputs"],
+    tags = ["no-sandbox"],
+    target_compatible_with = ["@platforms//os:macos"],
+    tier = "integration",
+)
+
+# R-MAC-8/R-MAC-2: the postinstall helper plans every host preparation step and never echoes the generated password.
+cucina_sh_test(
+    name = "setup_dryrun_test",
+    srcs = ["test/setup_dryrun_test.sh"],
+    data = [":build_inputs"],
+    target_compatible_with = ["@platforms//os:macos"],
+    tier = "integration",
+)

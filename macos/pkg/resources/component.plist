@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- pkgbuild --component-plist for the host component. tart.app is pinned and owned by the package:
+     not relocatable (an admin-moved copy must not be "upgraded" in place), not version-checked (the package is
+     authoritative, so a rollback to an older Cucina release also rolls Tart back), replaced as a whole. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>RootRelativeBundlePath</key>
+		<string>usr/local/cucina/tart.app</string>
+		<key>BundleHasStrictIdentifier</key>
+		<true/>
+		<key>BundleIsRelocatable</key>
+		<false/>
+		<key>BundleIsVersionChecked</key>
+		<false/>
+		<key>BundleOverwriteAction</key>
+		<string>upgrade</string>
+	</dict>
+</array>
+</plist>

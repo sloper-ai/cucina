@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+[Unit]
+Description=Cucina dead-man switch check (R-POOL-7)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cucina/bin/cucina-deadman

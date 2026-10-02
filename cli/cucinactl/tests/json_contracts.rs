@@ -325,6 +325,49 @@ async fn every_json_output_matches_its_schema() {
         "blobs are read as compressed-blobs/zstd when the server advertises ZSTD"
     );
 
+    // `action inspect <operation>`: a just-failed operation's ExecuteResponse (which the
+    // action cache never stores) is used; without one the action cache answers.
+    {
+        let mut failed = support::fake_mgmt::operation();
+        failed.name = "op-failed".into();
+        failed.action_digest = digest.clone();
+        failed.stage = "completed".into();
+        let mut cached = failed.clone();
+        cached.name = "op-cached".into();
+        let mut ops = mgmt.state.operations.lock().unwrap();
+        ops.push(failed);
+        ops.push(cached);
+    }
+    let stderr = reapi.put(b"error: the build broke\n");
+    mgmt.state.execute_responses.lock().unwrap().insert(
+        "op-failed".into(),
+        buffa::Message::encode_to_vec(&re::ExecuteResponse {
+            result: re::ActionResult {
+                exit_code: 2,
+                stderr_digest: stderr.into(),
+                ..Default::default()
+            }
+            .into(),
+            message: "exit status 2".into(),
+            ..Default::default()
+        }),
+    );
+    for (op, source, exit_code) in [
+        ("op-failed", "execute-response", 2),
+        ("op-cached", "action-cache", 1),
+    ] {
+        let dir_path = dir.path().to_path_buf();
+        let docs = tokio::task::spawn_blocking(move || {
+            run_json(&dir_path, &["action", "inspect", op])
+        })
+        .await
+        .unwrap();
+        schema::assert_valid("action.v1", &docs[0]);
+        assert_eq!(docs[0]["operation"]["name"], op);
+        assert_eq!(docs[0]["result"]["source"], source, "{op}");
+        assert_eq!(docs[0]["result"]["exit_code"], exit_code, "{op}");
+    }
+
     // bazelrc needs a TLS client endpoint (grpcs://).
     let mut tls_profile = p.clone();
     tls_profile.remote_executor = "grpcs://cucina.test.invalid:443".into();

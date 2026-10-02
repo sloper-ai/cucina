@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Cucina profile 04: Energy Saver for an always-on desktop Mac (UC21): never sleep, wake for network access, start up automatically after a power failure. The package's postinstall also runs pmset -a sleep 0 womp 1 autorestart 1 and systemsetup -setrestartfreeze on, which no profile can set. -->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>SleepDisabled</key>
+			<true/>
+			<key>com.apple.EnergySaver.desktop.ACPower</key>
+			<dict>
+				<key>Automatic Restart On Power Loss</key>
+				<integer>1</integer>
+				<key>Disk Sleep Timer</key>
+				<integer>0</integer>
+				<key>System Sleep Timer</key>
+				<integer>0</integer>
+				<key>Wake on LAN</key>
+				<integer>1</integer>
+			</dict>
+			<key>PayloadDisplayName</key>
+			<string>Cucina energy saver</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.energy.mcx</string>
+			<key>PayloadType</key>
+			<string>com.apple.MCX</string>
+			<key>PayloadUUID</key>
+			<string>4DABCBB5-CA53-4BE3-B223-281A3F80A570</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Cucina: the host never sleeps, wakes for network access and restarts after a power loss.</string>
+	<key>PayloadDisplayName</key>
+	<string>Cucina 04 energy</string>
+	<key>PayloadIdentifier</key>
+	<string>ai.sloper.cucina.profile.energy</string>
+	<key>PayloadOrganization</key>
+	<string>${CUCINA_ORGANIZATION}</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>3F4FEEA0-68FE-46A9-B6E4-EEFCB5EB4BC1</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

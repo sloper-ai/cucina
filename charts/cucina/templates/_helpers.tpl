@@ -265,6 +265,25 @@ capabilities:
 {{- if not (has .Values.exposure.client.type (list "Ingress" "Gateway")) -}}true{{- end -}}
 {{- end -}}
 
+{{/* Targets of the in-cluster canaries (`helm test`, the controller's 5-minute loop):
+     the in-cluster Services, unless the public certificate cannot carry their names
+     (cert-manager without includeServiceNames, e.g. ACME); then the public names, which
+     Pods may not resolve or reach (hairpin). The canary rebases the STS URLs that
+     discovery advertises onto `sts`. Returns YAML {inCluster, endpoint, sts}. */}}
+{{- define "cucina.canaryTargets" -}}
+{{- $ports := include "cucina.ports" . | fromYaml -}}
+{{- if or (ne .Values.tls.public.source "certManager") .Values.tls.public.certManager.includeServiceNames -}}
+{{- $scheme := ternary "grpcs" "grpc" (eq (include "cucina.clientTLSAtFrontend" .) "true") -}}
+inCluster: true
+endpoint: {{ printf "%s://%s:%d" $scheme (include "cucina.fqdn" (list . (include "cucina.frontend.name" .))) (int $ports.frontendClient) | quote }}
+sts: {{ printf "https://%s:%d" (include "cucina.fqdn" (list . (include "cucina.sts.name" .))) (int $ports.controllerSTS) | quote }}
+{{- else -}}
+inCluster: false
+endpoint: {{ printf "grpcs://%s:%d" (include "cucina.clientHost" .) (int .Values.endpoints.client.port) | quote }}
+sts: {{ include "cucina.stsUrl" . | quote }}
+{{- end -}}
+{{- end -}}
+
 {{/* --- Fixed container ports ------------------------------------------------- */}}
 {{- define "cucina.ports" -}}
 frontendClient: 8980

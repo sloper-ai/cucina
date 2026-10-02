@@ -30,14 +30,14 @@ import (
 func TestHostFleetConformance(t *testing.T) {
 	porttest.RunHostFleet(t, func(t *testing.T) porttest.HostFleetHarness {
 		n := hostlinktest.NewNet()
-		ctrl := hostlinktest.NewController(t, n)
-		ctrl.Enroll.Approve(serial)
+		ctrl := hostlinktest.NewController(t, n, nil)
+		ctrl.Approve(t, serial)
 		ft := faketart.New()
 		ft.Registry[image] = faketart.Image{Ref: image, SizeGB: 70, Private: true}
 		cfg := config.Default()
 		cfg.ControllerURL = "https://" + hostlinktest.EnrollAddr
 		cfg.CACertificates = ctrl.CAPool()
-		cfg.SiteEnrollmentToken = hostlinktest.Token
+		cfg.SiteEnrollmentToken = ctrl.Token
 		cfg.MetricsListen = ""
 		dial := grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) { return n.Dial(ctx, addr) })
 		a, err := hostd.New(hostd.Options{

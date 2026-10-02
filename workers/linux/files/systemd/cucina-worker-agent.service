@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Long-running part of the worker agent (spot-interruption SIGTERM, last-activity/last-contact marks).
+# Present in every image; runs only once the agent binary is part of the image.
+[Unit]
+Description=Cucina worker agent supervisor
+Wants=network-online.target
+After=network-online.target bb-worker.service
+ConditionPathExists=/opt/cucina/bin/cucina-worker-agent
+
+[Service]
+Type=exec
+ExecStart=/opt/cucina/bin/cucina-worker-agent supervise
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+{
+  "clientGrpcServers": [
+    { "listenAddresses": ["@CLIENT_LISTEN@"], "authenticationPolicy": { "allow": {} }, "maximumReceivedMessageSizeBytes": "16777216" }
+  ],
+  "workerGrpcServers": [
+    { "listenAddresses": ["@WORKER_LISTEN@"], "authenticationPolicy": { "allow": {} }, "maximumReceivedMessageSizeBytes": "16777216" }
+  ],
+  "buildQueueStateGrpcServers": [
+    { "listenAddresses": ["@BQS_LISTEN@"], "authenticationPolicy": { "allow": {} } }
+  ],
+  "contentAddressableStorage": { "grpc": { "client": { "address": "@STORAGE@" } } },
+  "maximumMessageSizeBytes": "16777216",
+  "executeAuthorizer": { "allow": {} },
+  "modifyDrainsAuthorizer": { "allow": {} },
+  "killOperationsAuthorizer": { "allow": {} },
+  "synchronizeAuthorizer": { "allow": {} },
+  "platformQueueWithNoWorkersTimeout": "900s",
+  "actionRouter": {
+    "simple": {
+      "platformKeyExtractor": { "action": {} },
+      "invocationKeyExtractors": [ { "correlatedInvocationsId": {} }, { "toolInvocationId": {} } ],
+      "initialSizeClassAnalyzer": { "defaultExecutionTimeout": "1800s", "maximumExecutionTimeout": "3600s" }
+    }
+  },
+  "predeclaredPlatformQueues": [
+    { "instanceNamePrefix": "", "platform": { "properties": [ { "name": "ISA", "value": "arm-a64" }, { "name": "OSFamily", "value": "macos" } ] }, "sizeClasses": [1] },
+    { "instanceNamePrefix": "", "platform": { "properties": [ { "name": "ISA", "value": "arm-a64" }, { "name": "OSFamily", "value": "macos" }, { "name": "xcode-version", "value": "@XCODE@" } ] }, "sizeClasses": [1] }
+  ]
+}

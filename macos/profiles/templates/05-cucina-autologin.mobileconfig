@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Cucina profile 05 (ALTERNATIVE, not the default): MDM-driven auto-login (com.apple.loginwindow AutologinUsername/AutologinPassword, macOS 14+, MDM-only). The account must already exist with exactly this password, so this fits MDMs that create local accounts. Default path (ADR 0751): the package creates the cucina user with an on-device random password and enables auto-login itself; then do NOT deploy this profile. The rendered file contains a password: keep it out of the repository. -->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>AutologinUsername</key>
+			<string>${CUCINA_AUTOLOGIN_USER}</string>
+			<key>AutologinPassword</key>
+			<string>${CUCINA_AUTOLOGIN_PASSWORD}</string>
+			<key>PayloadDisplayName</key>
+			<string>Cucina auto-login</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.autologin.loginwindow</string>
+			<key>PayloadType</key>
+			<string>com.apple.loginwindow</string>
+			<key>PayloadUUID</key>
+			<string>02BA5BD8-F60F-4F9F-9236-77FE3C049FE6</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Cucina: logs the VM user in automatically after every restart, so its login keychain is unlocked for Tart (R-MAC-2).</string>
+	<key>PayloadDisplayName</key>
+	<string>Cucina 05 auto-login</string>
+	<key>PayloadIdentifier</key>
+	<string>ai.sloper.cucina.profile.autologin</string>
+	<key>PayloadOrganization</key>
+	<string>${CUCINA_ORGANIZATION}</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>A230D598-E776-4CBF-AAF8-F0C19FE6C623</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

@@ -19263,6 +19263,13 @@ pub struct GetOperationResponseView<'a> {
     pub operation: ::buffa::MessageFieldView<
         super::super::__buffa::view::OperationSummaryView<'a>,
     >,
+    /// Serialized build.bazel.remote.execution.v2.ExecuteResponse of a completed operation (empty while
+    /// queued or executing, and once the scheduler has forgotten the operation). It carries the exit
+    /// code, stdout/stderr digests and timing of a just-failed action, which the action cache never
+    /// stores (`cucinactl action inspect <operation>`).
+    ///
+    /// Field 2: `execute_response`
+    pub execute_response: &'a [u8],
     pub __buffa_unknown_fields: ::buffa::UnknownFieldsView<'a>,
 }
 impl<'a> ::buffa::MessageView<'a> for GetOperationResponseView<'a> {
@@ -19316,6 +19323,13 @@ impl<'a> ::buffa::MessageView<'a> for GetOperationResponseView<'a> {
                     }
                 }
             }
+            2u32 => {
+                ::buffa::encoding::check_wire_type(
+                    tag,
+                    ::buffa::encoding::WireType::LengthDelimited,
+                )?;
+                view.execute_response = ::buffa::types::borrow_bytes(&mut cur)?;
+            }
             _ => {
                 ::buffa::encoding::skip_field_depth(tag, &mut cur, ctx.depth())?;
                 let span_len = before_tag.len() - cur.len();
@@ -19353,6 +19367,7 @@ impl<'a> ::buffa::MessageView<'a> for GetOperationResponseView<'a> {
                 }
                 None => ::buffa::MessageField::none(),
             },
+            execute_response: (self.execute_response).to_vec(),
             __buffa_unknown_fields: self.__buffa_unknown_fields.to_owned()?.into(),
             ..::core::default::Default::default()
         })
@@ -19372,6 +19387,11 @@ impl<'a> ::buffa::ViewEncode<'a> for GetOperationResponseView<'a> {
                 += 1u64 + ::buffa::encoding::varint_len(inner_size as u64) as u64
                     + inner_size as u64;
         }
+        if !self.execute_response.is_empty() {
+            size
+                += 1u64
+                    + ::buffa::types::bytes_encoded_len(&self.execute_response) as u64;
+        }
         size += self.__buffa_unknown_fields.encoded_len() as u64;
         ::buffa::saturate_size(size)
     }
@@ -19390,6 +19410,9 @@ impl<'a> ::buffa::ViewEncode<'a> for GetOperationResponseView<'a> {
                 buf,
             );
             self.operation.write_to(__cache, buf);
+        }
+        if !self.execute_response.is_empty() {
+            ::buffa::types::put_shared_bytes_field(2u32, &self.execute_response, buf);
         }
         self.__buffa_unknown_fields.write_to(buf);
     }
@@ -19416,6 +19439,13 @@ impl<'__a> ::serde::Serialize for GetOperationResponseView<'__a> {
             if let ::core::option::Option::Some(__v) = self.operation.as_option() {
                 __map.serialize_entry("operation", __v)?;
             }
+        }
+        if !::buffa::json_helpers::skip_if::is_empty_bytes(self.execute_response) {
+            __map
+                .serialize_entry(
+                    "executeResponse",
+                    &::buffa::json_helpers::BytesJson(self.execute_response),
+                )?;
         }
         __map.end()
     }
@@ -19520,6 +19550,16 @@ impl GetOperationResponseOwnedView {
         super::super::__buffa::view::OperationSummaryView<'_>,
     > {
         &self.0.reborrow().operation
+    }
+    /// Serialized build.bazel.remote.execution.v2.ExecuteResponse of a completed operation (empty while
+    /// queued or executing, and once the scheduler has forgotten the operation). It carries the exit
+    /// code, stdout/stderr digests and timing of a just-failed action, which the action cache never
+    /// stores (`cucinactl action inspect <operation>`).
+    ///
+    /// Field 2: `execute_response`
+    #[must_use]
+    pub fn execute_response(&self) -> &'_ [u8] {
+        self.0.reborrow().execute_response
     }
 }
 impl ::core::convert::From<::buffa::OwnedView<GetOperationResponseView<'static>>>

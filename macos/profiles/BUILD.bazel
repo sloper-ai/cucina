@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Configuration-profile templates for MDM (R-MAC-10) and their renderer. Rendered profiles contain the site enrollment
+# token, so they are produced outside the repository (render.sh refuses a git work tree).
+load("//bazel:tiers.bzl", "cucina_sh_test")
+
+filegroup(
+    name = "templates",
+    srcs = glob(["templates/*.mobileconfig"]) + [
+        "example.env",
+        "render.sh",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# R-MAC-10: every template renders into a lint-clean, < 1 MB profile that keeps hostd's key schema and exact values;
+# render.sh fails fast on bad input and never writes into a git work tree. Needs macOS's plutil/osascript/openssl.
+cucina_sh_test(
+    name = "render_test",
+    srcs = ["test/render_test.sh"],
+    data = [":templates"],
+    target_compatible_with = ["@platforms//os:macos"],
+    tier = "integration",
+)

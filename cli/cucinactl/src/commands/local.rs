@@ -28,6 +28,9 @@ pub struct BazelrcView {
     pub kind: String,
     /// The exact text to paste.
     pub text: String,
+    /// Actions besides pasting the text (also comments in it); human output prints
+    /// them on stderr.
+    pub notes: Vec<String>,
 }
 
 impl Render for BazelrcView {
@@ -54,6 +57,9 @@ pub struct TargetView {
     pub default_exec_pool: String,
     pub exec_pools: Vec<String>,
     pub test: Option<TargetTestView>,
+    pub test_timeout_scale: Option<f64>,
+    pub excluded: bool,
+    pub reason: Option<String>,
 }
 
 /// `target-list.v1`.
@@ -72,12 +78,24 @@ impl Render for TargetListView {
             "platform",
         ]);
         for x in &self.targets {
+            let tests = match (&x.test, x.excluded) {
+                (_, true) => format!("excluded: {}", x.reason.as_deref().unwrap_or("-")),
+                (None, false) => "- (build only)".into(),
+                (Some(t), false) => match x.test_timeout_scale {
+                    Some(k) if k != 1.0 => {
+                        format!("{}/{} ({}, timeouts x{k})", t.pool, t.runner, t.mode)
+                    }
+                    _ => format!("{}/{} ({})", t.pool, t.runner, t.mode),
+                },
+            };
             t.add_row(vec![
                 x.name.clone(),
-                x.exec_pools.join(", "),
-                x.test.as_ref().map_or("- (build only)".into(), |t| {
-                    format!("{}/{} ({})", t.pool, t.runner, t.mode)
-                }),
+                if x.excluded {
+                    "-".into()
+                } else {
+                    x.exec_pools.join(", ")
+                },
+                tests,
                 x.platform.clone(),
             ]);
         }
@@ -143,6 +161,9 @@ pub fn bazelrc(ctx: &Ctx, args: &BazelrcArgs) -> Result<()> {
                         runner: x.runner.clone(),
                         mode: x.mode.clone(),
                     }),
+                    test_timeout_scale: t.test_timeout_scale,
+                    excluded: t.excluded,
+                    reason: t.exclusion(),
                 }
             })
             .collect();
@@ -163,6 +184,7 @@ pub fn bazelrc(ctx: &Ctx, args: &BazelrcArgs) -> Result<()> {
             &BazelrcView {
                 kind: "build-file".into(),
                 text,
+                notes: Vec::new(),
             },
         );
     }
@@ -211,7 +233,13 @@ pub fn bazelrc(ctx: &Ctx, args: &BazelrcArgs) -> Result<()> {
         endpoint: p.remote_executor.clone(),
         instance_name: p.instance_name.clone(),
         helper_path,
-        ca_file: p.ca_file.as_ref().map(|c| c.display().to_string()),
+        // Bazel trusts only this bundle for the endpoint: the profile's CA, else
+        // CUCINA_CA_FILE (SSL_CERT_FILE is not Cucina-specific).
+        ca_file: p
+            .ca_file
+            .clone()
+            .or_else(crate::tls::cucina_ca_file_env)
+            .map(|c| c.display().to_string()),
         config_name: args.config_name.clone(),
         ci: args.ci,
         read_only: args.read_only,
@@ -235,8 +263,15 @@ pub fn bazelrc(ctx: &Ctx, args: &BazelrcArgs) -> Result<()> {
         &BazelrcView {
             kind: "bazelrc".into(),
             text: rc.to_string(),
+            notes: rc.notes.clone(),
         },
-    )
+    )?;
+    if out == crate::output::OutputFormat::Table {
+        for note in &rc.notes {
+            eprintln!("note: {note}");
+        }
+    }
+    Ok(())
 }
 
 pub fn install_helper(ctx: &Ctx, dir: Option<PathBuf>) -> Result<()> {
@@ -406,7 +441,12 @@ pub fn config(ctx: &Ctx, cmd: ConfigCmd) -> Result<()> {
                 "instance-name" => p.instance_name = value.clone(),
                 "management" => p.management = value.clone(),
                 "remote-executor" => p.remote_executor = value.clone(),
-                "ca-file" => p.ca_file = (!value.is_empty()).then(|| PathBuf::from(&value)),
+                "ca-file" => {
+                    p.ca_file = (!value.is_empty()).then(|| {
+                        let path = PathBuf::from(&value);
+                        std::path::absolute(&path).unwrap_or(path)
+                    })
+                }
                 "credential-store" => {
                     p.credential_store = match value.as_str() {
                         "keyring" => CredentialStore::Keyring,

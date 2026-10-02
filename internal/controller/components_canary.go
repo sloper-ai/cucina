@@ -54,14 +54,16 @@ type canaryLoop struct {
 	d *Deps
 	m *canary.Metrics
 
-	mu     sync.Mutex
-	result *canary.Result
+	mu       sync.Mutex
+	result   *canary.Result
+	failures int // consecutive failed runs
 }
 
-func (c *canaryLoop) last() *canary.Result {
+// last returns the latest result and how many runs in a row have failed.
+func (c *canaryLoop) last() (*canary.Result, int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.result
+	return c.result, c.failures
 }
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable: one canary per cluster.
@@ -79,6 +81,11 @@ func (c *canaryLoop) Start(ctx context.Context) error {
 		OnResult: func(r canary.Result) {
 			c.mu.Lock()
 			c.result = &r
+			if r.Success {
+				c.failures = 0
+			} else {
+				c.failures++
+			}
 			c.mu.Unlock()
 		},
 	}

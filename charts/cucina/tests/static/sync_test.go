@@ -16,17 +16,20 @@ import (
 	"strings"
 	"testing"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/sloper-ai/cucina/charts/cucina/tests/charttest"
 	"github.com/sloper-ai/cucina/internal/controller"
 	"github.com/sloper-ai/cucina/internal/pki"
-	"sigs.k8s.io/yaml"
 )
 
 var update = flag.Bool("update", false, "rewrite generated files (values.schema.json definitions, README values table) instead of comparing")
 
 // TestChartCopiesMatchSources guards the copies the chart must carry because Helm
 // cannot read files outside the chart directory: the platform catalog (ADR 0002,
-// the scheduler's predeclared queues) and the CRDs (R-OPS-1).
+// the scheduler's predeclared queues) and the CRDs in crds/, which Helm installs
+// before any template on `helm install` (R-OPS-1, ADR 0406; the pre-upgrade hook
+// applies the identical copies embedded in the controller image).
 func TestChartCopiesMatchSources(t *testing.T) {
 	root := charttest.RepoRoot(t)
 	pairs := map[string]string{
@@ -37,11 +40,14 @@ func TestChartCopiesMatchSources(t *testing.T) {
 		t.Fatalf("no CRDs under api/crds: %v", err)
 	}
 	for _, c := range crds {
-		pairs[filepath.Join("api", "crds", filepath.Base(c))] = filepath.Join("charts", "cucina", "files", "crds", filepath.Base(c))
+		pairs[filepath.Join("api", "crds", filepath.Base(c))] = filepath.Join("charts", "cucina", "crds", filepath.Base(c))
 	}
-	copies, _ := filepath.Glob(filepath.Join(root, "charts", "cucina", "files", "crds", "*.yaml"))
+	copies, _ := filepath.Glob(filepath.Join(root, "charts", "cucina", "crds", "*"))
 	if len(copies) != len(crds) {
-		t.Errorf("charts/cucina/files/crds has %d files, api/crds %d: run `make -C charts/cucina sync`", len(copies), len(crds))
+		t.Errorf("charts/cucina/crds has %d files, api/crds %d: run `make -C charts/cucina sync`", len(copies), len(crds))
+	}
+	if stale, _ := filepath.Glob(filepath.Join(root, "charts", "cucina", "files", "crds", "*")); len(stale) > 0 {
+		t.Errorf("charts/cucina/files/crds must not exist (the CRDs live in crds/): %v", stale)
 	}
 	for src, dst := range pairs {
 		if !bytes.Equal(charttest.ReadFile(t, filepath.Join(root, src)), charttest.ReadFile(t, filepath.Join(root, dst))) {

@@ -196,6 +196,16 @@ shell with mise's Go, or wrap it in a `genrule` that puts `@rules_go//go` first 
 * `--config=msvc` — the MSVC/Windows SDK EULA `--repo_env`s (accepted 2026-10-01); implied on
   Windows hosts.
 
+## CI (.github/workflows/ci.yml)
+
+The repository only allows GitHub-owned actions plus an allow-list (jdx/mise-action, ...),
+pinned to full commit SHAs. Jobs install Bazelisk and other tools with `jdx/mise-action`
+(`install_args`, versions from `mise.toml`) and keep Bazel's repository and disk caches with
+`actions/cache` (the repo contents cache stays out of the saved cache). `--config=ci` sets
+`--lockfile_mode=error`: after changing `MODULE.bazel`, `go.mod` or `Cargo.lock`, run a build
+(or `bazel mod deps --lockfile_mode=update`, which records every extension) and commit
+`MODULE.bazel.lock`. Windows runs use `--output_user_root=C:/b` and long paths.
+
 ## Several agents on one machine
 
 All agents share one workspace. A Bazel server serialises commands per output base

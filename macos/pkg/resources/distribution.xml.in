@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Distribution definition for the Cucina host package (productbuild, R-MAC-8). @NAME@ tokens are filled by
+     scripts/build-pkg.sh. One hidden choice, no UI customisation, system volume only, Apple silicon only. -->
+<installer-gui-script minSpecVersion="2">
+    <title>@TITLE@ @VERSION@</title>
+    <organization>ai.sloper.cucina</organization>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true" hostArchitectures="arm64"/>
+    <domains enable_localSystem="true" enable_anywhere="false" enable_currentUserHome="false"/>
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="@MIN_MACOS@"/>
+        </allowed-os-versions>
+    </volume-check>
+    <choices-outline>
+        <line choice="default">
+            <line choice="@PKG_ID@"/>
+        </line>
+    </choices-outline>
+    <choice id="default"/>
+    <choice id="@PKG_ID@" visible="false" title="@TITLE@">
+        <pkg-ref id="@PKG_ID@"/>
+    </choice>
+    <pkg-ref id="@PKG_ID@" version="@VERSION@" onConclusion="none" auth="Root">@COMPONENT@</pkg-ref>
+    <product id="@PKG_ID@" version="@VERSION@"/>
+</installer-gui-script>

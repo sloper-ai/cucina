@@ -46,6 +46,8 @@ _BUILDIFIER_EXCLUDES = [
     "./.git/*",
     "./.work/*",
     "./bazel-*",
+    # Fragments appended to Abseil's MODULE.bazel (another workspace).
+    "./test/e2e/abseil/*",
 ]
 
 # `bazel run //:buildifier` formats and fixes lint in place.

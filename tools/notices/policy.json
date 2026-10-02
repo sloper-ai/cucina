@@ -1,0 +1,17 @@
+{
+  "$comment": "Licences that may be bundled in Cucina's artifacts. generate.sh fails on anything else (and on licence files it cannot classify) so a human decides. MPL-2.0 is file-level copyleft: fine for unmodified dependencies. Keep in step with deny.toml (Rust).",
+  "allowed": [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "0BSD",
+    "Unlicense",
+    "CC0-1.0",
+    "Zlib",
+    "BSL-1.0",
+    "FSL-1.1-ALv2"
+  ]
+}

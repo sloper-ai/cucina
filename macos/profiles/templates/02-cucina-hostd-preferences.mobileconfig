@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Cucina profile 02: managed preferences (R-MAC-10). Domain ai.sloper.cucina.hostd = hostd's configuration (keys and validation: docs/dev/hostd.md §3; hostd rejects unknown keys). Domain ai.sloper.cucina.host = install-time settings of the package's postinstall (cucina-host-setup). Managed preferences are world-readable: the site enrollment token is contained by its expiry and serial admission (R-SEC-3). -->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadContent</key>
+			<dict>
+				<key>ai.sloper.cucina.hostd</key>
+				<dict>
+					<key>Forced</key>
+					<array>
+						<dict>
+							<key>mcx_preference_settings</key>
+							<dict>
+								<key>ControllerURL</key>
+								<string>${CUCINA_CONTROLLER_URL}</string>
+								<!-- @if CUCINA_CONTROLLER_SERVER_NAME: <key>ControllerServerName</key><string>${CUCINA_CONTROLLER_SERVER_NAME}</string> -->
+								<!-- @if CUCINA_CA_CERT_B64: <key>CACertificate</key><data>${CUCINA_CA_CERT_B64}</data> -->
+								<!-- @if CUCINA_CA_PIN_XML: <key>CAPinSHA256</key>${CUCINA_CA_PIN_XML} -->
+								<key>SiteEnrollmentToken</key>
+								<string>${CUCINA_SITE_ENROLLMENT_TOKEN}</string>
+								<!-- @if CUCINA_IDENTITY_LABEL: <key>IdentityLabel</key><string>${CUCINA_IDENTITY_LABEL}</string> -->
+								<!-- @if CUCINA_SITE: <key>Site</key><string>${CUCINA_SITE}</string> -->
+								<!-- @if CUCINA_LABELS_XML: <key>Labels</key>${CUCINA_LABELS_XML} -->
+								<!-- @if CUCINA_VM_SLOTS: <key>VMSlots</key><integer>${CUCINA_VM_SLOTS}</integer> -->
+								<!-- @if CUCINA_VM_CPU_COUNT: <key>VMCPUCount</key><integer>${CUCINA_VM_CPU_COUNT}</integer> -->
+								<!-- @if CUCINA_VM_MEMORY_GIB: <key>VMMemoryGiB</key><integer>${CUCINA_VM_MEMORY_GIB}</integer> -->
+								<!-- @if CUCINA_L2_SIZE_GIB: <key>L2SizeGiB</key><integer>${CUCINA_L2_SIZE_GIB}</integer> -->
+								<!-- @if CUCINA_VM_MAX_AGE_HOURS: <key>VMMaxAgeHours</key><integer>${CUCINA_VM_MAX_AGE_HOURS}</integer> -->
+								<!-- @if CUCINA_LOG_LEVEL: <key>LogLevel</key><string>${CUCINA_LOG_LEVEL}</string> -->
+								<!-- @if CUCINA_RUN_AS_USER: <key>RunAsUser</key><string>${CUCINA_RUN_AS_USER}</string> -->
+								<!-- @if CUCINA_TART_PATH: <key>TartPath</key><string>${CUCINA_TART_PATH}</string> -->
+							</dict>
+						</dict>
+					</array>
+				</dict>
+				<key>ai.sloper.cucina.host</key>
+				<dict>
+					<key>Forced</key>
+					<array>
+						<dict>
+							<key>mcx_preference_settings</key>
+							<dict>
+								<!-- @if CUCINA_CREATE_USER: <key>CreateUser</key><${CUCINA_CREATE_USER}/> -->
+								<!-- @if CUCINA_MANAGE_AUTOLOGIN: <key>ManageAutoLogin</key><${CUCINA_MANAGE_AUTOLOGIN}/> -->
+								<!-- @if CUCINA_RESTART_AFTER_FIRST_INSTALL: <key>RestartAfterFirstInstall</key><${CUCINA_RESTART_AFTER_FIRST_INSTALL}/> -->
+								<!-- @if CUCINA_LOCAL_NETWORK_CIDRS_XML: <key>LocalNetworkAllowedEthernetAddresses</key>${CUCINA_LOCAL_NETWORK_CIDRS_XML} -->
+							</dict>
+						</dict>
+					</array>
+				</dict>
+			</dict>
+			<key>PayloadDisplayName</key>
+			<string>Cucina host agent settings</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.hostd-preferences.settings</string>
+			<key>PayloadType</key>
+			<string>com.apple.ManagedClient.preferences</string>
+			<key>PayloadUUID</key>
+			<string>090C8919-DFFF-4D50-8D9E-9D9F51C42A6A</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Cucina: configuration of cucina-hostd (controller endpoint, CA, site enrollment token, VM sizing) and of the package's installer.</string>
+	<key>PayloadDisplayName</key>
+	<string>Cucina 02 host agent settings</string>
+	<key>PayloadIdentifier</key>
+	<string>ai.sloper.cucina.profile.hostd-preferences</string>
+	<key>PayloadOrganization</key>
+	<string>${CUCINA_ORGANIZATION}</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>7E45C57D-888A-4647-BA7D-EF9F576AF1E3</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

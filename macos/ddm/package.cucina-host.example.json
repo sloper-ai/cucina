@@ -1,0 +1,14 @@
+{
+  "Type": "com.apple.configuration.package",
+  "Identifier": "ai.sloper.cucina.ddm.package.cucina-host",
+  "ServerToken": "0.1.0-replace-with-make-manifest-output",
+  "Payload": {
+    "ManifestURL": "https://github.com/sloper-ai/cucina/releases/download/v0.1.0/cucina-host-0-1-0.plist",
+    "InstallBehavior": {
+      "Install": "Required"
+    },
+    "UninstallBehavior": {
+      "Remove": true
+    }
+  }
+}

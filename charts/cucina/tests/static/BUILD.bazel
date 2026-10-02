@@ -6,12 +6,15 @@ cucina_go_test(
     srcs = [
         "authz_test.go",
         "kubeconform_test.go",
+        "rbac_test.go",
         "rules_test.go",
         "schema_test.go",
         "sync_test.go",
     ],
     data = [
-        "//api/crds",
+        "//api/crds:cucina.sloper.ai_machosts.yaml",
+        "//api/crds:cucina.sloper.ai_trustpolicies.yaml",
+        "//api/crds:cucina.sloper.ai_workerpools.yaml",
         "//charts/cucina:chart",
         "//charts/cucina/tests:fixtures",
         "//platforms:pools.json",
@@ -31,6 +34,7 @@ cucina_go_test(
         "//internal/controller",
         "//internal/keys",
         "//internal/pki",
+        "@io_k8s_api//rbac/v1:rbac",
         "@io_k8s_sigs_yaml//:yaml",
     ],
 )

@@ -4,7 +4,7 @@
 # //absl/... in a prepared Abseil checkout WITHOUT remote execution, from a
 # cold output base. Prints one JSON line; logs and the BEP go to -Out.
 #
-# Usage: local-baseline.ps1 -Workspace C:\e2e\abseil -Out C:\e2e\baseline [-BazelArgs @('--config=...')]
+# Usage: local-baseline.ps1 -Workspace C:\e2e\abseil -Out C:\e2e\baseline [-BazelArgs @('--config=lane-windows')]
 param([Parameter(Mandatory)][string]$Workspace, [Parameter(Mandatory)][string]$Out, [string[]]$BazelArgs = @())
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null

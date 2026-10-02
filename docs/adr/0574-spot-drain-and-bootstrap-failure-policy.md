@@ -21,7 +21,7 @@ off immediately on a refusal. It did not say what to do on local failures (forma
   `Unauthenticated`, `FailedPrecondition`, `OutOfRange`, `Unimplemented`, a controller certificate that does not verify) power
   off at once; everything else is retried until the 2-minute deadline. `--no-poweroff` (or `CUCINA_AGENT_NO_POWEROFF=1`) keeps a
   failed instance up for debugging over SSM.
-* Exception: an instance **without any user data** is not a controller launch (EC2 Fast Launch pre-provisioning instances of the
+* Exception: an instance **without any user data** (IMDS 404 or an empty body) is not a controller launch (EC2 Fast Launch pre-provisioning instances of the
   Windows AMI, image builds, manual launches). Bootstrap exits 2 (`reason=not-a-worker`) without powering off, so Fast Launch can
   finish its snapshots; Buildbarn is not started and the images' dead-man timer bounds the cost. User data that is present but
   not valid boot data powers off like any other failure.

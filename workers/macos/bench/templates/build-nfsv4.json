@@ -1,0 +1,14 @@
+{
+  "virtual": {
+    "mount": {
+      "mountPath": "@BUILD@",
+      "nfsv4": {
+        "darwin": { "socketPath": "@STATE@/nfsv4.sock" },
+        "enforcedLeaseTime": "120s",
+        "announcedLeaseTime": "60s"
+      }
+    },
+    "maximumExecutionTimeoutCompensation": "3600s",
+    "maximumWritableFileUploadDelay": "60s"
+  }
+}

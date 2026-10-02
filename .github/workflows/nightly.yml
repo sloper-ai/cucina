@@ -1,0 +1,290 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Scheduled and reporting lanes (R-TEST-2, R-TEST-5, R-BUILD-1 "Lint"; ADR 0152):
+#
+#   nightly       simulation sweep (1,000 seeds), system tier (kind + ct install; the only
+#                 lane with Docker), security scans (govulncheck, cargo deny, golangci-lint
+#                 against fresh advisory data), quarantine expiry
+#   weekly        full mutation testing (gremlins v0.6.0, cargo-mutants v27.1.0)
+#   pull request  mutation testing of the changed lines and the quarantine check
+#
+# Mutation testing is a non-blocking report (artifacts); no score target (R-TEST-5.6).
+# `bazel test //...`, lint, secret scan and the Cucina RBE job live in ci.yml.
+name: nightly
+
+on:
+  schedule:
+    - cron: "41 3 * * *" # nightly lanes
+    - cron: "23 6 * * 0" # weekly full mutation run
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      lanes:
+        description: "Comma-separated lanes: simulation, system, security, quarantine, mutation"
+        type: string
+        default: simulation,system,security,quarantine
+
+permissions: {}
+
+concurrency:
+  group: nightly-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  simulation:
+    name: simulation sweep (1,000 seeds)
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '41 3 * * *') ||
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',simulation,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: bazelisk
+      - name: Bazel caches (user.bazelrc)
+        run: |
+          c="$HOME/.cache/cucina-bazel"
+          {
+            echo "common --repository_cache=$c/repo"
+            echo "build --disk_cache=$c/disk"
+            echo "build --experimental_disk_cache_gc_max_size=4G"
+          } >> user.bazelrc
+          echo "BAZELISK_HOME=$c/bazelisk" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-nightly-simulation-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: bazel-nightly-simulation-${{ runner.os }}-${{ runner.arch }}-
+      - name: sweep every scenario over 1,000 seeds (R-TEST-8c)
+        run: bazelisk test --config=ci --config=nightly --test_output=errors //sim:sim_sweep_test
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-nightly-simulation-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+      - name: keep the logs of a failing sweep (minimise and commit failing seeds as scenarios)
+        if: failure()
+        run: cp -RL "$(bazelisk info --config=ci bazel-testlogs)/sim/sim_sweep_test" "$RUNNER_TEMP/sweep-logs"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: simulation-sweep-logs
+          path: ${{ runner.temp }}/sweep-logs
+          retention-days: 14
+
+  system:
+    name: system tier (kind + ct install)
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '41 3 * * *') ||
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',system,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      KIND: kind@0.33.0
+      CT: aqua:helm/chart-testing@3.14.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: bazelisk helm kubectl ${{ env.KIND }} ${{ env.CT }}
+      - name: Bazel caches (user.bazelrc)
+        run: |
+          c="$HOME/.cache/cucina-bazel"
+          {
+            echo "common --repository_cache=$c/repo"
+            echo "build --disk_cache=$c/disk"
+            echo "build --experimental_disk_cache_gc_max_size=4G"
+          } >> user.bazelrc
+          echo "BAZELISK_HOME=$c/bazelisk" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-nightly-system-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: bazel-nightly-system-${{ runner.os }}-${{ runner.arch }}-
+      - name: kind cluster
+        run: mise exec "$KIND" -- kind create cluster --name cucina --wait 5m
+      - name: load the controller image (built by Bazel, no registry)
+        run: |
+          bazelisk build --config=ci --output_groups=+tarball //release:controller_image_load
+          tarball="$(bazelisk cquery --config=ci --output_groups=+tarball --output=files //release:controller_image_load | grep '\.tar$')"
+          mise exec "$KIND" -- kind load image-archive "$tarball" --name cucina
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-nightly-system-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+      - name: system-tier Bazel tests (tag requires-docker)
+        run: |
+          targets="$(bazelisk query --noshow_progress 'attr(tags, "\btier-system\b", tests(//...))')"
+          if [ -z "$targets" ]; then
+            echo "no system-tier Bazel tests yet"
+            exit 0
+          fi
+          # shellcheck disable=SC2086 # one target per word
+          bazelisk test --config=ci --config=nightly $targets
+      - name: ct install (every ci/ values profile)
+        run: |
+          # ct discovers ci/*-values.yaml: install from a copy with the profiles renamed.
+          work="$RUNNER_TEMP/ct"
+          mkdir -p "$work/charts"
+          cp -R charts/cucina "$work/charts/cucina"
+          for f in "$work"/charts/cucina/ci/values-*.yaml; do
+            base="$(basename "$f" .yaml)"
+            mv "$f" "$work/charts/cucina/ci/${base#values-}-values.yaml"
+          done
+          cd "$work"
+          mise exec "$CT" -- ct install --charts charts/cucina --chart-dirs charts \
+            --helm-extra-set-args "--set=images.controller.tag=0.0.0-dev --set=images.pullPolicy=IfNotPresent"
+      - name: cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -n 50 || true
+
+  security:
+    name: security scans (fresh advisory data)
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '41 3 * * *') ||
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',security,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: go rust golangci-lint
+      - name: govulncheck (reachable Go vulnerabilities)
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: cargo deny (advisories, bans, licences, sources)
+        if: success() || failure()
+        run: mise exec cargo-deny@0.20.2 -- cargo-deny --all-features check
+      - name: golangci-lint
+        if: success() || failure()
+        run: golangci-lint run ./...
+
+  quarantine:
+    name: quarantine expiry (R-TEST-5.4)
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'schedule' && github.event.schedule == '41 3 * * *') ||
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',quarantine,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: no expired quarantines, at most 5, owners and issues set
+        run: tools/ci/check-quarantine.sh
+
+  mutation-go:
+    name: mutation testing (Go, gremlins)
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'schedule' && github.event.schedule == '23 6 * * 0') ||
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',mutation,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    continue-on-error: true # a report, never a gate (R-TEST-5.6)
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # --diff needs the base branch
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: go
+      - name: install gremlins v0.6.0
+        run: GOBIN="$RUNNER_TEMP/bin" go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+      - name: unleash (PR - changed lines only; weekly - full)
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p mutation
+          diff=()
+          if [ "$EVENT" = pull_request ]; then diff=(--diff "origin/$BASE_REF"); fi
+          status=0
+          # Scope (R-TEST-5.6): STS/auth, autoscaler core, VM state machines, config rendering.
+          for pkg in internal/sts internal/auth internal/scaling internal/hostd/vmm internal/bbconfig; do
+            name="$(printf '%s' "$pkg" | tr / -)"
+            echo "::group::$pkg"
+            "$RUNNER_TEMP/bin/gremlins" unleash "${diff[@]}" --output "mutation/$name.json" "./$pkg" \
+              | tee "mutation/$name.txt" || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-go
+          path: mutation
+          retention-days: 30
+
+  mutation-rust:
+    name: mutation testing (Rust, cargo-mutants)
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'schedule' && github.event.schedule == '23 6 * * 0') ||
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',mutation,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    continue-on-error: true # a report, never a gate (R-TEST-5.6)
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: rust
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cargo-mutants
+          key: cargo-mutants-27.1.0-${{ runner.os }}-${{ runner.arch }}
+      - name: install cargo-mutants v27.1.0
+        run: |
+          if [ ! -x "$RUNNER_TEMP/cargo-mutants/bin/cargo-mutants" ]; then
+            cargo install cargo-mutants@27.1.0 --locked --root "$RUNNER_TEMP/cargo-mutants"
+          fi
+          echo "$RUNNER_TEMP/cargo-mutants/bin" >> "$GITHUB_PATH"
+      - name: mutants (PR - changed lines only; weekly - full)
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          # Scope (R-TEST-5.6): the credential helper.
+          args=(--package cucinactl --file cli/cucinactl/src/credential_helper.rs --output mutation --no-shuffle)
+          if [ "$EVENT" = pull_request ]; then
+            git diff "origin/$BASE_REF...HEAD" -- cli > "$RUNNER_TEMP/pr.diff"
+            if [ ! -s "$RUNNER_TEMP/pr.diff" ]; then
+              echo "no Rust changes"
+              exit 0
+            fi
+            args+=(--in-diff "$RUNNER_TEMP/pr.diff")
+          fi
+          mkdir -p mutation
+          cargo mutants "${args[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mutation-rust
+          path: mutation
+          retention-days: 30

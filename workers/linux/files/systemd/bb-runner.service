@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Buildbarn runner; started before bb-worker.service (R-POOL-4). ExecStartPre runs the bootstrap hook: with
+# cucina-worker-agent installed it enrols the worker and renders /etc/cucina/bb/{runner,worker}.json and
+# /etc/cucina/env (fail closed). An instance without EC2 user data (image build) is "not a worker": the hook
+# succeeds, leaves /run/cucina/not-a-worker, and bb_runner is not started. Without the agent and without a
+# configuration the unit is skipped (condition), not failed.
+[Unit]
+Description=Buildbarn runner (bb_runner)
+Documentation=https://github.com/buildbarn/bb-remote-execution
+Wants=network-online.target
+After=network-online.target cucina-format-instance-store.service
+ConditionPathExists=|/opt/cucina/bin/cucina-worker-agent
+ConditionPathExists=|/etc/cucina/bb/runner.json
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=exec
+EnvironmentFile=-/etc/cucina/env
+ExecStartPre=/opt/cucina/bin/cucina-bootstrap
+ExecStart=/bin/sh -c 'if [ -e /run/cucina/not-a-worker ]; then echo "not a worker: bb_runner not started"; exit 0; fi; exec /usr/local/bin/bb_runner /etc/cucina/bb/runner.json'
+# Runs as root so that run_commands_as can drop every action to the unprivileged bbrunner user.
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=300
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

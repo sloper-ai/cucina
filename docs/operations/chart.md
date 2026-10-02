@@ -16,9 +16,9 @@ certificates, keys, storage, Buildbarn upgrades. Values are documented in
 | `<release>-controller` | Deployment, leader election | probes `:8081`, metrics + `/sd/workers` `:9090`, STS `:8443`, management `:8444`, enrollment `:8445`, host API `:8446` |
 | `<release>-sts` | Deployment (`cucina-controller sts`) | STS `:8443` |
 | exposure Services | `client`, `api-sts`, `api-management` (leader only), `worker-storage`, `worker-scheduler`, `worker-controller` | see [exposure.md](exposure.md) |
-| CRDs | WorkerPool, MacHost, TrustPolicy | from templates (upgraded by `helm upgrade`), kept on uninstall |
+| CRDs | WorkerPool, MacHost, TrustPolicy | `crds/` (created by `helm install`), re-applied from the controller image by the `crds` hook ([ADR 0406](../adr/0406-crds-directory-and-apply-hook.md)); never deleted |
 | WorkerPool / TrustPolicy objects | from `pools` / `trustPolicies` (+ the break-glass policy) | |
-| hooks | `bootstrap` (pre-install/pre-upgrade), `uninstall-prep` (pre-delete), `test-canary` (`helm test`) | |
+| hooks | `crds` and `bootstrap` (pre-install/pre-upgrade, in that order), `uninstall-prep` (pre-delete), `test-canary` (`helm test`) | the `crds` hook has a ClusterRole limited to get/create/patch on the three CRDs |
 | optional | ServiceMonitors, ScrapeConfig, PrometheusRule, dashboards, Pushgateway, cert-manager Certificates, NetworkPolicies (on by default), PDBs | |
 
 The bootstrap hook (`cucina-controller bootstrap --config /etc/cucina/controller.json --certs /etc/cucina/certs.json`)
@@ -50,15 +50,19 @@ creates, idempotently and never overwriting, the objects Helm must not own becau
 
    `values.schema.json` rejects unknown or malformed values before anything is created (R-TEST-7); cross-field checks
    (unknown platform, size class, instance name, minRunning > max, CAS < 19 GiB, timeouts) fail the same way.
-4. Log in with the break-glass key printed by `NOTES.txt` (`cucinactl login <sts-url> --key …`), create the OIDC trust
-   policies, then disable the key: `helm upgrade … --set auth.breakGlass.enabled=false` (the TrustPolicy that scopes it is
+4. Log in with the break-glass key printed by `NOTES.txt` (`cucinactl login <sts-url> --ca-file cucina-ca.pem --key -`;
+   `--ca-file` is needed while the endpoints use the chart-generated certificates and is stored in the profile as
+   `ca_file`, so later commands trust the same CA), create the OIDC trust policies, then disable the key: `helm upgrade … --set auth.breakGlass.enabled=false` (the TrustPolicy that scopes it is
    removed; the controller stops accepting it). Rotate it by deleting the Secret and running `helm upgrade` (the bootstrap
    hook creates a new one).
 
 ## Upgrade
 
-`helm upgrade cucina … -f my-values.yaml` keeps the cache (PVCs, persistent state) and upgrades the CRDs (R-OPS-1).
-What restarts:
+`helm upgrade cucina … -f my-values.yaml` keeps the cache (PVCs, persistent state) and upgrades the CRDs (R-OPS-1): Helm
+never updates `crds/` after the first install, so the `crds` hook (`cucina-controller crds apply`) server-side applies the
+CRDs compiled into the controller image and waits until they are Established before anything else changes. With
+`crds.install=false` (CRDs managed elsewhere, e.g. GitOps without cluster-scoped rights for the release) install with
+`helm install --skip-crds` and apply `charts/cucina/crds/` yourself before the install and each upgrade. What restarts:
 
 | Change | Effect |
 | --- | --- |
@@ -66,12 +70,12 @@ What restarts:
 | a pool on a **new** platform, size class or instance name | scheduler restarts (its predeclared queues change, ADR 0002); in-flight Execute streams are retried by Bazel (UC8) |
 | frontend configuration | rolling update, one extra replica at a time (`maxUnavailable: 0`) |
 | storage configuration | rolling restart one shard at a time; each shard reloads its persistent state (no cache loss) |
-| `storage.stores.<store>.size` | that store is re-laid out and **starts empty** on every shard (cold cache for that store); size it once |
-| PVC size (`storage.persistence.size`) | StatefulSet claim templates are immutable: expand the PVCs (`kubectl patch pvc … spec.resources.requests.storage`, StorageClass with `allowVolumeExpansion`), then `kubectl delete sts cucina-storage --cascade=orphan` and `helm upgrade` |
+| `storage.stores.<store>.size` | that store is re-laid out and **starts empty** on every shard (cold cache for that store); size it once. The installed PVCs keep their size: the new layout must fit them (stores + 10%), otherwise the upgrade fails before changing anything and names the procedure below |
+| PVC size (`storage.persistence.size`) | StatefulSet claim templates are immutable (the chart refuses a different size while the StatefulSet exists): expand the PVCs (`kubectl patch pvc … spec.resources.requests.storage`, StorageClass with `allowVolumeExpansion`), then `kubectl delete sts cucina-storage --cascade=orphan` and `helm upgrade --set storage.persistence.size=<new>`. `storage.mode`, `storage.storageClassName` and `storage.persistence.annotations` are fixed at install |
 | controller configuration | rolling update; leader election hands over |
 
-`helm rollback cucina <revision>` follows the same table. CRDs roll back to the revision's manifests (kept compatible:
-additive changes only).
+`helm rollback cucina <revision>` follows the same table. CRDs are **not** rolled back (no hook runs on rollback; CRD
+changes are additive, so older controllers keep working with newer CRDs).
 
 ## Uninstall (R-OPS-3)
 
@@ -83,7 +87,7 @@ The pre-delete hook deletes every WorkerPool and MacHost and waits until their f
 EC2 instances (volumes go with them) and hosts stopped their VMs, while the controller still runs; it fails (and the
 uninstall stops) if instances remain. Allow up to `hooks.uninstallPrep.timeout` (30 min) plus the default 5 min.
 
-Left behind on purpose: the CRDs (`crds.keep`; deleting a CRD deletes every object of its kind), the storage PVCs (the
+Left behind on purpose: the CRDs (Helm never deletes `crds/`; deleting a CRD deletes every object of its kind), the storage PVCs (the
 cache; `storage.persistence.whenDeleted: Retain`) and the runtime Secrets/ConfigMaps above (CA, keys, deny-list). A
 reinstall with the same release name reuses all of them. To remove everything:
 
@@ -129,6 +133,27 @@ are not affected; to drop those too, empty the AC (`storage.stores.ac.size` chan
 The cache is reconstructible and not backed up. Losing a shard (volume or node) makes its slice of the CAS/AC cold:
 builds re-execute or re-upload what they need; CAS retention and hit-ratio alerts show the recovery.
 
+## Local cluster (kind)
+
+A single-node kind cluster runs the whole control plane (no AWS, no workers). The values that differ from a cloud
+install: `storage: {mode: file, storageClassName: standard}`, `controller.aws.enabled: false`, NodePort exposure, and
+`endpoints.client.host: localhost`, so the public names are `kubectl port-forward`s on the workstation and the
+chart-generated certificates (SAN `localhost`) verify without editing `/etc/hosts`:
+
+```sh
+helm install cucina charts/cucina -n cucina --create-namespace -f kind-values.yaml --wait
+helm test -n cucina cucina --logs
+kubectl -n cucina get secret cucina-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > cucina-ca.pem
+kubectl -n cucina port-forward svc/cucina-api-sts 8443:8443 &
+kubectl -n cucina port-forward svc/cucina-api-management 8444:8444 &
+kubectl -n cucina get secret cucina-break-glass -o jsonpath='{.data.key}' | base64 -d \
+  | cucinactl login https://localhost:8443 --ca-file cucina-ca.pem --key -
+cucinactl status
+```
+
+`cucinactl cost` answers FailedPrecondition without `controller.aws` (cost needs EC2 pricing). The in-cluster canaries
+(`helm test`, the controller's 5-minute loop) use the in-cluster Services, never the public names.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
@@ -138,3 +163,6 @@ builds re-execute or re-upload what they need; CAS retention and hit-ratio alert
 | Clients get `UNAUTHENTICATED` | token issuer (`endpoints.sts.url`) or audience mismatch, expired token, or JWKS not yet reloaded (≤ 5 min after a key change) |
 | Execute fails with `No workers exist for … platform …` | no pool declares that platform/size class/instance name (ADR 0002): add the pool to values and `helm upgrade` |
 | Workers cannot connect | worker endpoint address/TLS name (`endpoints.worker.*`), security groups, `loadBalancerSourceRanges` |
+| `helm upgrade`: "the storage PVCs (data) are … but the stores need …" | a store grew beyond the installed PVCs (claim templates are immutable): shrink `storage.stores` or follow the PVC-size row of the upgrade table |
+| `helm upgrade` (Helm 4): "conflict with \"<manager>\" … .spec…" | another field manager changed a field the values also set (`kubectl edit`, or `cucinactl pools cordon` for `spec.paused`): align the values, or upgrade with `--force-conflicts` to let the values win |
+| `helm test` fails at `token` with a DNS or connection error | the canary could not reach the STS Service; check NetworkPolicies and `kubectl -n cucina get endpointslices` of `<release>-sts` |

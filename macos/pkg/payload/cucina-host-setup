@@ -1,0 +1,520 @@
+#!/bin/sh
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# cucina-host-setup — prepares a Mac mini for cucina-hostd. Installed at /usr/local/cucina/bin/cucina-host-setup
+# and run by the package's postinstall ("install"), so MDM installs, manual installs and repairs share one code path.
+# Covers what configuration profiles cannot express (R-MAC-2, R-MAC-5, R-MAC-8, R-MAC-10):
+#   * the dedicated standard user that runs Tart (default "cucina"; hostd's RunAsUser), created with an on-device
+#     random password and auto-login when MDM did not create it (ADR 0751);
+#   * pmset sleep 0 / womp 1 / autorestart 1, systemsetup -setrestartfreeze on, vmnet DHCP lease 600 s;
+#   * state and log directories, application-firewall allowance for hostd, Local Network escape hatch (opt-in);
+#   * bootstrapping the LaunchDaemon ai.sloper.cucina.hostd.
+# Idempotent, POSIX sh, no network. Never prints secrets (the enrollment token, the cucina password).
+#
+# usage: cucina-host-setup <command> [options]
+#   install [--dry-run] [--no-daemon] [--prefix DIR]
+#                                  full host preparation (what postinstall runs); --no-daemon/--prefix serve the
+#                                  DDM background-tasks variant (macos/ddm/background-tasks), whose files live in
+#                                  /var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/<TaskType>
+#   status                         read-only checks: daemon, user, auto-login, FileVault, power, lease, BTM
+#   autologin [--reset-password]   (re-)enable auto-login for the Tart user; --reset-password sets a new random
+#                                  password and moves the old login keychain aside (user must be logged out)
+#   hostname <name>                set ComputerName, HostName and LocalHostName (break-glass / no MDM switch)
+#   ssh on|off                     enable/disable Remote Login (break-glass; no MDM switch exists)
+#   local-network allow <CIDR>...  AllowedEthernetLocalNetworkAddresses escape hatch (macOS 15.5+, needs restart)
+#   local-network clear            remove the escape hatch
+#   version
+#
+# Install-time settings (optional) are read from the preference domain ai.sloper.cucina.host, managed
+# (/Library/Managed Preferences/ai.sloper.cucina.host.plist, e.g. from macos/profiles) or local
+# (/Library/Preferences/ai.sloper.cucina.host.plist):
+#   CreateUser (bool, default true)                create the Tart user if it does not exist
+#   ManageAutoLogin (bool, default true)           enable auto-login for a user this script created
+#   RestartAfterFirstInstall (bool, default true)  restart once after the first install if nobody is logged in,
+#                                                  so the auto-login session (unlocked login keychain) exists
+#   LocalNetworkAllowedEthernetAddresses (array of CIDR strings)  escape hatch, see above
+# The Tart user's name comes from hostd's domain (ai.sloper.cucina.hostd, key RunAsUser, default "cucina").
+set -eu
+umask 022
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+PREFIX=/usr/local/cucina
+LABEL=ai.sloper.cucina.hostd
+PKG_ID=ai.sloper.cucina.host
+DAEMON_PLIST=/Library/LaunchDaemons/$LABEL.plist
+STATE_ROOT=/var/db/cucina
+PKG_STATE=$STATE_ROOT/pkg
+LOG_DIR=/Library/Logs/Cucina
+LOG_FILE=$LOG_DIR/install.log
+HOSTD_DOMAIN=ai.sloper.cucina.hostd
+SETUP_DOMAIN=ai.sloper.cucina.host
+LEASE_PLIST=/Library/Preferences/SystemConfiguration/com.apple.InternetSharing.default
+LOCALNET_PLIST=/Library/Preferences/com.apple.network.local-network
+FIREWALL=/usr/libexec/ApplicationFirewall/socketfilterfw
+
+DRY_RUN=0
+FROM_INSTALLER=0
+NO_DAEMON=0
+USER_CREATED=0
+WARNINGS=0
+
+log() {
+	printf 'cucina-host-setup: %s\n' "$*"
+	if [ "$DRY_RUN" = 0 ] && [ -d "$LOG_DIR" ] && [ -w "$LOG_DIR" ]; then
+		printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE" 2>/dev/null || true
+	fi
+}
+warn() {
+	WARNINGS=$((WARNINGS + 1))
+	log "WARNING: $*"
+}
+die() {
+	log "ERROR: $*"
+	exit 1
+}
+
+# run CMD... — executes (or, with --dry-run, prints) a state-changing command.
+run() {
+	if [ "$DRY_RUN" = 1 ]; then
+		log "dry-run: $*"
+		return 0
+	fi
+	"$@"
+}
+# runq CMD... — like run, with the command's own output discarded.
+runq() {
+	if [ "$DRY_RUN" = 1 ]; then
+		log "dry-run: $*"
+		return 0
+	fi
+	"$@" >/dev/null 2>&1
+}
+# run_secret CMD... — like runq, but never echoes the arguments (they contain a password).
+run_secret() {
+	if [ "$DRY_RUN" = 1 ]; then
+		log "dry-run: $1 $2 ... (arguments redacted)"
+		return 0
+	fi
+	"$@" >/dev/null 2>&1
+}
+
+require_root() {
+	[ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "must run as root (sudo $0 $*)"
+}
+
+# pref DOMAIN KEY — prints the raw value of KEY (managed preferences first, then local), or nothing.
+pref() {
+	for pref_file in "/Library/Managed Preferences/$1.plist" "/Library/Preferences/$1.plist"; do
+		if [ -r "$pref_file" ] && plutil -extract "$2" raw -o - "$pref_file" 2>/dev/null; then
+			return 0
+		fi
+	done
+	return 0
+}
+# pref_bool DOMAIN KEY DEFAULT — prints true or false.
+pref_bool() {
+	pref_bool_v=$(pref "$1" "$2")
+	case $pref_bool_v in
+	true | 1 | YES | yes) echo true ;;
+	false | 0 | NO | no) echo false ;;
+	*) echo "$3" ;;
+	esac
+}
+# pref_array DOMAIN KEY — prints one element per line.
+pref_array() {
+	for pref_file in "/Library/Managed Preferences/$1.plist" "/Library/Preferences/$1.plist"; do
+		[ -r "$pref_file" ] || continue
+		plutil -extract "$2" raw -o - "$pref_file" >/dev/null 2>&1 || continue
+		pref_i=0
+		while plutil -extract "$2.$pref_i" raw -o - "$pref_file" 2>/dev/null; do
+			echo
+			pref_i=$((pref_i + 1))
+		done
+		return 0
+	done
+}
+
+vm_user() {
+	vm_user_v=$(pref "$HOSTD_DOMAIN" RunAsUser)
+	case $vm_user_v in
+	'') echo cucina ;;
+	*[!a-z0-9_.-]* | root | daemon | nobody)
+		echo "cucina-host-setup: ERROR: invalid RunAsUser '$vm_user_v' in $HOSTD_DOMAIN" >&2
+		return 1
+		;;
+	*) echo "$vm_user_v" ;;
+	esac
+}
+
+user_exists() { dscl . -read "/Users/$1" UniqueID >/dev/null 2>&1; }
+console_user() { stat -f %Su /dev/console 2>/dev/null || echo root; }
+autologin_user() { defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true; }
+managed_autologin_user() {
+	plutil -extract AutologinUsername raw -o - "/Library/Managed Preferences/com.apple.loginwindow.plist" 2>/dev/null || true
+}
+filevault_on() { fdesetup status 2>/dev/null | grep -q 'FileVault is On'; }
+
+# 32 characters from [A-Za-z0-9]; never stored by this script (only macOS keeps it, as /etc/kcpassword for auto-login).
+random_password() {
+	random_password_v=$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | cut -c1-32)
+	[ "${#random_password_v}" -eq 32 ] || die "could not generate a random password"
+	printf '%s' "$random_password_v"
+}
+
+ensure_dir() { # PATH OWNER:GROUP MODE
+	run mkdir -p "$1"
+	run chown "$2" "$1"
+	run chmod "$3" "$1"
+}
+
+step_directories() {
+	ensure_dir "$LOG_DIR" root:admin 0750
+	ensure_dir "$STATE_ROOT" root:wheel 0700
+	ensure_dir "$STATE_ROOT/hostd" root:wheel 0700
+	ensure_dir "$STATE_ROOT/l2" root:wheel 0700
+	ensure_dir "$PKG_STATE" root:wheel 0700
+}
+
+enable_autologin() { # USER PASSWORD
+	run_secret sysadminctl -autologin set -userName "$1" -password "$2" ||
+		{
+			warn "sysadminctl -autologin failed for $1"
+			return 1
+		}
+	[ "$DRY_RUN" = 1 ] || [ "$(autologin_user)" = "$1" ] || {
+		warn "auto-login for $1 did not take effect"
+		return 1
+	}
+	log "auto-login enabled for $1"
+}
+
+step_user() {
+	user=$(vm_user) || die "invalid RunAsUser preference"
+	if user_exists "$user"; then
+		log "user $user exists (uid $(id -u "$user"))"
+		if dseditgroup -o checkmember -m "$user" admin >/dev/null 2>&1; then
+			warn "$user is an administrator; R-MAC-2 expects a standard user"
+		fi
+		al=$(autologin_user)
+		mal=$(managed_autologin_user)
+		if [ "$al" = "$user" ] || [ "$mal" = "$user" ]; then
+			log "auto-login is configured for $user"
+		elif [ -f "$PKG_STATE/user-created" ] && [ "$(pref_bool "$SETUP_DOMAIN" ManageAutoLogin true)" = true ] &&
+			[ "$(console_user)" != "$user" ]; then
+			log "auto-login for $user (created by this package) is off; repairing with a new random password"
+			reset_autologin "$user" || true
+		else
+			warn "auto-login is not configured for $user: Tart VMs cannot start after a reboot until $user logs in." \
+				"Fix: push the loginwindow profile (AutologinUsername/AutologinPassword) or run" \
+				"'sudo cucina-host-setup autologin --reset-password' (see docs/macos/mac-mini-setup.md)"
+		fi
+		return 0
+	fi
+	if [ "$(pref_bool "$SETUP_DOMAIN" CreateUser true)" != true ]; then
+		warn "user $user does not exist and CreateUser=false: hostd will refuse to start until MDM creates it"
+		return 0
+	fi
+	log "creating standard user $user (random on-device password, auto-login)"
+	pw=$(random_password)
+	run_secret sysadminctl -addUser "$user" -fullName "Cucina VM runner" -shell /bin/zsh -home "/Users/$user" \
+		-password "$pw" || die "sysadminctl -addUser $user failed"
+	if [ "$DRY_RUN" = 0 ]; then
+		user_exists "$user" || die "user $user was not created"
+		createhomedir -c -u "$user" >/dev/null 2>&1 || warn "createhomedir failed for $user"
+		printf 'user=%s\ncreated=%s\npackage=%s\n' "$user" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PKG_ID" \
+			>"$PKG_STATE/user-created"
+	fi
+	USER_CREATED=1
+	if [ "$(pref_bool "$SETUP_DOMAIN" ManageAutoLogin true)" = true ]; then
+		enable_autologin "$user" "$pw" || true
+	else
+		log "ManageAutoLogin=false: leaving auto-login to MDM"
+	fi
+	pw=
+}
+
+# reset_autologin USER — new random password, stale login keychain moved aside, auto-login on.
+reset_autologin() {
+	[ "$(console_user)" != "$1" ] || die "$1 is logged in at the console; log it out (or restart) first"
+	pw=$(random_password)
+	run_secret sysadminctl -resetPasswordFor "$1" -newPassword "$pw" ||
+		{
+			pw=
+			warn "password reset for $1 failed"
+			return 1
+		}
+	kc_home=$(dscl . -read "/Users/$1" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }')
+	kc="${kc_home:-/Users/$1}/Library/Keychains"
+	if [ -d "$kc" ]; then
+		run mv "$kc" "$kc.cucina-reset-$(date +%Y%m%d%H%M%S)"
+		log "moved the old login keychain of $1 aside (it was protected by the previous password)"
+	fi
+	enable_autologin "$1" "$pw" || true
+	pw=
+}
+
+step_filevault() {
+	if filevault_on; then
+		warn "FileVault is ON. Auto-login is impossible with FileVault, so Tart VMs cannot start after a reboot" \
+			"(R-MAC-2). Turn it off ('sudo fdesetup disable') and deliver the FileVault-prevention profile."
+	else
+		log "FileVault is off"
+	fi
+}
+
+step_power() {
+	# Some keys are unsupported on some models/VMs; apply one at a time and keep going.
+	for kv in "sleep 0" "womp 1" "autorestart 1"; do
+		# shellcheck disable=SC2086 # intentional word splitting of "key value"
+		runq pmset -a $kv || warn "pmset -a $kv failed (unsupported on this machine?)"
+	done
+	runq systemsetup -setrestartfreeze on || warn "systemsetup -setrestartfreeze on failed"
+	log "power: sleep 0, womp 1, autorestart 1, restart after freeze on"
+}
+
+step_vmnet_lease() {
+	run defaults write "$LEASE_PLIST" bootpd -dict-add DHCPLeaseTimeSecs -int 600 ||
+		warn "could not set the vmnet DHCP lease"
+	log "vmnet DHCP lease: 600 s"
+}
+
+# VMs dial hostd's relays (8981/8983) over the vmnet bridge; bb_storage listens on loopback only.
+step_firewall() {
+	[ -x "$FIREWALL" ] || return 0
+	bin=$PREFIX/bin/cucina-hostd
+	if [ "$DRY_RUN" = 1 ]; then
+		log "dry-run: $FIREWALL --add $bin; --unblockapp $bin"
+		return 0
+	fi
+	out=$("$FIREWALL" --add "$bin" 2>&1; "$FIREWALL" --unblockapp "$bin" 2>&1) || true
+	case $out in
+	*anaged* | *annot*) log "application firewall is managed by a profile; allow hostd there ($bin)" ;;
+	*) log "application firewall: incoming connections allowed for $bin" ;;
+	esac
+}
+
+step_local_network() {
+	cidrs=$(pref_array "$SETUP_DOMAIN" LocalNetworkAllowedEthernetAddresses)
+	if [ -z "$cidrs" ]; then
+		log "note: Local Network privacy exempts root daemons (hostd); privilege-dropped children are not exempt," \
+			"so hostd makes every VM connection itself. Escape hatch if a denial is ever seen:" \
+			"'cucina-host-setup local-network allow 192.168.64.0/24' (macOS 15.5+, restart required)."
+		return 0
+	fi
+	# shellcheck disable=SC2086 # one CIDR per line
+	set_local_network $cidrs
+}
+
+set_local_network() {
+	for c in "$@"; do
+		case $c in
+		*[!0-9a-fA-F:./]* | '' | */) die "invalid CIDR: $c" ;;
+		*/*) ;;
+		*) die "invalid CIDR (missing /prefix): $c" ;;
+		esac
+	done
+	run defaults write "$LOCALNET_PLIST" AllowedEthernetLocalNetworkAddresses -array "$@"
+	[ "$DRY_RUN" = 1 ] || : >"$PKG_STATE/local-network-set"
+	warn "Local Network escape hatch set for: $* — restart the Mac for it to take effect"
+}
+
+# Validate hostd's configuration early (hostd itself fails fast with exit code 2 and launchd retries).
+step_check_config() {
+	[ -x "$PREFIX/bin/cucina-hostd" ] || return 0
+	if [ ! -r "/Library/Managed Preferences/$HOSTD_DOMAIN.plist" ] && [ ! -r "/Library/Preferences/$HOSTD_DOMAIN.plist" ]; then
+		warn "no hostd configuration yet (profile 02 not delivered): hostd retries until it arrives"
+		return 0
+	fi
+	[ "$DRY_RUN" = 0 ] || return 0
+	if cc_out=$("$PREFIX/bin/cucina-hostd" check-config 2>&1); then
+		log "hostd configuration is valid"
+	else
+		warn "hostd configuration is invalid: $(printf '%s\n' "$cc_out" | tail -1)"
+	fi
+}
+
+step_daemon() {
+	if [ "$DRY_RUN" = 1 ] && [ ! -f "$DAEMON_PLIST" ]; then
+		log "dry-run: launchctl bootstrap system $DAEMON_PLIST (plist not installed here)"
+		return 0
+	fi
+	[ -f "$DAEMON_PLIST" ] || die "$DAEMON_PLIST missing"
+	run chown root:wheel "$DAEMON_PLIST"
+	run chmod 0644 "$DAEMON_PLIST"
+	run launchctl enable "system/$LABEL"
+	if launchctl print "system/$LABEL" >/dev/null 2>&1; then
+		run launchctl kickstart -k "system/$LABEL"
+		log "restarted $LABEL"
+		return 0
+	fi
+	tries=0
+	until run launchctl bootstrap system "$DAEMON_PLIST" 2>/dev/null; do
+		tries=$((tries + 1))
+		[ "$tries" -lt 10 ] || die "launchctl bootstrap system $DAEMON_PLIST failed"
+		sleep 1
+	done
+	log "bootstrapped $LABEL"
+}
+
+step_first_install_restart() {
+	[ "$USER_CREATED" = 1 ] || return 0
+	user=$(vm_user) || die "invalid RunAsUser preference"
+	if [ "$(pref_bool "$SETUP_DOMAIN" RestartAfterFirstInstall true)" != true ]; then
+		log "RestartAfterFirstInstall=false: $user's auto-login session starts at the next restart"
+		return 0
+	fi
+	if [ ! -e /var/db/.AppleSetupDone ]; then
+		log "Setup Assistant has not finished: $user's auto-login session starts at the next restart"
+		return 0
+	fi
+	cu=$(console_user)
+	if [ "$cu" != root ]; then
+		log "$cu is logged in: not restarting; $user's auto-login session starts at the next restart"
+		return 0
+	fi
+	log "restarting in 2 minutes to start $user's auto-login session (unlocked login keychain for Tart, R-MAC-2)"
+	runq shutdown -r +2 "Cucina host setup: restart to start the $user auto-login session" </dev/null ||
+		warn "could not schedule the restart"
+}
+
+cmd_install() {
+	while [ $# -gt 0 ]; do
+		case $1 in
+		--dry-run) DRY_RUN=1 ;;
+		--from-installer) FROM_INSTALLER=1 ;;
+		--no-daemon) NO_DAEMON=1 ;;
+		--prefix)
+			[ $# -ge 2 ] || die "--prefix needs a directory"
+			PREFIX=$2
+			shift
+			;;
+		*) die "install: unknown option $1" ;;
+		esac
+		shift
+	done
+	require_root install
+	version=$(cat "$PREFIX/VERSION" 2>/dev/null || echo unknown)
+	step_directories
+	log "installing Cucina host $version (installer=$FROM_INSTALLER)"
+	step_user
+	step_filevault
+	step_power
+	step_vmnet_lease
+	step_firewall
+	step_local_network
+	step_check_config
+	if [ "$NO_DAEMON" = 0 ]; then step_daemon; else log "--no-daemon: launchd job managed elsewhere (DDM background tasks)"; fi
+	step_first_install_restart
+	log "done ($WARNINGS warning(s)); details: $LOG_FILE"
+}
+
+cmd_status() {
+	user=$(vm_user) || user=cucina
+	printf 'version: %s\n' "$(cat "$PREFIX/VERSION" 2>/dev/null || echo not-installed)"
+	printf 'receipt: %s\n' "$(pkgutil --pkg-info "$PKG_ID" 2>/dev/null | awk '/^version:/ { print $2 }')"
+	state=$(launchctl print "system/$LABEL" 2>/dev/null | awk -F' = ' '/^\tstate = / { print $2; exit }')
+	printf 'daemon: %s\n' "${state:-not loaded}"
+	if user_exists "$user"; then printf 'vm_user: %s (uid %s)\n' "$user" "$(id -u "$user")"; else printf 'vm_user: %s (missing)\n' "$user"; fi
+	printf 'autologin_user: %s\n' "$(autologin_user)"
+	printf 'managed_autologin_user: %s\n' "$(managed_autologin_user)"
+	printf 'console_user: %s\n' "$(console_user)"
+	printf 'filevault: %s\n' "$(fdesetup status 2>/dev/null | head -1)"
+	printf 'pmset: %s\n' "$(pmset -g 2>/dev/null | awk '$1 == "sleep" || $1 == "womp" || $1 == "autorestart" { printf "%s=%s ", $1, $2 }')"
+	printf 'restartfreeze: %s\n' "$(systemsetup -getrestartfreeze 2>/dev/null | sed 's/.*: //')"
+	printf 'vmnet_lease_secs: %s\n' "$(plutil -extract bootpd.DHCPLeaseTimeSecs raw -o - "$LEASE_PLIST.plist" 2>/dev/null || echo default)"
+	# Presence only: the hostd domain holds the site enrollment token, which is never printed.
+	for d in "$HOSTD_DOMAIN" "$SETUP_DOMAIN"; do
+		if [ -r "/Library/Managed Preferences/$d.plist" ]; then
+			printf 'managed_prefs %s: present\n' "$d"
+		else
+			printf 'managed_prefs %s: absent\n' "$d"
+		fi
+	done
+	if [ "$(id -u)" = 0 ]; then
+		printf 'btm: %s\n' "$(sfltool dumpbtm 2>/dev/null | grep -c "$LABEL" || true) entries mention $LABEL"
+	fi
+	printf 'firewall: %s\n' "$("$FIREWALL" --getglobalstate 2>/dev/null | head -1)"
+}
+
+cmd_autologin() {
+	require_root autologin
+	user=$(vm_user) || die "invalid RunAsUser preference"
+	user_exists "$user" || die "user $user does not exist"
+	case ${1:-} in
+	--reset-password) reset_autologin "$user" ;;
+	'')
+		if [ "$(autologin_user)" = "$user" ]; then log "auto-login already set for $user"; else
+			die "auto-login is not set for $user and its password is unknown; use --reset-password"
+		fi
+		;;
+	*) die "autologin: unknown option $1" ;;
+	esac
+}
+
+cmd_hostname() {
+	require_root hostname
+	[ $# -eq 1 ] || die "usage: cucina-host-setup hostname <name>"
+	case $1 in
+	*[!A-Za-z0-9-]* | -* | *-) die "hostname must be letters, digits and inner hyphens: $1" ;;
+	esac
+	run scutil --set ComputerName "$1"
+	run scutil --set LocalHostName "$1"
+	run scutil --set HostName "$1"
+	log "hostname set to $1"
+}
+
+cmd_ssh() {
+	require_root ssh
+	case ${1:-} in
+	on)
+		run launchctl enable system/com.openssh.sshd
+		run launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
+		log "Remote Login (SSH) enabled; restrict it to admins via the com.apple.access_ssh group if needed"
+		;;
+	off)
+		run launchctl bootout system/com.openssh.sshd 2>/dev/null || true
+		run launchctl disable system/com.openssh.sshd
+		log "Remote Login (SSH) disabled"
+		;;
+	*) die "usage: cucina-host-setup ssh on|off" ;;
+	esac
+}
+
+cmd_local_network() {
+	require_root local-network
+	case ${1:-} in
+	allow)
+		shift
+		[ $# -ge 1 ] || die "usage: cucina-host-setup local-network allow <CIDR>..."
+		set_local_network "$@"
+		;;
+	clear)
+		run defaults delete "$LOCALNET_PLIST" AllowedEthernetLocalNetworkAddresses 2>/dev/null || true
+		run rm -f "$PKG_STATE/local-network-set"
+		log "Local Network escape hatch removed (restart to take effect)"
+		;;
+	*) die "usage: cucina-host-setup local-network allow <CIDR>...|clear" ;;
+	esac
+}
+
+main() {
+	[ $# -ge 1 ] || {
+		sed -n '2,/^set -eu/p' "$0" | sed '$d'
+		exit 2
+	}
+	command=$1
+	shift
+	case $command in
+	install) cmd_install "$@" ;;
+	status) cmd_status ;;
+	autologin) cmd_autologin "$@" ;;
+	hostname) cmd_hostname "$@" ;;
+	ssh) cmd_ssh "$@" ;;
+	local-network) cmd_local_network "$@" ;;
+	version) cat "$PREFIX/VERSION" 2>/dev/null || echo unknown ;;
+	-h | --help | help) sed -n '2,/^set -eu/p' "$0" | sed '$d' ;;
+	*) die "unknown command: $command (try --help)" ;;
+	esac
+}
+
+main "$@"

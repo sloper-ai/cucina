@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Policy checks (flake and quarantine rules, manual-check structure, ADR index) and the tests of the git hooks.
+# See TESTING.md ("The Test-Change trailer", "Flaky tests and quarantine") and docs/testing/manual/README.md.
+
+load("//bazel:tiers.bzl", "cucina_sh_test")
+
+# The checks are POSIX shell and awk; Windows CI runs its own targets.
+_NOT_WINDOWS = select({
+    "@platforms//os:windows": ["@platforms//:incompatible"],
+    "//conditions:default": [],
+})
+
+filegroup(
+    name = "scripts",
+    srcs = glob([
+        "*.sh",
+        "*.awk",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+# The hooks against throwaway repositories. Three targets keep each under the integration budget.
+# (tools/ci/mutate-hooks.sh, which deletes every rule in turn and runs these suites, takes minutes and is run by hand.)
+[
+    cucina_sh_test(
+        name = "githooks_%s_test" % suite.replace("-", "_"),
+        timeout = "short",
+        srcs = ["test-githooks.sh"],
+        args = [suite],
+        data = [
+            ":scripts",
+            "//.githooks:files",
+            "//tools:gitleaks",
+        ],
+        env = {"CUCINA_GITLEAKS": "$(rootpath //tools:gitleaks)"},
+        tags = ["no-remote-exec"],  # needs git on the executor
+        target_compatible_with = _NOT_WINDOWS,
+        tier = "integration",
+    )
+    for suite in [
+        "commit-msg",  # the Test-Change rules end to end: as a hook, as a history check, failing closed
+        "rules",  # one case per pattern of the classifiers
+        "pre-push",  # the secret and environment-identifier scans
+    ]
+]
+
+# check-quarantine.sh, check-manual-tests.sh and adr-index.sh against fixture trees.
+cucina_sh_test(
+    name = "ci_scripts_test",
+    timeout = "short",
+    srcs = ["test-ci-scripts.sh"],
+    data = [":scripts"],
+    target_compatible_with = _NOT_WINDOWS,
+    tier = "integration",
+)
+
+# The real manual checklists have the structure TESTING.md requires.
+cucina_sh_test(
+    name = "manual_tests_check",
+    srcs = ["check-manual-tests.sh"],
+    data = [
+        ":scripts",
+        "//docs/testing/manual:files",
+    ],
+    target_compatible_with = _NOT_WINDOWS,
+    tier = "static",
+)

@@ -43,6 +43,7 @@ cucina_go_test(
         "ca_test.go",
         "identity_test.go",
         "issuer_test.go",
+        "lifetime_test.go",
         "reload_test.go",
         "secrets_test.go",
         "verify_test.go",

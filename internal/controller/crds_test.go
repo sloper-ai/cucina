@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authorizationv1 "k8s.io/api/authorization/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,6 +92,14 @@ func TestApplyCRDs(t *testing.T) {
 	require.NoError(t, err)
 	hook, err := client.New(user.Config(), client.Options{})
 	require.NoError(t, err)
+	// RBAC takes effect once the API server's authorizer has synced the binding.
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		ssar := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authorizationv1.ResourceAttributes{
+			Verb: "patch", Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions", Name: "workerpools.cucina.sloper.ai"}}}
+		if assert.NoError(c, hook.Create(ctx, ssar)) {
+			assert.True(c, ssar.Status.Allowed)
+		}
+	}, 15*time.Second, 100*time.Millisecond)
 
 	for range 2 { // the second run is the idempotent `helm upgrade` case
 		objs, err := controller.ParseCRDs(crds.FS) // ApplyCRDs may mutate its input

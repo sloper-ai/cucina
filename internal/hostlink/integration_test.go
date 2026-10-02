@@ -60,9 +60,12 @@ type hostEnv struct {
 	done      chan error
 }
 
-func newEnv(t *testing.T) *hostEnv {
+// newEnv builds the test bed inside a synctest bubble; ef comes from
+// hostlinktest.NewEnroll, created outside the bubble.
+func newEnv(t *testing.T, ef *hostlinktest.Enroll) *hostEnv {
 	n := hostlinktest.NewNet()
-	e := &hostEnv{token: hostlinktest.Token, net: n, ctrl: hostlinktest.NewController(t, n), tart: faketart.New(),
+	ctrl := hostlinktest.NewController(t, n, ef)
+	e := &hostEnv{token: ctrl.Token, net: n, ctrl: ctrl, tart: faketart.New(),
 		stateDir: t.TempDir(), secretDir: t.TempDir()}
 	e.tart.Registry[image] = faketart.Image{Ref: image, SizeGB: 70, Private: true}
 	return e
@@ -151,14 +154,15 @@ func startReq(name string) ports.StartVMRequest {
 // R-MAC-3 (clone, start with the measured flags, persistent stop, 2-VM cap,
 // crash recovery, disk full) and R-MAC-4 (identity + config injected at boot).
 func TestHostdEndToEnd(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
 	synctest.Test(t, func(t *testing.T) {
-		e := newEnv(t)
+		e := newEnv(t, ef)
 		e.start(t)
 		// Pending until an admin approves the serial; hostd honours retry_after.
-		advanceUntil(t, "enrollment polled", time.Minute, func() bool { _, calls := e.ctrl.Enroll.Exchanges(); return calls >= 2 })
+		advanceUntil(t, "enrollment polled", time.Minute, func() bool { _, calls := e.ctrl.Counter.Exchanges(); return calls >= 2 })
 		_, ok := e.hostState(t)
 		require.False(t, ok, "a pending host must not connect")
-		e.ctrl.Enroll.Approve(serial)
+		e.ctrl.Approve(t, serial)
 		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
 		fleet := e.ctrl.Host()
 		ctx := context.Background()
@@ -234,7 +238,7 @@ func TestHostdEndToEnd(t *testing.T) {
 		advanceUntil(t, "vm-4 cloned after backoff", 5*time.Minute, func() bool { return e.vmState(t, "vm-4") == domain.VMRegistered })
 
 		// The site token was exchanged exactly once.
-		ex, _ := e.ctrl.Enroll.Exchanges()
+		ex, _ := e.ctrl.Counter.Exchanges()
 		require.Equal(t, 1, ex)
 		e.powerOff(t)
 	})
@@ -245,9 +249,10 @@ func TestHostdEndToEnd(t *testing.T) {
 // (R-TEST-7): toxiproxy-style reset_peer, timeout and down faults on the
 // hostd→controller link and a controller restart that loses all state.
 func TestReconnectAndResync(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
 	synctest.Test(t, func(t *testing.T) {
-		e := newEnv(t)
-		e.ctrl.Enroll.Approve(serial)
+		e := newEnv(t, ef)
+		e.ctrl.Approve(t, serial)
 		e.start(t)
 		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
 		ctx := context.Background()
@@ -299,9 +304,10 @@ func TestReconnectAndResync(t *testing.T) {
 // KeepAlive): a restarted hostd rebuilds its state from tart and the journal,
 // adopts the running VM without restarting it and never re-sends the token.
 func TestHostdRestartAdoptsVMs(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
 	synctest.Test(t, func(t *testing.T) {
-		e := newEnv(t)
-		e.ctrl.Enroll.Approve(serial)
+		e := newEnv(t, ef)
+		e.ctrl.Approve(t, serial)
 		e.start(t)
 		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
 		require.NoError(t, e.ctrl.Host().StartVM(context.Background(), serial, startReq("vm-1")))
@@ -314,7 +320,7 @@ func TestHostdRestartAdoptsVMs(t *testing.T) {
 		advanceUntil(t, "vm adopted", time.Minute, func() bool { return e.vmState(t, "vm-1") == domain.VMRegistered })
 		require.Equal(t, pid, e.tart.VM("cucina-vm-vm-1").RunArgs)
 		require.Equal(t, 1, e.tart.RunningCount())
-		ex, calls := e.ctrl.Enroll.Exchanges()
+		ex, calls := e.ctrl.Counter.Exchanges()
 		require.Equal(t, 1, ex)
 		require.Equal(t, 1, calls, "the site token is never re-sent after enrollment")
 		e.powerOff(t)
@@ -325,9 +331,10 @@ func TestHostdRestartAdoptsVMs(t *testing.T) {
 // command_id: a duplicate (a controller retry) is executed once and answered
 // with the stored result.
 func TestCommandIdempotency(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
 	synctest.Test(t, func(t *testing.T) {
-		e := newEnv(t)
-		e.ctrl.Enroll.Approve(serial)
+		e := newEnv(t, ef)
+		e.ctrl.Approve(t, serial)
 		e.start(t)
 		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
 		pull := func() error {
@@ -348,13 +355,14 @@ func TestCommandIdempotency(t *testing.T) {
 // TestEnrollmentRefused guards R-SEC-3 fail-fast: an invalid site token ends
 // hostd with ErrTokenInvalid (exit code 3) instead of retrying forever.
 func TestEnrollmentRefused(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
 	synctest.Test(t, func(t *testing.T) {
-		e := newEnv(t)
-		e.token = "cst_wrong"
+		e := newEnv(t, ef)
+		e.token = "cuc_et_wrong0000_notthesecret"
 		e.start(t)
 		err := <-e.done
 		require.ErrorIs(t, err, identity.ErrTokenInvalid)
-		ex, _ := e.ctrl.Enroll.Exchanges()
+		ex, _ := e.ctrl.Counter.Exchanges()
 		require.Zero(t, ex)
 	})
 }
@@ -363,9 +371,10 @@ func TestEnrollmentRefused(t *testing.T) {
 // unit log, the last N lines, followed while it grows, with certificates, keys
 // and tokens redacted on the host before they leave it.
 func TestWorkerLogStreaming(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
 	synctest.Test(t, func(t *testing.T) {
-		e := newEnv(t)
-		e.ctrl.Enroll.Approve(serial)
+		e := newEnv(t, ef)
+		e.ctrl.Approve(t, serial)
 		e.start(t)
 		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
 		require.NoError(t, e.ctrl.Host().StartVM(context.Background(), serial, startReq("vm-1")))
@@ -404,9 +413,37 @@ func TestWorkerLogStreaming(t *testing.T) {
 		cancel()
 		for range got {
 		}
-		_, err = e.ctrl.Host().Diagnostics(context.Background(), serial, hostlink.DiagnosticsRequest{VM: "nope", Unit: "bb-worker"})
-		require.NoError(t, err, "the stream opens; the host rejects the unknown VM")
-		time.Sleep(hostd.FollowLimit) // let the followed stream end on the host before power-off
+		// Closing the stream sends CancelCommand: the host stops following long before FollowLimit.
+		advanceUntil(t, "followed stream cancelled on the host", 30*time.Second, func() bool { return e.agent.Link().Running() == 0 })
+		r, err = e.ctrl.Host().Diagnostics(context.Background(), serial, hostlink.DiagnosticsRequest{VM: "nope", Unit: "bb-worker"})
+		require.NoError(t, err)
+		_, err = io.ReadAll(r)
+		require.ErrorIs(t, err, ports.ErrVMNotFound, "the host rejects an unknown VM")
+		e.powerOff(t)
+	})
+}
+
+// TestHostCertificateRenewal guards R-SEC-2 for hosts: hostd renews its
+// certificate before expiry over mTLS (RenewCertificate, delegated to enroll,
+// which records the renewal on the host's record) and keeps working.
+func TestHostCertificateRenewal(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
+	synctest.Test(t, func(t *testing.T) {
+		e := newEnv(t, ef)
+		e.ctrl.Approve(t, serial)
+		e.start(t)
+		advanceUntil(t, "host online", 2*time.Minute, e.online(t))
+		first := e.agent.CertificateExpiry()
+		require.False(t, first.IsZero())
+		lifetime := first.Sub(time.Now())
+		// Two thirds of the lifetime later the housekeeping loop renews.
+		advanceUntil(t, "certificate renewed", lifetime, func() bool { return e.agent.CertificateExpiry().After(first) })
+		hosts, err := ef.Server.Admin().ListHosts(context.Background())
+		require.NoError(t, err)
+		require.Len(t, hosts, 1)
+		require.Equal(t, e.agent.CertificateExpiry(), hosts[0].CertExpiry, "enroll recorded the renewal")
+		require.Less(t, time.Now().Sub(first.Add(-lifetime)), lifetime, "renewed before expiry")
+		require.NoError(t, e.ctrl.Host().Ping(context.Background(), serial))
 		e.powerOff(t)
 	})
 }

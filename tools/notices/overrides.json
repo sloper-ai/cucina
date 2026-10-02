@@ -1,0 +1,4 @@
+{
+  "$comment": "For a Go module that has no licence file in its root: name the text to reproduce (a file under texts/) and the SPDX identifier, with the evidence in 'why'. Empty until a dependency needs it.",
+  "modules": {}
+}

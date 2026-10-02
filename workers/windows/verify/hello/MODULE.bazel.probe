@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Probe workspace: rules_cc's autodetected MSVC toolchain with VS 2026 Build Tools (R-POOL-5, §10.2).
+module(name = "cucina_msvc_probe")
+
+bazel_dep(name = "rules_cc", version = "0.2.25")

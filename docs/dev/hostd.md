@@ -304,9 +304,27 @@ derived share.
 * hostlink re-sends unanswered commands after a reconnect with the same id, marks a host offline on disconnect or after
   `StaleAfter` (45 s) without messages (its VMs become `unavailable`), and issues VM identities only for VMs it asked that
   host to run (the serial always comes from the client certificate; a `Hello` claiming another serial is refused).
+  `RenewCertificate` and `IssueVMIdentity` are delegated to `internal/enroll.Server` (host still approved and enrolled;
+  the bound key is updated when hostd rotates it; VM settings come from the pool configuration).
 * Diagnostics: `CollectDiagnostics{vm_name, unit, tail_lines, follow}` streams one VM's `bb-worker`/`bb-runner` log or
-  hostd's own (`agent`), followed for at most 10 min; everything is passed through `redact` on the host (PEM blocks,
-  JWTs, `cuc_*` tokens, GitHub/AWS credentials, password assignments, the configured site token).
+  hostd's own (`agent`), followed until the controller sends `CancelCommand{target_command_id}` (hostlink does so when
+  the reader closes or its context ends) or for at most 10 min; everything is passed through `redact` on the host (PEM
+  blocks, JWTs, `cuc_*` tokens, GitHub/AWS credentials, password assignments, the configured site token).
+* `HostSettings.maximum_message_size_bytes` (default 16 MiB) configures the L2 `bb_storage` like every other
+  Buildbarn component.
+
+### 4.2a Notes for other components
+
+* **chart / auth**: the host L2 forwards its VMs' CAS/AC writes to the central worker endpoint with the **host**
+  identity (`spiffe://cucina/host/<serial>`), so the frontend's worker listener must authorize host identities for
+  worker-scope CAS/AC writes (enroll's policy allows it; ADR 0700).
+* **coreb**: `s, _ := hostlink.New(hostlink.Deps{Certs: <*enroll.Server>, Registry: hostlink.StaticRegistry{…},
+  Welcome: <per host: slots, desired images, HostSettings{central_endpoint, scheduler_endpoint,
+  maximum_message_size_bytes}>, Auth: <MacHost not denied>, Clock, StaleAfter: config.Hosts.StaleAfter})`;
+  `s.Register(grpcServer)` on the mTLS host listener (client certificates required, Cucina CA) with
+  `keepalive.EnforcementPolicy{MinTime: 10 * time.Second, PermitWithoutStream: true}`; `go s.Run(ctx)`; use `s` as
+  `ports.HostFleet`; `Hosts`/`Metrics`/`Facts` feed the MacHost status; `SetCordon`, `Reimage(serial, "")` and
+  `Diagnostics(serial, DiagnosticsRequest)` back the management API's HostAdmin.
 
 ### 4.3 Metrics and logs
 

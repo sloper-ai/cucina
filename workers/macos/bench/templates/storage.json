@@ -1,0 +1,57 @@
+{
+  "grpcServers": [
+    {
+      "listenAddresses": ["@LISTEN@"],
+      "authenticationPolicy": { "allow": {} },
+      "maximumReceivedMessageSizeBytes": 16777216
+    }
+  ],
+  "contentAddressableStorage": {
+    "backend": {
+      "local": {
+        "keyLocationMap": { "inMemory": { "entries": 1048576 }, "maximumGetAttempts": 16, "maximumPutAttempts": 64 },
+        "oldBlocks": 1,
+        "currentBlocks": 6,
+        "newBlocks": 1,
+        "blocksInMemory": { "blockSizeBytes": 268435456 }
+      }
+    },
+    "getAuthorizer": { "allow": {} },
+    "putAuthorizer": { "allow": {} },
+    "findMissingAuthorizer": { "allow": {} }
+  },
+  "actionCache": {
+    "backend": {
+      "completenessChecking": {
+        "backend": {
+          "local": {
+            "keyLocationMap": { "inMemory": { "entries": 65536 }, "maximumGetAttempts": 16, "maximumPutAttempts": 64 },
+            "oldBlocks": 1,
+            "currentBlocks": 1,
+            "newBlocks": 1,
+            "blocksInMemory": { "blockSizeBytes": 16777216 }
+          }
+        },
+        "maximumTotalTreeSizeBytes": 67108864
+      }
+    },
+    "getAuthorizer": { "allow": {} },
+    "putAuthorizer": { "allow": {} }
+  },
+  "fileSystemAccessCache": {
+    "backend": {
+      "local": {
+        "keyLocationMap": { "inMemory": { "entries": 65536 }, "maximumGetAttempts": 16, "maximumPutAttempts": 64 },
+        "oldBlocks": 1,
+        "currentBlocks": 1,
+        "newBlocks": 1,
+        "blocksInMemory": { "blockSizeBytes": 16777216 }
+      }
+    },
+    "getAuthorizer": { "allow": {} },
+    "putAuthorizer": { "allow": {} }
+  },
+  "schedulers": { "": { "endpoint": { "address": "@SCHEDULER@" } } },
+  "executeAuthorizer": { "allow": {} },
+  "maximumMessageSizeBytes": 16777216
+}

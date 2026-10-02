@@ -109,8 +109,7 @@ test profiles: [`ci/`](ci).
 | `controller.worker.metricsPort` | integer |  |
 | `controller.worker.pushgatewayUrl` | string |  |
 | `controller.worker.wanCompressionForHosts` | boolean |  |
-| `crds.install` | boolean | Install/upgrade the WorkerPool, MacHost and TrustPolicy CRDs from templates. |
-| `crds.keep` | boolean | Annotate the CRDs with helm.sh/resource-policy=keep so uninstall keeps them and their objects. |
+| `crds.install` | boolean | Apply the WorkerPool, MacHost and TrustPolicy CRDs from the controller image before every install and upgrade (cluster-scoped hook RBAC). false: the CRDs are managed elsewhere (use helm --skip-crds). |
 | `endpoints.client.extraNames` | array | Extra DNS names/IPs for the public certificate. |
 | `endpoints.client.host` | see schema | Public DNS name or IP of the remote-execution endpoint. |
 | `endpoints.client.port` | integer | External port of the remote-execution endpoint. |
@@ -175,7 +174,7 @@ test profiles: [`ci/`](ci).
 | `hooks.resources.limits` | object |  |
 | `hooks.resources.requests` | object |  |
 | `hooks.test.credentialKey` | string |  |
-| `hooks.test.credentialSecret` | string | Secret with the service-account key the canary uses; empty = the break-glass key. |
+| `hooks.test.credentialSecret` | string | Secret with the service-account key of the canaries (helm test and the controller's 5-minute loop); empty = the break-glass key. |
 | `hooks.test.enabled` | boolean | helm test cache canary (R-CP-7). |
 | `hooks.uninstallPrep.enabled` | boolean | pre-delete Job that drains and terminates every worker (R-OPS-3). |
 | `hooks.uninstallPrep.timeout` | string |  |

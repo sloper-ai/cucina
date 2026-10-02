@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
 //! Property tests for `.bazelrc` generation (UC9, R-DATA-1, §10.2, R-RE-1,
-//! R-XPLAT-2(d), R-XPLAT-4, R-AUTH-8): every generated flag exists in Bazel 9.2,
-//! startup options come first, the credential helper is host-scoped, platform
-//! flags and exec-platform ordering follow the rules, per-target extras (MSVC
-//! EULA, Windows test env) appear exactly where they must, and every line survives
-//! Bazel's rc tokenizer (quoting of Windows paths).
+//! R-XPLAT-2(d), R-XPLAT-4, R-AUTH-8) over the embedded `platforms/targets.json`:
+//! every generated flag exists in Bazel 9.2 (or is an exec platform's build
+//! setting), only `startup` and `build` lines with `startup` first, the credential
+//! helper is host-scoped, platform flags and exec-platform ordering follow the
+//! rules, per-target extras (exec-platform flags, MSVC EULA, Windows test env,
+//! scaled test timeouts, Windows-client lines) appear exactly where they must, and
+//! every line survives Bazel's rc tokenizer (quoting of Windows paths).
 
 mod support;
 
@@ -98,6 +100,7 @@ fn request_strategy() -> impl Strategy<Value = Request> {
         .targets
         .targets
         .iter()
+        .filter(|t| !t.excluded)
         .map(|t| {
             let pools = t
                 .exec_platforms
@@ -217,9 +220,19 @@ fn request_strategy() -> impl Strategy<Value = Request> {
         )
 }
 
+/// Build settings (`--@repo//pkg:name=…`) an exec platform of the catalog requires.
+fn catalog_build_settings(cat: &Catalog) -> BTreeSet<String> {
+    cat.targets
+        .exec_platforms
+        .iter()
+        .flat_map(|e| e.flags.iter().cloned())
+        .collect()
+}
+
 fn check_invariants(cat: &Catalog, allow: &Allow, req: &Request, rc: &Bazelrc) {
-    // Lines: flags only through `startup` / `common[:config]`, startup first.
-    let mut seen_common = false;
+    // Lines: flags only through `startup` / `build[:config]`, startup first.
+    let settings = catalog_build_settings(cat);
+    let mut seen_build = false;
     let mut names: Vec<String> = Vec::new();
     for line in &rc.lines {
         let Line::Flag {
@@ -232,11 +245,13 @@ fn check_invariants(cat: &Catalog, allow: &Allow, req: &Request, rc: &Bazelrc) {
         };
         match *command {
             "startup" => {
-                assert!(!seen_common, "startup lines come first");
+                assert!(!seen_build, "startup lines come first");
                 assert!(config.is_none(), "startup options cannot have a config");
             }
-            "common" => {
-                seen_common = true;
+            // `build`, never `common`: common: lines of a config expand before its
+            // build: lines and would lose against other rc files (ADR 0807).
+            "build" => {
+                seen_build = true;
                 assert_eq!(config, &req.config_name, "config scoping");
             }
             other => panic!("unexpected command {other}"),
@@ -253,16 +268,22 @@ fn check_invariants(cat: &Catalog, allow: &Allow, req: &Request, rc: &Bazelrc) {
         } else {
             "build"
         };
-        let known = allow.contains(&(scope.to_string(), name.clone(), false))
-            || allow.contains(&(scope.to_string(), name.clone(), true))
-            || name
-                .strip_prefix("no")
-                .is_some_and(|n| allow.contains(&(scope.to_string(), n.to_string(), true)));
+        let known = if name.starts_with('@') || name.starts_with("//") {
+            // A build setting: only verbatim from the catalog's exec platforms.
+            settings.contains(flag.as_str())
+        } else {
+            allow.contains(&(scope.to_string(), name.clone(), false))
+                || allow.contains(&(scope.to_string(), name.clone(), true))
+                || name
+                    .strip_prefix("no")
+                    .is_some_and(|n| allow.contains(&(scope.to_string(), n.to_string(), true)))
+        };
         assert!(known, "--{name} is not a Bazel 9.2 {scope} flag");
         names.push(name);
         // The rendered line tokenizes back to exactly [command(:config), flag].
         let rendered = Bazelrc {
             lines: vec![line.clone()],
+            notes: vec![],
         }
         .to_string();
         let tokens = tokenize(rendered.trim_end());
@@ -336,9 +357,38 @@ fn check_invariants(cat: &Catalog, allow: &Allow, req: &Request, rc: &Bazelrc) {
         assert!(rc.flags().any(|(_, f)| f == "--noremote_local_fallback"));
     }
 
+    // Settings and lines that only cross configurations or Windows clients get.
+    let windows_client_cross =
+        matches!(req.mode, Mode::Cross { .. }) && req.client_os == Os::Windows;
+    for (flag, value) in [
+        ("action_env", "PATH=/bin:/usr/bin:/usr/local/bin"),
+        ("host_action_env", "PATH=/bin:/usr/bin:/usr/local/bin"),
+    ] {
+        assert_eq!(
+            rc.value(flag),
+            windows_client_cross.then_some(value),
+            "--{flag}: Windows clients of cross configurations only"
+        );
+    }
+    assert_eq!(
+        rc.flags().any(|f| f == ("build", "--enable_runfiles")),
+        windows_client_cross
+    );
+    assert_eq!(
+        rc.flags()
+            .any(|f| f == ("startup", "--windows_enable_symlinks")),
+        windows_client_cross
+    );
+    let emitted_settings: Vec<&str> = rc
+        .flags()
+        .map(|(_, f)| f)
+        .filter(|f| f.starts_with("--@") || f.starts_with("--//"))
+        .collect();
+
     // Platforms.
     if req.cache_only {
         assert_eq!(rc.value("platforms"), None);
+        assert!(emitted_settings.is_empty() && rc.notes.is_empty());
         return;
     }
     let exec: Vec<&str> = rc
@@ -380,6 +430,21 @@ fn check_invariants(cat: &Catalog, allow: &Allow, req: &Request, rc: &Bazelrc) {
                 assert_eq!(exec[0], want);
             }
             assert!(repo_env.is_empty() && test_env.is_empty());
+            assert_eq!(rc.value("test_timeout"), None);
+            assert!(rc.notes.is_empty());
+            // The chosen platform's flags with the module's labels (they name
+            // @cucina_platforms settings), none with workspace labels.
+            let chosen = cat
+                .targets
+                .exec_platforms
+                .iter()
+                .find(|e| exec_label_of(e, &req.labels) == exec[0])
+                .expect("emitted exec platform is in the catalog");
+            let want_settings: Vec<&str> = match req.labels {
+                Labels::Module => chosen.flags.iter().map(String::as_str).collect(),
+                Labels::Package(_) => vec![],
+            };
+            assert_eq!(emitted_settings, want_settings);
         }
         Mode::Cross { target, exec_pool } => {
             let t = cat.target(target).unwrap();
@@ -444,7 +509,7 @@ fn check_invariants(cat: &Catalog, allow: &Allow, req: &Request, rc: &Bazelrc) {
             } else {
                 assert!(repo_env.is_empty(), "only MSVC targets get EULA flags");
             }
-            if t.os == "windows" && req.client_os != Os::Windows {
+            if t.os == "windows" {
                 let keys: Vec<&str> = test_env
                     .iter()
                     .map(|e| e.split('=').next().unwrap())
@@ -452,12 +517,56 @@ fn check_invariants(cat: &Catalog, allow: &Allow, req: &Request, rc: &Bazelrc) {
                 assert_eq!(
                     keys,
                     ["SYSTEMROOT", "PATH"],
-                    "Windows test env for non-Windows clients"
+                    "Windows test env from every client OS"
                 );
+                assert!(test_env[0].ends_with(r"=C:\Windows"));
             } else {
                 assert!(test_env.is_empty());
             }
+            // The @bazel_tools overlay note: Windows tests from Linux/macOS clients.
+            assert_eq!(
+                rc.notes.len(),
+                usize::from(t.os == "windows" && req.client_os != Os::Windows)
+            );
+            // Emulated runners: Bazel's timeouts scaled by testTimeoutScale.
+            match (t.test_timeout_scale, &t.test) {
+                (Some(k), Some(_)) if k != 1.0 => {
+                    let want: Vec<String> = [60.0, 300.0, 900.0, 3600.0]
+                        .iter()
+                        .map(|b: &f64| ((b * k).round() as u64).to_string())
+                        .collect();
+                    assert_eq!(rc.value("test_timeout"), Some(want.join(",").as_str()));
+                }
+                _ => assert_eq!(rc.value("test_timeout"), None),
+            }
+            // Exec-platform flags: those of the listed compile platforms, chosen
+            // first, the first of each name winning.
+            let mut want_settings: Vec<&str> = Vec::new();
+            let mut names: Vec<&str> = Vec::new();
+            for label in &exec[..compile_count] {
+                let e = cat
+                    .targets
+                    .exec_platforms
+                    .iter()
+                    .find(|e| e.label == *label)
+                    .unwrap();
+                for f in &e.flags {
+                    let n = f.split('=').next().unwrap();
+                    if !names.contains(&n) {
+                        names.push(n);
+                        want_settings.push(f);
+                    }
+                }
+            }
+            assert_eq!(emitted_settings, want_settings);
         }
+    }
+}
+
+fn exec_label_of(e: &cucinactl::catalog::ExecPlatform, labels: &Labels) -> String {
+    match labels {
+        Labels::Module => e.label.clone(),
+        Labels::Package(pkg) => format!("{pkg}:{}-{}", e.pool, e.runner),
     }
 }
 
@@ -506,12 +615,33 @@ fn unsupported_placements_are_refused() {
     let cases = [
         ("macOS target compiled on Linux", base.clone()),
         (
-            "unknown target",
+            "excluded target",
             Request {
                 mode: Mode::Cross {
                     target: "x86_64-apple-darwin".into(),
                     exec_pool: None,
                 },
+                ..base.clone()
+            },
+        ),
+        (
+            "unknown target",
+            Request {
+                mode: Mode::Cross {
+                    target: "sparc64-sun-solaris".into(),
+                    exec_pool: None,
+                },
+                ..base.clone()
+            },
+        ),
+        (
+            "cross configuration without remote execution",
+            Request {
+                mode: Mode::Cross {
+                    target: "x86_64-linux-gnu".into(),
+                    exec_pool: None,
+                },
+                cache_only: true,
                 ..base.clone()
             },
         ),

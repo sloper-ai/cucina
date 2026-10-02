@@ -1,0 +1,73 @@
+#!/bin/bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# Dead-man switch (R-POOL-7), run every minute by cucina-deadman.timer. Powers the machine off - on EC2 that
+# terminates it, because pools launch with InstanceInitiatedShutdownBehavior=terminate - when
+#   idle     now - mtime(/run/cucina/last-activity) > IDLE_LIMIT_SECONDS    (default 1800)
+#   contact  now - mtime(/run/cucina/last-contact)  > CONTACT_LIMIT_SECONDS (default  600)
+#   uptime   uptime                                  > MAX_UPTIME_SECONDS    (default 43200)
+# The worker agent refreshes the files' modification times; a missing file counts as "at boot", so a worker
+# that never bootstraps or never reaches the scheduler still powers itself off. Works without the controller.
+# Overrides: /etc/cucina/deadman.env (the agent syncs the pool's limits into it); `touch /run/cucina/deadman-disabled`
+# pauses it until reboot. An instance the bootstrap marked "not a worker" (/run/cucina/not-a-worker: no EC2 user data,
+# e.g. an image build) is only held to NOT_A_WORKER_LIMIT_SECONDS (default 1800, like the agent's not-bootstrapped rule)
+# and the uptime limit.
+#   cucina-deadman [--dry-run]
+set -euo pipefail
+
+IDLE_LIMIT_SECONDS=1800
+CONTACT_LIMIT_SECONDS=600
+MAX_UPTIME_SECONDS=43200
+NOT_A_WORKER_LIMIT_SECONDS=1800
+ENABLED=1
+# shellcheck source=/dev/null
+[[ -r /etc/cucina/deadman.env ]] && . /etc/cucina/deadman.env
+
+run=/run/cucina
+now=$(date +%s)
+uptime=$(cut -d. -f1 /proc/uptime)
+boot=$((now - uptime))
+
+mark() {
+  local f="$run/$1" t
+  if [[ -e "$f" ]]; then
+    t=$(stat -c %Y "$f")
+    if ((t > boot)); then
+      echo "$t"
+      return
+    fi
+  fi
+  echo "$boot"
+}
+
+idle=$((now - $(mark last-activity)))
+nocontact=$((now - $(mark last-contact)))
+reasons=()
+if ((uptime > MAX_UPTIME_SECONDS)); then reasons+=("uptime ${uptime}s > ${MAX_UPTIME_SECONDS}s"); fi
+if [[ -e "$run/not-a-worker" ]]; then
+  if ((uptime > NOT_A_WORKER_LIMIT_SECONDS)); then reasons+=("not a worker, up ${uptime}s > ${NOT_A_WORKER_LIMIT_SECONDS}s"); fi
+else
+  if ((idle > IDLE_LIMIT_SECONDS)); then reasons+=("idle ${idle}s > ${IDLE_LIMIT_SECONDS}s"); fi
+  if ((nocontact > CONTACT_LIMIT_SECONDS)); then reasons+=("no scheduler contact ${nocontact}s > ${CONTACT_LIMIT_SECONDS}s"); fi
+fi
+
+why=""
+if ((${#reasons[@]})); then why=$(printf '%s; ' "${reasons[@]}"); why=${why%; }; fi
+if [[ -d "$run" ]]; then
+  printf '{"evaluated_at":%s,"uptime_s":%s,"idle_s":%s,"no_contact_s":%s,"enabled":%s,"reasons":"%s"}\n' \
+    "$now" "$uptime" "$idle" "$nocontact" "$ENABLED" "$why" >"$run/deadman-status.json"
+fi
+if [[ -z "$why" ]]; then
+  [[ "${1:-}" == --dry-run ]] && echo "deadman: ok"
+  exit 0
+fi
+if [[ "$ENABLED" != 1 || -e "$run/deadman-disabled" ]]; then
+  echo "deadman: would power off ($why) but is disabled"
+  exit 0
+fi
+if [[ "${1:-}" == --dry-run ]]; then
+  echo "deadman: would power off: $why"
+  exit 0
+fi
+logger -t cucina-deadman -p daemon.warning "power off: $why"
+systemctl poweroff --no-block

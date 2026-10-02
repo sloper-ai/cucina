@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# The Windows flags from §10.2; BAZEL_VC/BAZEL_VC_FULL_VERSION/BAZEL_WINSDK_FULL_VERSION are passed on the
+# command line from the image's C:\ProgramData\cucina\image\toolchain.json.
+startup --output_user_root=C:/b --windows_enable_symlinks
+common --enable_runfiles
+build --features=compiler_param_file
+build --features=-parse_showincludes --host_features=-parse_showincludes
+build --cxxopt=/std:c++17 --host_cxxopt=/std:c++17
+test --test_output=errors

@@ -75,8 +75,13 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	deleting := !wp.DeletionTimestamp.IsZero()
 	if !deleting && !controllerutil.ContainsFinalizer(&wp, v1alpha1.Finalizer) {
+		// Patch only metadata.finalizers: a full-object Update would rewrite the
+		// user's spec through the Go types ("168h" becomes "168h0m0s", zero values
+		// appear) and make the controller own those fields, so the next server-side
+		// apply of the spec (Helm 4) conflicts with it.
+		before := wp.DeepCopy()
 		controllerutil.AddFinalizer(&wp, v1alpha1.Finalizer)
-		if err := r.Client.Update(ctx, &wp); err != nil {
+		if err := r.Client.Patch(ctx, &wp, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -151,7 +156,7 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		before := wp.DeepCopy()
 		controllerutil.RemoveFinalizer(&wp, v1alpha1.Finalizer)
-		if err := r.Client.Patch(ctx, &wp, client.MergeFrom(before)); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Client.Patch(ctx, &wp, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
 		r.Log.Info("worker pool retired: every VM stopped, finalizer removed", "pool", name)

@@ -1,0 +1,39 @@
+{
+  "blobstore": {
+    "contentAddressableStorage": {
+      "readCaching": {
+        "slow": { "grpc": { "client": { "address": "@STORAGE@" } } },
+        "fast": {
+          "local": {
+            "keyLocationMapOnBlockDevice": { "file": { "path": "@STATE@/l1/key_location_map", "sizeBytes": "67108864" } },
+            "keyLocationMapMaximumGetAttempts": 16,
+            "keyLocationMapMaximumPutAttempts": "64",
+            "oldBlocks": 8,
+            "currentBlocks": 24,
+            "newBlocks": 3,
+            "blocksOnBlockDevice": {
+              "source": { "file": { "path": "@STATE@/l1/blocks", "sizeBytes": "8589934592" } },
+              "spareBlocks": 3,
+              "dataIntegrityValidationCache": { "cacheSize": "100000", "cacheDuration": "14400s", "cacheReplacementPolicy": "LEAST_RECENTLY_USED" }
+            },
+            "persistent": { "stateDirectoryPath": "@STATE@/l1/state", "minimumEpochInterval": "300s" }
+          }
+        },
+        "replicator": { "deduplicating": { "concurrencyLimiting": { "base": { "local": {} }, "maximumConcurrency": "32" } } }
+      }
+    },
+    "actionCache": { "grpc": { "client": { "address": "@STORAGE@" } } }
+  },
+  "maximumMessageSizeBytes": "16777216",
+  "scheduler": { "address": "@SCHEDULER@" },
+  "global": {
+    "diagnosticsHttpServer": {
+      "httpServers": [ { "listenAddresses": ["127.0.0.1:9986"], "authenticationPolicy": { "allow": {} } } ],
+      "enablePrometheus": true
+    }
+  },
+  "filePool": { "blockDevice": { "file": { "path": "@STATE@/filepool/pool", "sizeBytes": "17179869184" } } },
+  "outputUploadConcurrency": "16",
+  "inputDownloadConcurrency": "32",
+  "directoryCache": { "maximumCount": "10000", "maximumSizeBytes": "16777216", "cacheReplacementPolicy": "LEAST_RECENTLY_USED" }
+}

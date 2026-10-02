@@ -1,0 +1,49 @@
+ 1 Overview   2 Pools   3 Hosts   4 Ops   5 Cost   6 Keys                ● LIVE
+┌ Pools (4) ───────────────────────────────────────────────────────────────────┐
+│POOL                  PROVIDER DES/MAX BOOT READY BUSY DRAIN IMAGE CONDITION  │
+│linux-aarch64         ec2          0/4    0     0    0     0 g3    Ready      │
+│linux-x86-64          ec2          3/8    1     0    2     0 g7    Ready      │
+│macos-arm64-xcode27.0 tart         2/4    0     1    1     0 g2    Ready      │
+│windows-x86-64        ec2          1/4    1     0    0     0 g5    Ready      │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Wor┌ Confirm ───────────────────────────────────────────────────────────┐────┐
+│NODE│Drain worker i-0a1b2c3d4e5f60718?                                   │    │
+│i-0a│Pool linux-x86-64; 32/32 runner threads busy.                       │ 14m│
+│i-0a│It takes no new actions; running actions finish, then               │  9m│
+│i-0a│it is stopped once idle. u (undrain) reverts this.                  │ 20s│
+│    │                                                                    │    │
+└────│                          [ No ]   [ Yes ]                          │────┘
+┌ Sca└────────────────────────────────────────────────────────────────────┘────┐
+│   20s launch    i-0a1b2c3d4e5f6071a q││VM        PATH       RUN   REG   1ST  │
+│    8m register  i-0a1b2c3d4e5f60719 f││i-0a1b2c3 slow         18s   37s   39s│
+│    9m launch    i-0a1b2c3d4e5f60719 c││i-0a1b2c3 slow         17s   34s   38s│
+│   13m register  i-0a1b2c3d4e5f60718 f││                                      │
+│   14m launch    i-0a1b2c3d4e5f60718 s││                                      │
+└──────────────────────────────────────┘└──────────────────────────────────────┘
+
+ y yes  n/Esc no  ←→ choose  Enter answer
+────────────────────────────────────────────────────────────────────────────────
+ 1 Overview   2 Pools   3 Hosts   4 Ops   5 Cost   6 Keys                ● LIVE
+┌ Pools (4) ───────────────────────────────────────────────────────────────────┐
+│POOL                  PROVIDER DES/MAX BOOT READY BUSY DRAIN IMAGE CONDITION  │
+│linux-aarch64         ec2          0/4    0     0    0     0 g3    Ready      │
+│linux-x86-64          ec2          3/8    1     0    2     0 g7    Ready      │
+│macos-arm64-xcode27.0 tart         2/4    0     1    1     0 g2    Ready      │
+│windows-x86-64        ec2          1/4    1     0    0     0 g5    Ready      │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Workers · linux-x86-64 (3) ──────────────────────────────────────────────────┐
+│NODE                        STATE     BUSY    TYPE          GEN  IDLE   UP    │
+│i-0a1b2c3d4e5f60718         draining    32/32 c8i.8xlarge   g7        -    14m│
+│i-0a1b2c3d4e5f60719         busy        16/32 c8i.8xlarge   g7        -     9m│
+│i-0a1b2c3d4e5f6071a         launching     0/0 c8i.8xlarge   g7        -    20s│
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Scale timeline ──────────────────────┐┌ Cold starts · p50 39s · max 39s ─────┐
+│   20s launch    i-0a1b2c3d4e5f6071a q││VM        PATH       RUN   REG   1ST  │
+│    8m register  i-0a1b2c3d4e5f60719 f││i-0a1b2c3 slow         18s   37s   39s│
+│    9m launch    i-0a1b2c3d4e5f60719 c││i-0a1b2c3 slow         17s   34s   38s│
+│   13m register  i-0a1b2c3d4e5f60718 f││                                      │
+│   14m launch    i-0a1b2c3d4e5f60718 s││                                      │
+└──────────────────────────────────────┘└──────────────────────────────────────┘
+✓ worker i-0a1b2c3d4e5f60718 is draining: no new actions; running actions finish
+ d drain  u undrain  ↑↓ worker  Esc pools  Tab view  ? help  q quit

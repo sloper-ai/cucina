@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Cucina profile 06: prevents FileVault from being turned on (auto-login, and therefore Tart after a restart, is impossible with FileVault; R-MAC-2). Combine with the ADE skip key FileVault. macOS 26.4+ turns FileVault on in Setup Assistant by default: check fdesetup status on every new host. Do not combine with a FileVault-enforcing configuration (Apple Business "FileVault" configuration). -->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>dontAllowFDEEnable</key>
+			<true/>
+			<key>PayloadDisplayName</key>
+			<string>Cucina FileVault prevention</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.filevault.mcx</string>
+			<key>PayloadType</key>
+			<string>com.apple.MCX</string>
+			<key>PayloadUUID</key>
+			<string>8CCFEAB5-29C8-42DF-8C86-E29D01A0CE0D</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+	</array>
+	<key>PayloadDescription</key>
+	<string>Cucina: FileVault stays off on build hosts so the VM user can log in automatically after a restart.</string>
+	<key>PayloadDisplayName</key>
+	<string>Cucina 06 FileVault off</string>
+	<key>PayloadIdentifier</key>
+	<string>ai.sloper.cucina.profile.filevault</string>
+	<key>PayloadOrganization</key>
+	<string>${CUCINA_ORGANIZATION}</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>D931EB44-25BF-4055-912D-2C7D800003EA</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

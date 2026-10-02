@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# The git hooks as data for the tests in //tools/ci (tools/ci/test-githooks.sh).
+
+filegroup(
+    name = "files",
+    srcs = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+    visibility = ["//tools/ci:__pkg__"],
+)

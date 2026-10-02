@@ -1,0 +1,504 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Release (R-OPS-7, R-BUILD-3; ADR 0150, ADR 0151; docs/operations/releasing.md).
+#
+# A tag vX.Y.Z (equal to the VERSION file) builds every artifact with Bazel on the runner that
+# can build it, checks them, and publishes: public GHCR images and Helm chart (GITHUB_TOKEN),
+# the GitHub Release (cucinactl archives, worker agents, cucina-hostd, the signed macOS host
+# package + MDM manifests, SHA256SUMS, notes, provenance attestations) and the Homebrew tap
+# formula. Pull requests and manual runs are DRY RUNS: the same build/assemble/check steps
+# (release/*.sh, also runnable locally with release/dry-run.sh) with a fake version, and the
+# publish jobs are skipped. macOS VM images are not part of releases (macos-worker-image.yml).
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to stamp in this dry run (nothing is published)
+        type: string
+        default: 0.0.0-dryrun
+      sign:
+        description: Also sign the host package with the release environment's identity (still not published)
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  BAZEL_ARGS: --config=ci
+  CUCINA_REPOSITORY: ${{ github.repository }}
+  CRANE: crane@0.22.1
+  HELM: helm@4.3.0
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      publish: ${{ steps.plan.outputs.publish }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      sign: ${{ steps.plan.outputs.sign }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: decide version and mode
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SIGN: ${{ inputs.sign }}
+          SIGNING: ${{ vars.CUCINA_PKG_SIGNING }}
+          WITHOUT_PKG: ${{ vars.CUCINA_RELEASE_WITHOUT_PKG }}
+        run: |
+          file_version="$(tr -d '[:space:]' < VERSION)"
+          sign=false
+          if [ "$EVENT" = push ] && [ "$REF_TYPE" = tag ]; then
+            version="${REF_NAME#v}"
+            if [ "$version" != "$file_version" ]; then
+              echo "::error::tag $REF_NAME does not match VERSION ($file_version): bump VERSION in the tagged commit"
+              exit 1
+            fi
+            publish=true
+            if [ "$SIGNING" = true ]; then
+              sign=true
+            elif [ "$WITHOUT_PKG" != true ]; then
+              echo "::error::the macOS host package must be signed: set vars.CUCINA_PKG_SIGNING=true and the release environment secrets, or vars.CUCINA_RELEASE_WITHOUT_PKG=true (docs/operations/releasing.md)"
+              exit 1
+            fi
+          else
+            version="${INPUT_VERSION:-0.0.0-dryrun}"
+            publish=false
+            if [ "$INPUT_SIGN" = true ]; then
+              if [ "$SIGNING" != true ]; then
+                echo "::error::signing requested, but vars.CUCINA_PKG_SIGNING is not true"
+                exit 1
+              fi
+              sign=true
+            fi
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::version '$version' is not MAJOR.MINOR.PATCH[-PRERELEASE]"
+            exit 1
+          fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          {
+            echo "version=$version"
+            echo "publish=$publish"
+            echo "prerelease=$prerelease"
+            echo "sign=$sign"
+          } >> "$GITHUB_OUTPUT"
+          echo "Release $version: publish=$publish, prerelease=$prerelease, sign=$sign" >> "$GITHUB_STEP_SUMMARY"
+
+  build-linux:
+    name: build (Linux exec, OCI, chart)
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: bazelisk
+      - name: Bazel caches (user.bazelrc)
+        run: |
+          c="$HOME/.cache/cucina-bazel"
+          {
+            echo "common --repository_cache=$c/repo"
+            echo "build --disk_cache=$c/disk"
+            echo "build --experimental_disk_cache_gc_max_size=4G"
+          } >> user.bazelrc
+          echo "BAZELISK_HOME=$c/bazelisk" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-release-linux-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: bazel-release-linux-${{ runner.os }}-${{ runner.arch }}-
+      - name: build //release:linux (stamped) and check it
+        env:
+          CUCINA_VERSION: ${{ needs.plan.outputs.version }}
+        run: release/build.sh linux --out "$RUNNER_TEMP/out"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-release-linux-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+      - name: pack (keeps file modes)
+        run: tar -C "$RUNNER_TEMP/out" -cf "$RUNNER_TEMP/dist-linux.tar" dist-linux oci
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-linux
+          path: ${{ runner.temp }}/dist-linux.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  build-macos:
+    name: build (macOS exec, host package)
+    needs: plan
+    runs-on: macos-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: bazelisk
+      - name: Bazel caches (user.bazelrc)
+        run: |
+          c="$HOME/.cache/cucina-bazel"
+          {
+            echo "common --repository_cache=$c/repo"
+            echo "build --disk_cache=$c/disk"
+            echo "build --experimental_disk_cache_gc_max_size=4G"
+          } >> user.bazelrc
+          echo "BAZELISK_HOME=$c/bazelisk" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-release-macos-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: bazel-release-macos-${{ runner.os }}-${{ runner.arch }}-
+      - name: build //release:macos (stamped) and check it
+        env:
+          CUCINA_VERSION: ${{ needs.plan.outputs.version }}
+        run: release/build.sh macos --out "$RUNNER_TEMP/out"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: github.event_name != 'pull_request'
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-release-macos-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+      - name: pack (keeps file modes)
+        run: tar -C "$RUNNER_TEMP/out" -cf "$RUNNER_TEMP/dist-macos.tar" dist-macos pkg-inputs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-macos
+          path: ${{ runner.temp }}/dist-macos.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  # The private signing identity lives only in the `release` environment (R-MAC-9: CI secret
+  # store in production); it never reaches pull requests or dry runs.
+  sign-pkg:
+    name: sign the macOS host package
+    needs: [plan, build-macos]
+    if: needs.plan.outputs.sign == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    outputs:
+      signer: ${{ steps.keychain.outputs.IDENTITY_SHA1 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist-macos
+          path: ${{ runner.temp }}
+      - name: unpack
+        run: tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/dist-macos.tar"
+      - name: import the signing identity into a throwaway keychain
+        id: keychain
+        env:
+          CUCINA_PKG_SIGNING_P12: ${{ secrets.CUCINA_PKG_SIGNING_P12 }}
+          CUCINA_PKG_SIGNING_P12_PASSWORD: ${{ secrets.CUCINA_PKG_SIGNING_P12_PASSWORD }}
+        run: |
+          macos/pkg/scripts/ci-keychain.sh create --p12-base64-env CUCINA_PKG_SIGNING_P12 \
+            --pass-env CUCINA_PKG_SIGNING_P12_PASSWORD >> "$GITHUB_OUTPUT"
+      - name: sign, check, write the manifests
+        env:
+          KEYCHAIN: ${{ steps.keychain.outputs.KEYCHAIN }}
+          IDENTITY: ${{ steps.keychain.outputs.IDENTITY_SHA1 }}
+        run: |
+          release/sign-pkg.sh --inputs "$RUNNER_TEMP/pkg-inputs" --out "$RUNNER_TEMP/pkg-signed" \
+            --identity "$IDENTITY" --keychain "$KEYCHAIN"
+          tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/pkg-signed.tar" pkg-signed
+      - name: delete the keychain
+        if: always() && steps.keychain.outputs.KEYCHAIN != ''
+        env:
+          KEYCHAIN: ${{ steps.keychain.outputs.KEYCHAIN }}
+        run: macos/pkg/scripts/ci-keychain.sh delete --keychain "$KEYCHAIN"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pkg-signed
+          path: ${{ runner.temp }}/pkg-signed.tar
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble:
+    name: assemble + verify (one build, SHA256SUMS, formula, notes)
+    needs: [plan, build-linux, build-macos, sign-pkg]
+    if: >-
+      !cancelled() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' &&
+      (needs.sign-pkg.result == 'success' || needs.sign-pkg.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # release notes: commits and ADRs since the previous tag
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: bazelisk
+      - name: Bazel caches (user.bazelrc)
+        run: |
+          c="$HOME/.cache/cucina-bazel"
+          {
+            echo "common --repository_cache=$c/repo"
+            echo "build --disk_cache=$c/disk"
+            echo "build --experimental_disk_cache_gc_max_size=4G"
+          } >> user.bazelrc
+          echo "BAZELISK_HOME=$c/bazelisk" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/cucina-bazel
+          key: bazel-release-linux-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: bazel-release-linux-${{ runner.os }}-${{ runner.arch }}-
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "{dist-linux,dist-macos,pkg-signed}"
+          path: ${{ runner.temp }}/in
+          merge-multiple: true
+      - name: assemble and verify
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          PUBLISH: ${{ needs.plan.outputs.publish }}
+          SIGN: ${{ needs.plan.outputs.sign }}
+          SIGNER: ${{ needs.sign-pkg.outputs.signer }}
+        run: |
+          for t in "$RUNNER_TEMP"/in/*.tar; do tar -C "$RUNNER_TEMP" -xf "$t"; done
+          args=(--out "$RUNNER_TEMP/release" --oci "$RUNNER_TEMP/oci" --version "$VERSION")
+          if [ "$SIGN" = true ]; then
+            args+=(--pkg "signed:$RUNNER_TEMP/pkg-signed" --signer-sha1 "$SIGNER")
+          elif [ "$PUBLISH" = true ]; then
+            args+=(--pkg none) # vars.CUCINA_RELEASE_WITHOUT_PKG: never publish an unsigned package
+          else
+            args+=(--pkg unsigned) # dry run: check the unsigned package too
+          fi
+          release/assemble.sh "${args[@]}" "$RUNNER_TEMP/dist-macos" "$RUNNER_TEMP/dist-linux"
+          for step in images chart github; do
+            release/publish.sh "$step" --release "$RUNNER_TEMP/release" --oci "$RUNNER_TEMP/oci" --dry-run
+          done
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/release/assets/SHA256SUMS"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/release.tar" release oci
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}/release.tar
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-images:
+    name: publish images (public GHCR)
+    needs: [plan, assemble]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: ${{ env.CRANE }} ${{ env.HELM }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}
+      - name: push (crane, by digest from the verified OCI layouts)
+        id: push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          CUCINA_PUBLISH: "1"
+        run: |
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/release.tar"
+          printf '%s' "$GITHUB_TOKEN" | mise exec "$CRANE" -- crane auth login ghcr.io -u "$ACTOR" --password-stdin
+          mise exec "$CRANE" -- release/publish.sh images --release "$RUNNER_TEMP/release" --oci "$RUNNER_TEMP/oci" \
+            | tee "$RUNNER_TEMP/pushed.txt"
+          while IFS=@ read -r name digest; do
+            key="${name##*/}"
+            echo "${key#cucina-}_name=$name" >> "$GITHUB_OUTPUT"
+            echo "${key#cucina-}_digest=$digest" >> "$GITHUB_OUTPUT"
+          done < "$RUNNER_TEMP/pushed.txt"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.controller_name }}
+          subject-digest: ${{ steps.push.outputs.controller_digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.sts_name }}
+          subject-digest: ${{ steps.push.outputs.sts_digest }}
+          push-to-registry: true
+
+  publish-chart:
+    name: publish Helm chart (OCI, public GHCR)
+    needs: [plan, assemble, publish-images]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
+        with:
+          install_args: ${{ env.CRANE }} ${{ env.HELM }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}
+      - name: helm push
+        id: push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          CUCINA_PUBLISH: "1"
+        run: |
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/release.tar"
+          # One docker-style credential store for helm push and the attestation push.
+          printf '%s' "$GITHUB_TOKEN" | mise exec "$CRANE" -- crane auth login ghcr.io -u "$ACTOR" --password-stdin
+          export HELM_REGISTRY_CONFIG="$HOME/.docker/config.json"
+          ref="$(mise exec "$HELM" "$CRANE" -- release/publish.sh chart --release "$RUNNER_TEMP/release")"
+          echo "name=${ref%@*}" >> "$GITHUB_OUTPUT"
+          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  github-release:
+    name: GitHub Release
+    needs: [plan, assemble, publish-images, publish-chart]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}
+      - name: unpack
+        run: tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/release.tar"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ runner.temp }}/release/assets/SHA256SUMS
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUCINA_PUBLISH: "1"
+        run: release/publish.sh github --release "$RUNNER_TEMP/release"
+
+  # The package URL must work for MDM (R-MAC-8): fetch the published manifest and package the
+  # way a Mac does (HTTPS, following GitHub's redirect) and compare the SHA-256 (ADR 0753).
+  verify-published-pkg:
+    name: verify the published host package URL
+    needs: [plan, github-release]
+    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.sign == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}
+      - name: verify-manifest.sh against the release URL
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/release.tar"
+          core="${VERSION%%-*}"
+          base="cucina-host-${core//./-}"
+          sha="$(cut -d' ' -f1 "$RUNNER_TEMP/release/assets/$base.pkg.sha256")"
+          macos/pkg/scripts/verify-manifest.sh "https://github.com/$REPO/releases/download/v$VERSION/$base.plist" \
+            --expect-version "$core" --expect-sha256 "$sha"
+
+  homebrew:
+    name: Homebrew tap formula
+    needs: [plan, github-release]
+    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: check the tap token
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::secret HOMEBREW_TAP_TOKEN is not set (docs/operations/releasing.md, Homebrew tap)"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+          path: ${{ runner.temp }}
+      - name: commit Formula/cucinactl.rb
+        env:
+          CUCINA_PUBLISH: "1"
+        run: |
+          tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/release.tar"
+          release/publish.sh homebrew --release "$RUNNER_TEMP/release" --tap tap

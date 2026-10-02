@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# The licence classifier behind THIRD_PARTY_NOTICES.md. Regenerate the file with tools/notices/generate.sh
+# (it needs go, jq and cargo-about, so it is not a Bazel action); see ADR 0027.
+
+load("//bazel:tiers.bzl", "cucina_sh_test")
+
+exports_files(
+    [
+        "about.hbs",
+        "about.toml",
+        "components.json",
+        "generate.sh",
+        "overrides.json",
+        "policy.json",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cucina_sh_test(
+    name = "notices_lib_test",
+    timeout = "short",
+    srcs = ["test.sh"],
+    data = [
+        "lib.sh",
+        "policy.json",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "integration",  # it runs shell pipelines, so not the one-process unit tier
+)

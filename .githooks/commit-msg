@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# commit-msg: refuse commits that delete, weaken or skip tests, or regenerate
+# goldens, unless the message carries a "Test-Change: <reason>" line.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Rules and rationale: TESTING.md, section "The Test-Change trailer".
+# `git commit --no-verify` skips this hook; CI repeats the check on every commit
+# of a pull request (.githooks/lib/test-change.sh range origin/main..HEAD).
+set -euo pipefail
+
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$hook_dir/lib/test-change.sh" staged "$1"

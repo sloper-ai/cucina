@@ -41,6 +41,10 @@ dirs.workspace = true
 futures.workspace = true
 # `http::Uri` for connect-rust client configs (hyperium/http; already in the graph).
 http = "1.3"
+# gRPC through HTTP proxies (connect-rust has none; ADR 0808): reqwest's proxy matcher
+# (env + system settings), TLS over the CONNECT tunnel, connect-rust's connector trait.
+# All three are already in the graph through reqwest and connectrpc.
+hyper-util = { version = "0.1.21", default-features = false, features = ["client-proxy", "client-proxy-system", "tokio"] }
 indicatif.workspace = true
 jiff.workspace = true
 jsonwebtoken.workspace = true
@@ -57,8 +61,10 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-rustls = { version = "0.26.6", default-features = false }
 tokio-stream.workspace = true
 toml.workspace = true
+tower-service = "0.3.3"
 tracing.workspace = true
 tracing-subscriber.workspace = true
 zstd.workspace = true

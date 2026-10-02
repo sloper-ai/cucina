@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# pre-push: hygiene for the public repository. For every commit about to be
+# pushed it runs
+#   1. gitleaks (secrets, keys, tokens), and
+#   2. lib/hygiene.sh (AWS account IDs and other environment identifiers).
+# The push is refused if either finds something, or if gitleaks is not installed.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Install gitleaks:       mise install gitleaks   (version pinned in mise.toml)
+# Override the binary:    CUCINA_GITLEAKS=/path/to/gitleaks
+# `git push --no-verify` skips this hook; CI scans the whole tree again.
+set -euo pipefail
+
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+gitleaks_bin="${CUCINA_GITLEAKS:-gitleaks}"
+
+if ! "$gitleaks_bin" version >/dev/null 2>&1; then
+    cat >&2 <<EOT
+pre-push: gitleaks is required before pushing to this public repository, but
+"$gitleaks_bin version" failed. Install it (mise install gitleaks, or
+brew install gitleaks) or point CUCINA_GITLEAKS at a binary, then push again.
+EOT
+    exit 1
+fi
+
+zero='^0+$'
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    : "$local_ref" "$remote_ref"
+    # Deleting a remote ref pushes no commits.
+    if [[ $local_sha =~ $zero ]]; then
+        continue
+    fi
+    if [[ ! $remote_sha =~ $zero ]] && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+        revs=("${remote_sha}..${local_sha}")
+    else
+        # New ref, or the remote tip is unknown locally: scan everything that
+        # no remote-tracking branch (of any remote: a fork or a URL has none of
+        # its own) already contains.
+        revs=("$local_sha" "--not" "--remotes")
+    fi
+    if ! first="$(git rev-list -n 1 "${revs[@]}")"; then
+        echo "pre-push: cannot read the commits to push (${revs[*]}); refusing the push" >&2
+        status=1
+        continue
+    fi
+    if [ -z "$first" ]; then
+        continue
+    fi
+
+    echo "pre-push: scanning ${revs[*]} for secrets and environment identifiers" >&2
+    if ! "$gitleaks_bin" git --no-banner --redact --verbose --log-opts="${revs[*]}" . >&2; then
+        echo "pre-push: gitleaks found a secret in the commits above. Remove it from the commit history, rotate it, and push again." >&2
+        status=1
+    fi
+    if ! "$hook_dir/lib/hygiene.sh" "${revs[@]}"; then
+        status=1
+    fi
+done
+
+exit "$status"

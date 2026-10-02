@@ -2208,11 +2208,7 @@
       "additionalProperties": false,
       "properties": {
         "install": {
-          "description": "Install/upgrade the WorkerPool, MacHost and TrustPolicy CRDs from templates.",
-          "type": "boolean"
-        },
-        "keep": {
-          "description": "Annotate the CRDs with helm.sh/resource-policy=keep so uninstall keeps them and their objects.",
+          "description": "Apply the WorkerPool, MacHost and TrustPolicy CRDs from the controller image before every install and upgrade (cluster-scoped hook RBAC). false: the CRDs are managed elsewhere (use helm --skip-crds).",
           "type": "boolean"
         }
       },
@@ -2543,7 +2539,7 @@
               "type": "string"
             },
             "credentialSecret": {
-              "description": "Secret with the service-account key the canary uses; empty = the break-glass key.",
+              "description": "Secret with the service-account key of the canaries (helm test and the controller's 5-minute loop); empty = the break-glass key.",
               "type": "string"
             },
             "enabled": {

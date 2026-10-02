@@ -1,0 +1,90 @@
+{{/* SPDX-License-Identifier: FSL-1.1-ALv2 */}}
+{{/*
+CRD upgrades (R-OPS-1, ADR 0406). Helm creates crds/ (copies of api/crds) before any
+template on `helm install` but never updates them, so `cucina-controller crds apply`
+server-side applies the CRDs embedded in the controller image (the same api/crds) before
+every install and upgrade, after its RBAC (weight -10) and before the bootstrap hook (-5).
+The ClusterRole names exactly the chart's CRDs. crds.install=false (with `helm
+--skip-crds`) leaves the CRDs to someone else. CRDs are never deleted: deleting a CRD
+deletes every WorkerPool, MacHost and TrustPolicy.
+*/}}
+{{- if .Values.crds.install }}
+{{- $name := printf "%s-crds" (include "cucina.fullname" .) -}}
+{{- $clusterName := printf "%s-%s" $name .Release.Namespace -}}
+{{- $crdNames := list -}}
+{{- range $path, $_ := .Files.Glob "crds/*.yaml" }}
+{{- $crdNames = append $crdNames ($.Files.Get $path | fromYaml).metadata.name -}}
+{{- end }}
+{{- $hookAnnotations := dict "helm.sh/hook" "pre-install,pre-upgrade" "helm.sh/hook-weight" "-10" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $clusterName }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "hooks") | nindent 4 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    resourceNames: {{ sortAlpha $crdNames | toJson }}
+    verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $clusterName }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "hooks") | nindent 4 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $clusterName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cucina.hooks.name" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "crds") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-8"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: {{ .Values.hooks.bootstrap.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "cucina.selectorLabels" (dict "ctx" . "component" "crds") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cucina.hooks.name" . }}
+      restartPolicy: Never
+      enableServiceLinks: false
+      {{- with include "cucina.imagePullSecrets" . }}{{ . | nindent 6 }}{{- end }}
+      securityContext:
+        {{- include "cucina.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: crds
+          image: {{ include "cucina.controllerImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: [crds, apply]
+          resources:
+            {{- toYaml .Values.hooks.resources | nindent 12 }}
+          securityContext:
+            {{- include "cucina.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+{{- end }}

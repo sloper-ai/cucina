@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Buildbarn worker (R-POOL-4): FUSE virtual build directory, L1 cache, scheduler client. Starts after bb_runner.
+# On stop it receives SIGTERM, stops taking work and finishes in-flight actions; 110 s fit inside a Spot
+# interruption notice (120 s).
+[Unit]
+Description=Buildbarn worker (bb_worker)
+Documentation=https://github.com/buildbarn/bb-remote-execution
+Requires=bb-runner.service
+Wants=network-online.target
+After=network-online.target bb-runner.service cucina-format-instance-store.service
+ConditionPathExists=|/opt/cucina/bin/cucina-worker-agent
+ConditionPathExists=|/etc/cucina/bb/worker.json
+
+[Service]
+Type=exec
+EnvironmentFile=-/etc/cucina/env
+ExecStart=/bin/sh -c 'if [ -e /run/cucina/not-a-worker ]; then echo "not a worker: bb_worker not started"; exit 0; fi; exec /usr/local/bin/bb_worker /etc/cucina/bb/worker.json'
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+TimeoutStopSec=110
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

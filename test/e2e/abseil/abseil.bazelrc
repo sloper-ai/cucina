@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 # Cucina e2e overlay for Abseil LTS 20260817.0 (PROMPT §10.2). Copied to the
 # Abseil checkout as .bazelrc by test/e2e/bazelrun.PrepareAbseil; Abseil ships
-# no .bazelrc of its own. Remote runs add `--bazelrc=cucina.bazelrc` (the
-# output of `cucinactl bazelrc`); the local baseline does not.
-
-common --enable_platform_specific_config
+# no .bazelrc of its own.
+#
+# Every invocation selects one configuration explicitly: a native lane puts
+# --config=lane-<os> into its cucina.bazelrc (the output of `cucinactl
+# bazelrc --platform`; the local baselines pass it on the command line), a
+# cross configuration --config=cross plus the C++ dialect of its target's
+# compiler driver (test/e2e/scenarios/cross.go). There is deliberately no
+# --enable_platform_specific_config: the client OS must not change a cross
+# configuration's actions (Linux, macOS and Windows clients share its cache,
+# NFR-X3).
 
 # --- Abseil CI flags (ci/linux_*_bazel.sh, ci/windows_msvc_bazel.bat) --------
 build --define=absl=1
@@ -15,23 +21,44 @@ test --test_output=errors
 test --test_env=TZDIR=absl/time/internal/cctz/testdata/zoneinfo
 test --test_env=GTEST_INSTALL_FAILURE_SIGNAL_HANDLER=1
 
-# --- C++17 for target and host ------------------------------------------------
-build:linux --cxxopt=-std=c++17 --host_cxxopt=-std=c++17
-build:macos --cxxopt=-std=c++17 --host_cxxopt=-std=c++17
-build:windows --cxxopt=/std:c++17 --host_cxxopt=/std:c++17
+# --- hermetic-llvm (the Linux lane and every cross configuration) -------------
+# As docs/cross-compilation.md and tools/xplat/cmd/xplatcheck's workspace: no
+# autodetected C++ toolchain, no Xcode lookup on the client, host-independent
+# output paths. Exec-configured tools: every exec platform (Linux, macOS,
+# Windows gnullvm) uses a GNU-style clang driver.
+common:hermetic --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+common:hermetic --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
+common:hermetic --experimental_platform_in_output_dir
+common:hermetic --noexperimental_use_platforms_in_output_dir_legacy_heuristic
+common:hermetic --xcode_version_config=//cucina_e2e:xcode_disabled
+common:hermetic --host_cxxopt=-std=c++17
 
-# --- Windows: rules_cc's autodetected MSVC, pinned per host in user.bazelrc ---
+# --- Native lanes (§10.2) -----------------------------------------------------
+common:lane-linux --config=hermetic
+common:lane-linux --cxxopt=-std=c++17
+
+# macOS: Xcode, autodetected by rules_cc.
+common:lane-macos --cxxopt=-std=c++17 --host_cxxopt=-std=c++17
+
+# Windows: rules_cc's autodetected MSVC, pinned per host in user.bazelrc
 # (BAZEL_VC, BAZEL_VC_FULL_VERSION, BAZEL_WINSDK_FULL_VERSION; startup
 # --output_user_root=C:/b --windows_enable_symlinks). Never PATH/INCLUDE/LIB
 # via --action_env.
-build:windows --enable_runfiles
-build:windows --features=compiler_param_file
+common:lane-windows --cxxopt=/std:c++17 --host_cxxopt=/std:c++17
+common:lane-windows --enable_runfiles
+common:lane-windows --features=compiler_param_file
 # bazel#19733 workaround, as in bb-deployments.
-build:windows --features=-parse_showincludes --host_features=-parse_showincludes
+common:lane-windows --features=-parse_showincludes --host_features=-parse_showincludes
 
-# --- hermetic-llvm lanes (Linux and cross configurations) --------------------
-common:hermetic --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+# --- Cross configurations (T16-T19) -------------------------------------------
+# `cucinactl bazelrc --cross --target <t> [--exec-pool <p>]` supplies the
+# platforms, the Windows test environment and client lines, and scaled test
+# timeouts. The C++ dialect follows the target's driver: hermetic-llvm drives
+# MSVC targets with clang-cl (MSVC-style options), everything else with clang.
+common:cross --config=hermetic
+common:cross-gnu --cxxopt=-std=c++17
+common:cross-clang-cl --cxxopt=/std:c++17
 
 # Machine-local: repository cache outside the output base (kept by
-# `bazel clean --expunge`), @cucina_platforms injection, Windows pins.
+# `bazel clean --expunge`), Windows pins.
 try-import %workspace%/user.bazelrc

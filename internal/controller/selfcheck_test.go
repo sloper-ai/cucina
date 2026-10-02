@@ -72,5 +72,9 @@ func TestSelfChecksFailFast(t *testing.T) {
 		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "cucina-controller"},
 		Subjects:   []rbacv1.Subject{{Kind: "User", APIGroup: "rbac.authorization.k8s.io", Name: "system:serviceaccount:cucina:cucina-controller"}},
 	}))
-	assert.NoError(t, controller.CheckRBAC(ctx, sa, ns, rules), "the documented Role grants everything the controller checks")
+	// The API server's RBAC authorizer sees the new binding after its informers
+	// sync; checks issued before that are denied (flaked under Bazel's load).
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.NoError(c, controller.CheckRBAC(ctx, sa, ns, rules), "the documented Role grants everything the controller checks")
+	}, 15*time.Second, 200*time.Millisecond)
 }

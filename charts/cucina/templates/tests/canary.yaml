@@ -5,17 +5,10 @@ break-glass key (or hooks.test.credentialSecret): STS token exchange, GetCapabil
 CAS write/read and AC write/read. It starts no workers.
 */}}
 {{- if .Values.hooks.test.enabled }}
-{{- $ports := include "cucina.ports" . | fromYaml -}}
-{{- $scheme := ternary "grpcs" "grpc" (eq (include "cucina.clientTLSAtFrontend" .) "true") -}}
 {{- $secret := default (include "cucina.breakGlassSecret" .) .Values.hooks.test.credentialSecret -}}
-{{- /* In-cluster Service names, unless the public certificate cannot carry them (ACME). */ -}}
-{{- $inCluster := or (ne .Values.tls.public.source "certManager") .Values.tls.public.certManager.includeServiceNames -}}
-{{- $endpoint := printf "%s://%s:%d" $scheme (include "cucina.fqdn" (list . (include "cucina.frontend.name" .))) (int $ports.frontendClient) -}}
-{{- $sts := printf "https://%s:%d" (include "cucina.fqdn" (list . (include "cucina.sts.name" .))) (int $ports.controllerSTS) -}}
-{{- if not $inCluster -}}
-{{- $endpoint = printf "grpcs://%s:%d" (include "cucina.clientHost" .) (int .Values.endpoints.client.port) -}}
-{{- $sts = include "cucina.stsUrl" . -}}
-{{- end -}}
+{{- $targets := include "cucina.canaryTargets" . | fromYaml -}}
+{{- $endpoint := $targets.endpoint -}}
+{{- $sts := $targets.sts -}}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -25,7 +18,7 @@ metadata:
     {{- include "cucina.labels" (dict "ctx" . "component" "test") | nindent 4 }}
   annotations:
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false

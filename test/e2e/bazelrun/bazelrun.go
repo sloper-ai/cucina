@@ -51,6 +51,10 @@ type Invocation struct {
 	// records the client environment (--client_env), so it is kept minimal
 	// on purpose (no credentials can leak into artifacts).
 	Env map[string]string
+	// Unset removes variables the Windows job inherits from the machine
+	// environment (e.g. BAZEL_SH for cross configurations); elsewhere Bazel
+	// starts from an empty environment anyway.
+	Unset []string
 	// Poll is the job status interval (default 15 s).
 	Poll time.Duration
 }
@@ -201,6 +205,9 @@ func (inv *Invocation) psScript() string {
 	// Native commands report through exit codes; with 'Stop', Windows
 	// PowerShell 5.1 turns redirected native stderr into terminating errors.
 	fmt.Fprintf(&b, "$ErrorActionPreference = 'Continue'\n$out = %s\nNew-Item -ItemType Directory -Force -Path $out | Out-Null\nSet-Location %s\n", psq(out), psq(inv.Workspace))
+	for _, k := range inv.Unset {
+		fmt.Fprintf(&b, "Remove-Item -ErrorAction SilentlyContinue %s\n", psq(`Env:\`+k))
+	}
 	for _, k := range sortedKeys(inv.Env) {
 		fmt.Fprintf(&b, "$env:%s = %s\n", k, psq(inv.Env[k]))
 	}

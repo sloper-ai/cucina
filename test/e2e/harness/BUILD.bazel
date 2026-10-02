@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
-load("//bazel:tiers.bzl", "cucina_go_test")
+
 load("@rules_go//go:def.bzl", "go_library")
+load("//bazel:tiers.bzl", "cucina_go_test")
 
 go_library(
     name = "harness",

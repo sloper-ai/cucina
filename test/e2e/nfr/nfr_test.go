@@ -59,8 +59,10 @@ func TestCalculators(t *testing.T) {
 	require.False(t, Ratio("NFR-T3", "linux", 0, 0, 90, false, "").Pass)
 
 	// NFR-X1: 99 % of compile/link, all tests.
-	require.Equal(t, []bool{true, true}, passes(Routing("x86_64-linux-gnu", 99, 100, 7, 7)))
-	require.Equal(t, []bool{false, false}, passes(Routing("x86_64-linux-gnu", 98, 100, 6, 7)))
+	require.Equal(t, []bool{true, true}, passes(Routing("x86_64-linux-gnu", 99, 100, 7, 7, true)))
+	require.Equal(t, []bool{false, false}, passes(Routing("x86_64-linux-gnu", 98, 100, 6, 7, true)))
+	// Build-only (wasm, BPF): the test clause is not applicable.
+	require.Equal(t, []bool{true}, passes(Routing("wasm32-unknown-unknown", 2, 2, 0, 0, false)))
 
 	require.True(t, Residue("zero scale", 0, 0, 0, 0, 0).Pass)
 	require.False(t, Residue("zero scale", 0, 1, 0, 0, 0).Pass)

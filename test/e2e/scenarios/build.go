@@ -68,12 +68,11 @@ func baselineScenario(id string, lane Lane) *harness.Scenario {
 				user := svc.ClientUser(hn)
 				ws := hjoin(h, h.WorkDir(), "abseil")
 				if err := c.Step(hn+": prepare abseil", func() error {
-					return bazelrun.PrepareAbseil(c, h, bazelrun.AbseilPin{Repo: c.Env.Abseil.Repo, Tag: c.Env.Abseil.Tag, Commit: c.Env.Abseil.Commit},
-						ws, overlayDir(c.Env), lane.Toolchain, user)
+					return prepareAbseil(c, svc, h, ws, lane.Toolchain, user)
 				}); err != nil {
 					return err
 				}
-				ur := bazelrun.UserRC{OS: h.OS(), RepositoryCache: hjoin(h, h.WorkDir(), "repository-cache"), Hermetic: lane.Toolchain == bazelrun.HermeticLLVM}
+				ur := bazelrun.UserRC{OS: h.OS(), RepositoryCache: hjoin(h, h.WorkDir(), "repository-cache")}
 				if h.OS() == remote.Windows {
 					if ur.VC, ur.VCFullVersion, ur.WinSDKFullVersion, err = bazelrun.DetectWindowsPins(c, h); err != nil {
 						return err
@@ -82,7 +81,7 @@ func baselineScenario(id string, lane Lane) *harness.Scenario {
 				if err := bazelrun.WriteRCFiles(c, h, ws, ur, "# local baseline: no remote execution\n", c.Dir()); err != nil {
 					return err
 				}
-				script, out, err := baselineScript(c, h, ws)
+				script, out, err := baselineScript(c, h, ws, lane)
 				if err != nil {
 					return err
 				}
@@ -123,7 +122,9 @@ func baselineScenario(id string, lane Lane) *harness.Scenario {
 	}
 }
 
-func baselineScript(c *harness.Context, h remote.Host, ws string) (script, out string, err error) {
+// baselineScript uploads the local-baseline script and returns the command
+// that runs it with the lane's configuration (--config=lane-<os>).
+func baselineScript(c *harness.Context, h remote.Host, ws string, lane Lane) (script, out string, err error) {
 	out = hjoin(h, h.WorkDir(), "baseline-out")
 	name := "local-baseline.sh"
 	if h.OS() == remote.Windows {
@@ -133,14 +134,11 @@ func baselineScript(c *harness.Context, h remote.Host, ws string) (script, out s
 	if err := h.Put(c, filepath.Join(overlayDir(c.Env), name), dst); err != nil {
 		return "", "", err
 	}
+	cfg := "--config=" + lane.RCConfig()
 	if h.OS() == remote.Windows {
-		return fmt.Sprintf("& '%s' -Workspace '%s' -Out '%s'", dst, ws, out), out, nil
+		return fmt.Sprintf("& '%s' -Workspace '%s' -Out '%s' -BazelArgs @('%s')", dst, ws, out, cfg), out, nil
 	}
-	cfg := ""
-	if h.OS() == remote.Linux {
-		cfg = " --config=hermetic"
-	}
-	return fmt.Sprintf("sh %s %s %s%s", quoteFor(h, dst), quoteFor(h, ws), quoteFor(h, out), cfg), out, nil
+	return fmt.Sprintf("sh %s %s %s %s", quoteFor(h, dst), quoteFor(h, ws), quoteFor(h, out), cfg), out, nil
 }
 
 // testOutcomes reads label → overall status from a BEP JSON file.

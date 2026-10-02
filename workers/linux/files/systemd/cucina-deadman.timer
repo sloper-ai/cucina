@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Powers the worker off (= terminates it: pools launch with InstanceInitiatedShutdownBehavior=terminate) when idle
+# > 30 min, without scheduler contact > 10 min, or up > 12 h - independently of the controller (R-POOL-7).
+[Unit]
+Description=Cucina dead-man switch (R-POOL-7)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

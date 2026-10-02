@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -17,9 +18,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	"github.com/sloper-ai/cucina/internal/enroll"
 	"github.com/sloper-ai/cucina/internal/hostlink"
 	"github.com/sloper-ai/cucina/internal/pki"
 	"github.com/sloper-ai/cucina/internal/pki/pkitest"
@@ -31,70 +32,41 @@ const (
 	EnrollAddr = "controller.test:8445"
 	HostAddr   = "controller.test:8446"
 	ServerName = "controller.test"
-	Token      = "cst_test-site-token"
 )
 
-// Enrollment is a fake EnrollmentService (host side of R-SEC-3): the token is
-// multi-use, serials stay pending until approved, re-enrollment is denied.
-type Enrollment struct {
-	cucinav1.UnimplementedEnrollmentServiceServer
-	Issuer       *pki.Issuer
-	HostEndpoint string
-
+// Counter counts EnrollHost calls and approved exchanges (an interceptor on
+// the enrollment server: "the token is exchanged once" is observable).
+type Counter struct {
 	mu        sync.Mutex
-	approved  map[string]bool
-	enrolled  map[string]bool
-	exchanges int
 	calls     int
+	exchanges int
 }
 
-// Approve admits a serial (cucinactl hosts approve).
-func (e *Enrollment) Approve(serial string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.approved[serial] = true
+// Exchanges returns the approved token exchanges and all EnrollHost calls.
+func (c *Counter) Exchanges() (exchanges, calls int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.exchanges, c.calls
 }
 
-// Exchanges is the number of successful token exchanges; Calls every EnrollHost call.
-func (e *Enrollment) Exchanges() (exchanges, calls int) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.exchanges, e.calls
-}
-
-// EnrollHost implements EnrollmentServiceServer.
-func (e *Enrollment) EnrollHost(_ context.Context, req *cucinav1.EnrollHostRequest) (*cucinav1.EnrollHostResponse, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.calls++
-	if req.GetSiteToken() != Token {
-		return &cucinav1.EnrollHostResponse{Status: cucinav1.EnrollHostResponse_STATUS_TOKEN_INVALID, Message: "token rejected"}, nil
+func (c *Counter) intercept(ctx context.Context, req any, info *grpc.UnaryServerInfo, h grpc.UnaryHandler) (any, error) {
+	resp, err := h(ctx, req)
+	if r, ok := resp.(*cucinav1.EnrollHostResponse); ok {
+		c.mu.Lock()
+		c.calls++
+		if err == nil && r.GetStatus() == cucinav1.EnrollHostResponse_STATUS_APPROVED {
+			c.exchanges++
+		}
+		c.mu.Unlock()
 	}
-	serial, err := pki.CanonicalSerial(req.GetSerialNumber())
-	if err != nil {
-		return &cucinav1.EnrollHostResponse{Status: cucinav1.EnrollHostResponse_STATUS_DENIED, Message: err.Error()}, nil
-	}
-	if e.enrolled[serial] {
-		return &cucinav1.EnrollHostResponse{Status: cucinav1.EnrollHostResponse_STATUS_DENIED, Message: "already enrolled"}, nil
-	}
-	if !e.approved[serial] {
-		return &cucinav1.EnrollHostResponse{Status: cucinav1.EnrollHostResponse_STATUS_PENDING, RetryAfter: durationpb.New(30 * time.Second)}, nil
-	}
-	is, err := e.Issuer.IssueHost(req.GetCsrPem(), serial)
-	if err != nil {
-		return &cucinav1.EnrollHostResponse{Status: cucinav1.EnrollHostResponse_STATUS_DENIED, Message: err.Error()}, nil
-	}
-	e.enrolled[serial] = true
-	e.exchanges++
-	return &cucinav1.EnrollHostResponse{Status: cucinav1.EnrollHostResponse_STATUS_APPROVED, CertificatePem: is.ChainPEM,
-		CaPem: is.BundlePEM, ExpiresAt: timestamppb.New(is.NotAfter), HostEndpoint: e.HostEndpoint}, nil
+	return resp, err
 }
 
 // Settings returns macOS WorkerSettings for any pool (shape of bbconfig's fixture).
 type Settings struct{}
 
-// VMSettings implements hostlink.SettingsProvider.
-func (Settings) VMSettings(_ context.Context, pool, serial, vm string) (*cucinav1.WorkerSettings, error) {
+// SettingsFor implements enroll.PoolSettingsProvider.
+func (Settings) SettingsFor(pool, node string) (*cucinav1.WorkerSettings, string, error) {
 	p := func(kv ...string) []*cucinav1.PlatformProperty {
 		var out []*cucinav1.PlatformProperty
 		for i := 0; i+1 < len(kv); i += 2 {
@@ -103,7 +75,7 @@ func (Settings) VMSettings(_ context.Context, pool, serial, vm string) (*cucinav
 		return out
 	}
 	return &cucinav1.WorkerSettings{
-		Pool: pool, Node: serial + "/" + vm,
+		Pool: pool, Node: node,
 		Runners: []*cucinav1.RunnerSettings{
 			{Name: "xcode", Platform: p("OSFamily", "macos", "ISA", "arm-a64", "xcode-version", "27.0")},
 			{Name: "generic", Platform: p("OSFamily", "macos", "ISA", "arm-a64")},
@@ -111,17 +83,21 @@ func (Settings) VMSettings(_ context.Context, pool, serial, vm string) (*cucinav
 		SchedulerEndpoint: "placeholder:1", StorageEndpoint: "placeholder:1", ServerName: "workers.cucina.test",
 		BuildDirectory: "native", L1Placement: "vm-disk", L1SizeBytes: 40 << 30, MaximumMessageSizeBytes: 16 << 20,
 		WanCompression: true, SizeClass: 1, InstanceNamePrefixes: []string{"main"}, MetricsPort: 9986,
-	}, nil
+	}, "g1", nil
 }
 
-// Controller is an in-memory controller: EnrollmentService (TLS) and
-// HostService (mTLS) backed by a real pki.Issuer and hostlink.Server.
+// Controller is an in-memory controller: the real internal/enroll server
+// (EnrollmentService over TLS, host renewal and VM identities) and
+// hostlink.Server (HostService over mTLS), backed by a real pki.Issuer.
 type Controller struct {
 	Net    *Net
 	CA     *pki.CA
 	Issuer *pki.Issuer
-	Enroll *Enrollment
-	Clock  ports.Clock
+	Enroll *enroll.Server
+	// Token is a valid site enrollment token (created at start).
+	Token   string
+	Counter *Counter
+	Clock   ports.Clock
 	// Changed receives a token whenever a host's state changes (event-driven waits).
 	Changed chan struct{}
 
@@ -160,14 +136,57 @@ func DefaultWelcome(string) *cucinav1.Welcome {
 		Settings: &cucinav1.HostSettings{CentralEndpoint: "storage.test:8981", SchedulerEndpoint: "scheduler.test:8983"}}
 }
 
-// NewController starts the enrollment and host services on n.
-func NewController(t testing.TB, n *Net) *Controller {
+// Enroll is the real internal/enroll server. Create it OUTSIDE a
+// testing/synctest bubble: its rate-limiter caches start goroutines that never
+// exit. The CA is set later, inside the bubble, so certificates are valid on
+// the bubble's fake clock.
+type Enroll struct {
+	Server *enroll.Server
+	Issuer *pki.Issuer
+	ca     *lazyCA
+}
+
+type lazyCA struct {
+	mu sync.Mutex
+	ca *pki.CA
+}
+
+// Current implements pki.CASource.
+func (l *lazyCA) Current() *pki.CA {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ca
+}
+
+// NewEnroll builds the enrollment server (call before synctest.Test).
+func NewEnroll(t testing.TB) *Enroll {
 	t.Helper()
-	ca := pkitest.NewCA(t, time.Now())
-	iss, err := pki.NewIssuer(ca, Clock{}, pki.Policy{})
+	l := &lazyCA{}
+	iss, err := pki.NewIssuer(l, Clock{}, pki.Policy{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	es, err := enroll.New(enroll.Deps{Issuer: iss, Clock: Clock{}, Pools: Settings{}, Hosts: enroll.NewMemoryHosts(),
+		Tokens: enroll.NewMemoryTokens(), Logger: slog.New(slog.DiscardHandler),
+		Options: enroll.Options{HostEndpoint: HostAddr, PendingRetryAfter: 30 * time.Second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Enroll{Server: es, Issuer: iss, ca: l}
+}
+
+// NewController starts the enrollment and host services on n. e may be nil
+// outside synctest bubbles.
+func NewController(t testing.TB, n *Net, e *Enroll) *Controller {
+	t.Helper()
+	if e == nil {
+		e = NewEnroll(t)
+	}
+	ca := pkitest.NewCA(t, time.Now())
+	e.ca.mu.Lock()
+	e.ca.ca = ca
+	e.ca.mu.Unlock()
+	iss, es := e.Issuer, e.Server
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -180,12 +199,16 @@ func NewController(t testing.TB, n *Net) *Controller {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tok, err := es.Admin().CreateEnrollToken(context.Background(), &cucinav1.CreateEnrollTokenRequest{Site: "test-site", MaxHosts: 10}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
 	c := &Controller{Net: n, CA: ca, Issuer: iss, Clock: Clock{}, welcome: DefaultWelcome, Changed: make(chan struct{}, 1),
-		Enroll: &Enrollment{Issuer: iss, HostEndpoint: HostAddr, approved: map[string]bool{}, enrolled: map[string]bool{}}}
+		Enroll: es, Token: tok.GetToken(), Counter: &Counter{}}
 	c.serverTC = &tls.Config{Certificates: []tls.Certificate{tc}, MinVersion: tls.VersionTLS12}
 
-	enrollSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(c.serverTC)))
-	cucinav1.RegisterEnrollmentServiceServer(enrollSrv, c.Enroll)
+	enrollSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(c.serverTC)), grpc.UnaryInterceptor(c.Counter.intercept))
+	es.Register(enrollSrv)
 	go func() { _ = enrollSrv.Serve(n.Listen(EnrollAddr)) }()
 	t.Cleanup(enrollSrv.Stop)
 	c.StartHostService(t)
@@ -199,6 +222,14 @@ func mustKeyPEM(t testing.TB, key *ecdsa.PrivateKey) []byte {
 		t.Fatal(err)
 	}
 	return pemBlock("PRIVATE KEY", der)
+}
+
+// Approve admits a serial (cucinactl hosts approve / register).
+func (c *Controller) Approve(t testing.TB, serial string) {
+	t.Helper()
+	if _, err := c.Enroll.Admin().ApproveHost(context.Background(), serial, "test"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Host returns the current HostService server (ports.HostFleet).
@@ -226,7 +257,7 @@ func (c *Controller) StartHostService(t testing.TB) {
 	mtls.ClientCAs = pool
 	mtls.ClientAuth = tls.RequireAndVerifyClientCert
 	h, err := hostlink.New(hostlink.Deps{
-		Issuer: hostlink.PKIIssuer{I: c.Issuer}, Settings: Settings{},
+		Certs:    c.Enroll,
 		Registry: hostlink.StaticRegistry{Host: "ghcr.io", Username: "cucina-bot", Password: "short-lived", Clock: Clock{}},
 		Welcome: func(serial string) *cucinav1.Welcome {
 			c.mu.Lock()

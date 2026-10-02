@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Cucina profile 01 (push FIRST, before the package): trusted roots for the private package-signing certificate (R-MAC-9) and, optionally, a second signer during rotation and Cucina's CA. Placeholders ${CUCINA_*} and @if blocks are filled by macos/profiles/render.sh. -->
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadCertificateFileName</key>
+			<string>${CUCINA_SIGNER_CERT_NAME}.cer</string>
+			<key>PayloadContent</key>
+			<data>${CUCINA_SIGNER_CERT_B64}</data>
+			<key>PayloadDescription</key>
+			<string>Trusts the private certificate that signs the Cucina host package.</string>
+			<key>PayloadDisplayName</key>
+			<string>${CUCINA_SIGNER_CERT_NAME}</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.trust.signer</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadUUID</key>
+			<string>68F081E2-8133-4FF1-A0B6-E557C230B591</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+		<!-- @if CUCINA_SIGNER2_CERT_B64 -->
+		<dict>
+			<key>PayloadCertificateFileName</key>
+			<string>${CUCINA_SIGNER2_CERT_NAME}.cer</string>
+			<key>PayloadContent</key>
+			<data>${CUCINA_SIGNER2_CERT_B64}</data>
+			<key>PayloadDescription</key>
+			<string>Second package-signing certificate, trusted in parallel during a signing-certificate rotation.</string>
+			<key>PayloadDisplayName</key>
+			<string>${CUCINA_SIGNER2_CERT_NAME}</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.trust.signer2</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadUUID</key>
+			<string>781D30E1-43DF-4AA1-98F0-BDB8E02CAA15</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+		<!-- @endif -->
+		<!-- @if CUCINA_TRUST_CA_CERT_B64 -->
+		<dict>
+			<key>PayloadCertificateFileName</key>
+			<string>${CUCINA_TRUST_CA_CERT_NAME}.cer</string>
+			<key>PayloadContent</key>
+			<data>${CUCINA_TRUST_CA_CERT_B64}</data>
+			<key>PayloadDescription</key>
+			<string>Cucina's private CA (control-plane TLS). hostd itself verifies the controller with CACertificate/CAPinSHA256 from its managed preferences; include this only if other host tools must trust the CA.</string>
+			<key>PayloadDisplayName</key>
+			<string>${CUCINA_TRUST_CA_CERT_NAME}</string>
+			<key>PayloadIdentifier</key>
+			<string>ai.sloper.cucina.profile.trust.ca</string>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadUUID</key>
+			<string>408C13B6-42DA-484D-A882-E14F12F17CE1</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+		</dict>
+		<!-- @endif -->
+	</array>
+	<key>PayloadDescription</key>
+	<string>Cucina: trusts the Cucina host package signer. Deliver before the package.</string>
+	<key>PayloadDisplayName</key>
+	<string>Cucina 01 trust</string>
+	<key>PayloadIdentifier</key>
+	<string>ai.sloper.cucina.profile.trust</string>
+	<key>PayloadOrganization</key>
+	<string>${CUCINA_ORGANIZATION}</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadUUID</key>
+	<string>14F0FB3D-5799-4DB0-BC6F-97E14999C786</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+</dict>
+</plist>

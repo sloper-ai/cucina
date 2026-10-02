@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# Tests verify correctness; they do not define the solution. A change to a test, a golden, a scenario or a
+# manual checklist, or to the policy that protects them, is reviewed by a maintainer (TESTING.md section 6.2,
+# ADR 0025). Replace the owner with a team handle when one exists; GitHub applies the last matching pattern.
+
+# --- Tests, goldens, scenarios, manual checklists -------------------------------------------------------------
+# These mirror the test sources and goldens of .githooks/lib/classify-diff.awk.
+**/testdata/**                 @jrandolf
+**/test/**                     @jrandolf
+**/tests/**                    @jrandolf
+**/*_test.*                    @jrandolf
+**/test-*.sh                   @jrandolf
+**/test.sh                     @jrandolf
+**/*.tftest.hcl                @jrandolf
+/sim/scenarios/**              @jrandolf
+**/*.golden                    @jrandolf
+**/*.golden.*                  @jrandolf
+**/golden/**                   @jrandolf
+**/goldens/**                  @jrandolf
+**/__snapshots__/**            @jrandolf
+**/*.snap                      @jrandolf
+/docs/testing/manual/**        @jrandolf
+
+# --- The policy and the tooling that enforces it ---------------------------------------------------------------
+/TESTING.md                    @jrandolf
+/AGENTS.md                     @jrandolf
+/CLAUDE.md                     @jrandolf
+/.github/CODEOWNERS            @jrandolf
+/.githooks/**                  @jrandolf
+/tools/ci/**                   @jrandolf
+/.golangci.yml                 @jrandolf
+/deny.toml                     @jrandolf
+/.gitleaks.toml                @jrandolf
+/.bazelrc                      @jrandolf
+/bazel/tiers.bzl               @jrandolf
+/bazel/tier_check.bzl          @jrandolf

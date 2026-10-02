@@ -2,6 +2,7 @@
 {{- $ports := include "cucina.ports" . | fromYaml -}}
 {{- $paths := include "cucina.paths" . | fromYaml -}}
 {{- $eff := include "cucina.effective" (list . "controller") | fromYaml -}}
+{{- $canary := include "cucina.canaryTargets" . | fromYaml -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -95,6 +96,16 @@ spec:
             {{- with include "cucina.goEnv" $eff.resources }}
             {{- . | nindent 12 }}
             {{- end }}
+            # The leader's 5-minute cache canary (as `helm test`): in-cluster targets,
+            # the break-glass key unless hooks.test.credentialSecret is mounted.
+            - name: CUCINA_CANARY_ENDPOINT
+              value: {{ $canary.endpoint | quote }}
+            - name: CUCINA_CANARY_STS_URL
+              value: {{ $canary.sts | quote }}
+            {{- if ne .Values.tls.public.source "generated" }}
+            - name: CUCINA_CANARY_CA_FILE
+              value: /cucina/canary-ca/ca.crt
+            {{- end }}
           ports:
             - name: probes
               containerPort: {{ $ports.controllerProbes }}
@@ -128,6 +139,16 @@ spec:
             - name: controller-client
               mountPath: {{ $paths.controllerClient }}
               readOnly: true
+            {{- if ne .Values.tls.public.source "generated" }}
+            - name: canary-ca
+              mountPath: /cucina/canary-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.hooks.test.credentialSecret }}
+            - name: canary-key
+              mountPath: /var/run/secrets/cucina/canary
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -146,5 +167,23 @@ spec:
         - name: controller-client
           secret:
             secretName: {{ include "cucina.controllerClientSecret" . }}
+        {{- if ne .Values.tls.public.source "generated" }}
+        # Trust anchor of the public certificate for the canary (as the helm test pod).
+        - name: canary-ca
+          secret:
+            secretName: {{ include "cucina.tlsSecret" (list . "frontend") }}
+            optional: true
+            items:
+              - key: ca.crt
+                path: ca.crt
+        {{- end }}
+        {{- if .Values.hooks.test.credentialSecret }}
+        - name: canary-key
+          secret:
+            secretName: {{ .Values.hooks.test.credentialSecret }}
+            items:
+              - key: {{ .Values.hooks.test.credentialKey }}
+                path: key
+        {{- end }}
       {{- with include "cucina.scheduling" $eff }}{{ . | nindent 6 }}{{- end }}
       {{- include "cucina.topologySpread" (list . "controller" $eff.topologySpreadConstraints) | nindent 6 }}

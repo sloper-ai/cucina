@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Cucina e2e overlay package: test/e2e/bazelrun.PrepareAbseil copies this file
+# to <abseil checkout>/cucina_e2e/BUILD.bazel. Only hermetic-llvm
+# configurations (--config=hermetic) load it; apple_support comes from the
+# rendered MODULE.bazel addition (bazelrun.ModuleOverlay).
+
+load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# An xcode_config without versions, as in the Cucina repository
+# (//bazel/toolchains:xcode_disabled) and tools/xplat/cmd/xplatcheck: Bazel
+# never runs xcode-locator or reads a local Xcode, so macOS-target actions use
+# the exec-side SDK only (R-XPLAT-8) and Linux, macOS and Windows clients send
+# identical actions (NFR-X3).
+xcode_config(
+    name = "xcode_disabled",
+    visibility = ["//visibility:public"],
+)
+
+# Coverage "build-example" (wasm32/wasm64, bpfeb/bpfel): targets without an OS
+# build a freestanding C library (no libc, no C++ runtime), the equivalent of
+# hermetic-llvm's e2e/cross_compilation:add and of xplatcheck's :freestanding.
+cc_library(
+    name = "freestanding",
+    srcs = ["freestanding.c"],
+    hdrs = ["freestanding.h"],
+)

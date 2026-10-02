@@ -15,10 +15,12 @@ rust_library(
         exclude = ["src/main.rs"],
     ),
     aliases = aliases(),
-    # include_str!: the platform catalog and the targets catalog (ADR 0802).
+    # include_str!: the platform catalogs (ADR 0807); data/targets.json is the
+    # minimal schema-1 fixture of the unit tests (#[cfg(test)] only).
     compile_data = [
         "data/targets.json",
         "//platforms:pools.json",
+        "//platforms:targets.json",
     ],
     crate_name = "cucinactl",
     crate_root = "src/lib.rs",
@@ -42,7 +44,8 @@ rustfmt_test(
     ],
 )
 
-# Unit tests inside the library (duration syntax, loopback listener).
+# Unit tests inside the library (catalogs, bazelrc, proxy matching, duration syntax,
+# loopback listener).
 cucina_rust_test(
     name = "lib_test",
     crate = ":cucinactl_lib",
@@ -82,5 +85,45 @@ cucina_rust_test(
     "exit_codes",
     "json_contracts",
     "login",
+    # Private CA and HTTPS_PROXY for discovery, the STS and the management API (T10a).
+    "tls_proxy",
+    # `cucinactl tui` in a pseudo-terminal against the fake management server.
+    "tui_pty",
     "watch_reconnect",
 ]]
+
+# TUI key screens (R-CLI-4, R-TEST-6): insta snapshots read from the runfiles tree.
+# Tests never write snapshots; update them with
+# `INSTA_UPDATE=always cargo test -p cucinactl --test tui_snapshots` (or `cargo insta review`).
+cucina_rust_test(
+    name = "tui_snapshots_test",
+    srcs = ["tests/tui_snapshots.rs"],
+    # Same crate (= snapshot file prefix) name as under Cargo.
+    crate_name = "tui_snapshots",
+    crate_root = "tests/tui_snapshots.rs",
+    data = glob(["tests/snapshots/tui_snapshots__*.snap"]),
+    env = {
+        "INSTA_UPDATE": "no",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    # At compile time too: otherwise insta embeds env!("CARGO_MANIFEST_DIR"), an
+    # absolute sandbox path that the rules_rs process wrapper rejects.
+    rustc_env = {"INSTA_WORKSPACE_ROOT": "."},
+    tier = "unit",
+    deps = all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ) + [":cucinactl_lib"],
+)
+
+# TUI reducer rules: destructive actions need an explicit yes; stale/resync.
+cucina_rust_test(
+    name = "tui_reducer_test",
+    srcs = ["tests/tui_reducer.rs"],
+    crate_root = "tests/tui_reducer.rs",
+    tier = "unit",
+    deps = all_crate_deps(
+        normal = True,
+        normal_dev = True,
+    ) + [":cucinactl_lib"],
+)

@@ -1,0 +1,34 @@
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- Release notes template: release/notes.sh fills the @NAME@ fields. -->
+Cucina @VERSION@ — a managed [Buildbarn](https://github.com/buildbarn) distribution for Bazel remote execution and caching.
+
+## Install
+
+| What | Where |
+| --- | --- |
+| Helm chart | `helm install cucina oci://ghcr.io/@OWNER@/charts/cucina --version @VERSION@` |
+| Controller image | `ghcr.io/@OWNER@/cucina-controller:@VERSION@` (pinned by digest in the chart) |
+| STS image | `ghcr.io/@OWNER@/cucina-sts:@VERSION@` |
+| `cucinactl` | `brew install @OWNER@/tap/cucinactl`, or the archives below (macOS arm64, Linux x86_64/arm64 static, Windows x86_64) |
+| macOS hosts | `cucina-host-@CORE_DASHED@.pkg` + manifest `cucina-host-@CORE_DASHED@.plist` for MDM (see `docs/macos/mac-mini-setup.md`) |
+| Worker agent | `cucina-worker-agent-@VERSION@-<os>-<arch>` for worker images (`workers/*/Makefile WORKER_AGENT=…`) |
+
+## Verify
+
+```sh
+sha256sum -c SHA256SUMS                       # or: shasum -a 256 -c SHA256SUMS
+gh attestation verify <asset> --repo @REPOSITORY@
+gh attestation verify oci://ghcr.io/@OWNER@/cucina-controller:@VERSION@ --repo @REPOSITORY@
+```
+
+Built from @COMMIT_LINK@ by the release workflow; see `docs/operations/releasing.md`.
+
+## Changes since @PREVIOUS@
+
+@CHANGES@
+
+## Architecture decisions
+
+@ADRS@
+
+Full index: [docs/adr/README.md](https://github.com/@REPOSITORY@/blob/@TAG@/docs/adr/README.md).

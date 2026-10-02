@@ -33,3 +33,91 @@ tests:
     documentSelector: {path: kind, value: StatefulSet}
     asserts:
       - equal: {path: spec.persistentVolumeClaimRetentionPolicy.whenDeleted, value: Retain}
+  # StatefulSet volumeClaimTemplates are immutable (found by the kind smoke test: a
+  # store-size upgrade failed with "updates to statefulset spec ... are forbidden").
+  - it: an installed release keeps its PVC size when a store grows within it
+    documentSelector: {path: kind, value: StatefulSet}
+    set:
+      sizeProfile: small
+      storage: {stores: {iscc: {size: 512Mi}}}
+    kubernetesProvider:
+      scheme:
+        "apps/v1/StatefulSet":
+          gvr: {group: apps, version: v1, resource: statefulsets}
+          namespaced: true
+      objects:
+        - apiVersion: apps/v1
+          kind: StatefulSet
+          metadata: {name: RELEASE-NAME-cucina-storage, namespace: NAMESPACE}
+          spec:
+            volumeClaimTemplates:
+              - metadata: {name: data}
+                spec: {resources: {requests: {storage: 120Gi}}}
+    asserts:
+      - equal: {path: 'spec.volumeClaimTemplates[0].spec.resources.requests.storage', value: 120Gi}
+  - it: a fresh install sizes the PVC from the stores
+    documentSelector: {path: kind, value: StatefulSet}
+    set:
+      sizeProfile: small
+      storage: {stores: {iscc: {size: 512Mi}}}
+    asserts:
+      - equal: {path: 'spec.volumeClaimTemplates[0].spec.resources.requests.storage', value: 116Gi}
+  - it: refuses stores that outgrow the installed PVCs and names the procedure
+    set:
+      sizeProfile: small
+      storage: {stores: {cas: {size: 200Gi}}}
+    kubernetesProvider:
+      scheme:
+        "apps/v1/StatefulSet":
+          gvr: {group: apps, version: v1, resource: statefulsets}
+          namespaced: true
+      objects:
+        - apiVersion: apps/v1
+          kind: StatefulSet
+          metadata: {name: RELEASE-NAME-cucina-storage, namespace: NAMESPACE}
+          spec:
+            volumeClaimTemplates:
+              - metadata: {name: data}
+                spec: {resources: {requests: {storage: 115Gi}}}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the storage PVCs \(data\) are 115Gi but the stores need .*--cascade=orphan.*docs/operations/chart.md'
+  - it: refuses an explicit PVC size change on an installed release
+    set:
+      sizeProfile: small
+      storage: {persistence: {size: 200Gi}}
+    kubernetesProvider:
+      scheme:
+        "apps/v1/StatefulSet":
+          gvr: {group: apps, version: v1, resource: statefulsets}
+          namespaced: true
+      objects:
+        - apiVersion: apps/v1
+          kind: StatefulSet
+          metadata: {name: RELEASE-NAME-cucina-storage, namespace: NAMESPACE}
+          spec:
+            volumeClaimTemplates:
+              - metadata: {name: data}
+                spec: {resources: {requests: {storage: 115Gi}}}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storage.persistence.size 200Gi differs from the installed PVCs \(data: 115Gi\).*--cascade=orphan'
+  - it: refuses switching between file and block mode on an installed release
+    set:
+      storage: {mode: block, storageClassName: ebs-gp3-block}
+    kubernetesProvider:
+      scheme:
+        "apps/v1/StatefulSet":
+          gvr: {group: apps, version: v1, resource: statefulsets}
+          namespaced: true
+      objects:
+        - apiVersion: apps/v1
+          kind: StatefulSet
+          metadata: {name: RELEASE-NAME-cucina-storage, namespace: NAMESPACE}
+          spec:
+            volumeClaimTemplates:
+              - metadata: {name: data}
+                spec: {resources: {requests: {storage: 115Gi}}}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storage.mode cannot change after install'

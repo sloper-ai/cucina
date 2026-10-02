@@ -1,0 +1,47 @@
+#!/bin/sh
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# preinstall — runs as root before the payload is laid down (R-MAC-8). Upgrade in place: stop the daemon so the
+# new binaries and plist take effect; never touch VMs (~cucina/.tart), caches or host identity (/var/db/cucina,
+# System keychain). Idempotent; no network. Arguments from Installer: $1 package, $2 install location, $3 volume.
+set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+LABEL=ai.sloper.cucina.hostd
+PKG_ID=ai.sloper.cucina.host
+LOG_DIR=/Library/Logs/Cucina
+TARGET=${3:-/}
+
+log() {
+	printf 'cucina preinstall: %s\n' "$*"
+	if [ -d "$LOG_DIR" ]; then
+		printf '%s preinstall: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_DIR/install.log" 2>/dev/null || true
+	fi
+}
+
+if [ "$TARGET" != / ]; then
+	log "error: the Cucina host package installs only on the startup volume (target: $TARGET)"
+	exit 1
+fi
+if [ "$(uname -m)" != arm64 ]; then
+	log "error: Apple silicon (arm64) is required"
+	exit 1
+fi
+
+previous=$(pkgutil --pkg-info "$PKG_ID" 2>/dev/null | awk '/^version:/ { print $2 }')
+log "installing over: ${previous:-no previous version}"
+
+if launchctl print "system/$LABEL" >/dev/null 2>&1; then
+	log "stopping $LABEL"
+	launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
+	# bootout returns once the job is removed; wait out stragglers (hostd stops its VMs on SIGTERM).
+	waited=0
+	while launchctl print "system/$LABEL" >/dev/null 2>&1 && [ "$waited" -lt 150 ]; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+	if launchctl print "system/$LABEL" >/dev/null 2>&1; then
+		log "warning: $LABEL still loaded after ${waited}s; postinstall restarts it"
+	fi
+fi
+exit 0

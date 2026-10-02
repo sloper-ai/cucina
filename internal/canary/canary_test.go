@@ -9,8 +9,10 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +173,30 @@ func TestSTSExchangeThroughInClusterURL(t *testing.T) {
 	_, err = (&STS{URL: srv.URL, Key: "cuc_sk_1_secret"}).Token(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, 1, jwksHits)
+}
+
+// Guards the canaries' trust for public certificates: the chart mounts the
+// public TLS Secret's ca.crt as optional, and certificates from public CAs
+// (ACME through cert-manager) carry none, so a missing bundle means the
+// system roots; an unreadable or empty bundle is still an error.
+func TestEndpointTLSConfigTrust(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Endpoint{CAFile: dir + "/absent/ca.crt"}.TLSConfig()
+	require.NoError(t, err)
+	require.Nil(t, cfg.RootCAs, "system roots")
+
+	junk := dir + "/junk.crt"
+	require.NoError(t, os.WriteFile(junk, []byte("not a certificate"), 0o600))
+	_, err = Endpoint{CAFile: junk}.TLSConfig()
+	require.ErrorContains(t, err, "holds no certificates")
+
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	bundle := dir + "/ca.crt"
+	require.NoError(t, os.WriteFile(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600))
+	cfg, err = Endpoint{CAFile: bundle}.TLSConfig()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.RootCAs)
 }
 
 func bootStorage(t *testing.T, scheduler string) string {

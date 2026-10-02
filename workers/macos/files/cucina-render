@@ -1,0 +1,79 @@
+#!/bin/bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# In-VM render call site (installed as /usr/local/cucina/libexec/cucina-render). Hostd normally renders the
+# bb_worker/bb_runner configs on the host (docs/dev/hostd.md §1.2 step 4); this is the in-guest alternative and a
+# debugging aid, following the `cucina-worker-agent render` contract (docs/dev/worker-agent.md):
+#   tart exec -i <vm> /usr/bin/sudo -n -- /usr/local/cucina/libexec/cucina-render < worker-settings.json
+# * Settings (WorkerSettings protojson) arrive on stdin, never argv.
+# * The machine document is derived from the image layout (/usr/local/cucina/image.json) plus live facts (vCPUs,
+#   memory, free space); CUCINA_MACHINE_JSON=<file> replaces it. The CA bundle is read from /etc/cucina/pki/ca.crt
+#   (caBundleFile), which hostd pushes first.
+# * Writes /etc/cucina/bb/{worker.json,runner.json,env} and creates the directories of the render plan (owned by the
+#   build user when the plan says so, else by the image's workerUser), then prints the plan.
+set -euo pipefail
+
+agent=/usr/local/cucina/bin/cucina-worker-agent
+image=/usr/local/cucina/image.json
+[ -x "$agent" ] || { echo "cucina-render: cucina-worker-agent is not part of this image" >&2; exit 3; }
+[ "$(id -u)" = "0" ] || { echo "cucina-render: run as root (sudo -n)" >&2; exit 2; }
+
+jget() { plutil -extract "$1" raw -o - "$image"; }
+work="$(mktemp -d /private/var/run/cucina-render.XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+chmod 0700 "$work"
+cat >"$work/settings.json"
+
+build_user="$(jget buildUser)"
+worker_user="$(jget workerUser 2>/dev/null || true)"
+worker_user="${worker_user:-$build_user}"
+if [ -n "${CUCINA_MACHINE_JSON:-}" ]; then
+  cp "$CUCINA_MACHINE_JSON" "$work/machine.json"
+else
+  state="$(jget paths.state)"
+  pki="$(jget paths.pki)"
+  xcode_version="$(jget xcode.version)"
+  developer_dir="$(jget xcode.developerDir)"
+  cat >"$work/machine.json" <<EOF
+{
+  "os": "darwin",
+  "arch": "arm64",
+  "vcpus": $(sysctl -n hw.ncpu),
+  "memoryBytes": $(sysctl -n hw.memsize),
+  "stateRoot": "$state",
+  "stateRootBytes": $(($(df -k "$state" | awk 'NR == 2 {print $4}') * 1024)),
+  "buildRoot": "$(dirname "$(jget paths.build)")",
+  "runDir": "$(jget paths.run)",
+  "pkiDir": "$pki",
+  "caBundleFile": "$pki/ca.crt",
+  "storageIsHostL2": true,
+  "buildUser": { "uid": $(id -u "$build_user"), "gid": $(id -g "$build_user") },
+  "xcodeDeveloperDirectories": {
+    "$(jget xcode.xcodeVersionOverride)": "$developer_dir",
+    "$xcode_version": "$developer_dir"
+  }
+}
+EOF
+fi
+
+out="$(jget paths.bbConfig)"
+"$agent" render --settings "$work/settings.json" --machine "$work/machine.json" --out "$out" >"$work/plan.json"
+chmod 0644 "$out/worker.json" "$out/runner.json" "$out/env"
+
+# Create the plan's directories (render prints {"directories":[{"Path","Mode","BuildUserOwned"}],"notes":[...]}).
+i=0
+while path="$(plutil -extract "directories.$i.Path" raw -o - "$work/plan.json" 2>/dev/null)"; do
+  mode="$(plutil -extract "directories.$i.Mode" raw -o - "$work/plan.json")"
+  if [ "$(plutil -extract "directories.$i.BuildUserOwned" raw -o - "$work/plan.json")" = true ]; then
+    owner="$build_user:staff"
+  elif [ "$worker_user" = root ]; then
+    owner="root:wheel"
+  else
+    owner="$worker_user:staff"
+  fi
+  mkdir -p "$path"
+  chown "$owner" "$path"
+  chmod "$(printf '%o' "$mode")" "$path"
+  i=$((i + 1))
+done
+cat "$work/plan.json"

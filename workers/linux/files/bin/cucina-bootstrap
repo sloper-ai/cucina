@@ -1,0 +1,27 @@
+#!/bin/bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# Bootstrap hook (ExecStartPre of bb-runner.service, R-POOL-3/4; docs/dev/worker-agent.md).
+#   agent absent       -> no-op (exit 0)
+#   bootstrap exit 0   -> enrolled; configuration, PKI and /etc/cucina/env written
+#   bootstrap exit 2   -> no EC2 user data at all (image build): not a worker. Leave /run/cucina/not-a-worker so the
+#                         Buildbarn units stay down and the dead-man switch only applies its uptime limits; exit 0 so
+#                         the unit does not restart-loop. The instance stays up.
+#   any other failure  -> fail closed with the agent's exit code (the agent has already requested power-off).
+set -uo pipefail
+
+agent=/opt/cucina/bin/cucina-worker-agent
+install -d -m 0755 /run/cucina
+rm -f /run/cucina/not-a-worker
+if [[ ! -x "$agent" ]]; then
+  echo "cucina-bootstrap: $agent not installed; nothing to bootstrap"
+  exit 0
+fi
+rc=0
+"$agent" bootstrap || rc=$?
+if ((rc == 2)); then
+  touch /run/cucina/not-a-worker
+  echo "cucina-bootstrap: no EC2 user data: not a worker; Buildbarn stays stopped, the instance stays up"
+  exit 0
+fi
+exit "$rc"

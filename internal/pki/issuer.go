@@ -148,12 +148,25 @@ func (i *Issuer) IssueHost(csrPEM []byte, serial string) (*Issued, error) {
 }
 
 // IssueController issues the controller's BuildQueueState client certificate
-// for a key the controller generated itself.
+// for a key the controller generated itself, with the policy lifetime.
 func (i *Issuer) IssueController(pub crypto.PublicKey) (*Issued, error) {
+	return i.IssueControllerTTL(pub, 0)
+}
+
+// IssueControllerTTL is IssueController with the lifetime of the certificate
+// list (CertSpec.Lifetime); 0 means the policy lifetime. The renewal check
+// compares against the same lifetime, so they must agree.
+func (i *Issuer) IssueControllerTTL(pub crypto.PublicKey, ttl time.Duration) (*Issued, error) {
 	if err := checkLeafKey(pub); err != nil {
 		return nil, err
 	}
-	return i.issue(pub, ControllerIdentity(), i.policy.ControllerTTL, nil, nil, false)
+	if ttl == 0 {
+		ttl = i.policy.ControllerTTL
+	}
+	if ttl < 10*time.Minute || ttl > MaxControllerTTL {
+		return nil, fmt.Errorf("pki: controller certificate lifetime %s out of range [10m, %s]", ttl, MaxControllerTTL)
+	}
+	return i.issue(pub, ControllerIdentity(), ttl, nil, nil, false)
 }
 
 // IssueServer issues a server certificate for an in-cluster component with the

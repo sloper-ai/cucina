@@ -1,0 +1,49 @@
+ 1 Overview   2 Pools   3 Hosts   4 Ops   5 Cost   6 Keys                ● LIVE
+┌ Operations (1 of 8) ─────────────────────────────────────────────────────────┐
+│STAGE     AGE   PLATFORM     INST   TARGET               INV      WORKER      │
+│executing    8s macos/arm-a6 main   //absl/base:raw_logg 9e8d7c6b mini-1/vm-a#│
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+filter: macos  (/ edits, Esc clears)
+ Enter inspect  x kill  ↑↓ select  / filter  Tab view  ? help  q quit
+────────────────────────────────────────────────────────────────────────────────
+ 1 Overview   2 Pools   3 Hosts   4 Ops   5 Cost   6 Keys                ● LIVE
+┌ Action · 4c1f0a2e-7d3b-4e5a-9b6c-000000000004 ───────────── lines 1-19 of 46 ┐
+│Action      78dde6e5fd29f05478dde6e5fd29f05478dde6e5fd29f05478dde6e5fd29f054/1│
+│Instance    main                                                              │
+│Operation   4c1f0a2e-7d3b-4e5a-9b6c-000000000004 (executing)                  │
+│Invocation  9e8d7c6b-0000-4000-8000-000000000003                              │
+│Target      //absl/base:raw_logging_internal                                  │
+│Worker      mini-1/vm-a thread 4                                              │
+│Platform    ISA=arm-a64, OSFamily=macos, xcode-version=27.0                   │
+│Timeout     15m00s                                                            │
+│                                                                              │
+│Command: 13 arguments                                                         │
+│  external/llvm/bin/clang++                                                   │
+│  -std=c++17                                                                  │
+│  -O0                                                                         │
+│  -g                                                                          │
+│  -iquote                                                                     │
+│  .                                                                           │
+│  -MD                                                                         │
+│  -MF                                                                         │
+│  bazel-out/k8-fastbuild/bin/absl/base/raw_logging_internal.d                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+filter: macos  (/ edits, Esc clears)
+ ↑↓ PgUp PgDn scroll  Esc back  Tab view  ? help  q quit

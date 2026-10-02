@@ -1,0 +1,36 @@
+#!/bin/bash
+# SPDX-License-Identifier: FSL-1.1-ALv2
+#
+# Formats and mounts the NVMe instance store (if any) at /var/lib/cucina/ephemeral for L1 / filePool
+# (R-CACHE-2). Several disks are striped (RAID 0) when mdadm is available, otherwise the first is used.
+# ext4 without a journal and without discard: the contents are disposable and the device is fresh.
+# Writes /run/cucina/instance-store.json; without instance store nothing is mounted (exit 0).
+set -euo pipefail
+
+mnt=/var/lib/cucina/ephemeral
+info=/run/cucina/instance-store.json
+install -d -m 0755 /run/cucina "$mnt"
+if mountpoint -q "$mnt"; then exit 0; fi
+
+devs=()
+for d in /sys/block/nvme*n1; do
+  [[ -e "$d/device/model" ]] || continue
+  model=$(tr -d '[:space:]' <"$d/device/model")
+  if [[ "$model" == AmazonEC2NVMeInstanceStorage ]]; then devs+=("/dev/${d##*/}"); fi
+done
+if ((${#devs[@]} == 0)); then
+  echo "cucina-format-instance-store: no instance store"
+  exit 0
+fi
+
+dev=${devs[0]}
+if ((${#devs[@]} > 1)) && command -v mdadm >/dev/null; then
+  mdadm --create /dev/md/cucina-l1 --run --level=0 --raid-devices=${#devs[@]} --metadata=1.2 "${devs[@]}"
+  dev=/dev/md/cucina-l1
+fi
+mkfs.ext4 -q -F -m 0 -O ^has_journal -E nodiscard,lazy_itable_init=1,lazy_journal_init=1 -L cucina-l1 "$dev"
+mount -o noatime,nodiscard "$dev" "$mnt"
+size=$(blockdev --getsize64 "$dev")
+printf '{"path":"%s","device":"%s","devices":%s,"size_bytes":%s}\n' "$mnt" "$dev" \
+  "$(printf '"%s",' "${devs[@]}" | sed 's/,$//; s/^/[/; s/$/]/')" "$size" >"$info"
+echo "cucina-format-instance-store: mounted $dev ($((size / 1024 / 1024 / 1024)) GiB) at $mnt"

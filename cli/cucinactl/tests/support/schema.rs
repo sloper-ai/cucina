@@ -15,7 +15,9 @@ const KNOWN: &[&str] = &[
     "$schema",
     "$id",
     "$defs",
+    // Annotations (no validation effect).
     "title",
+    "description",
     "type",
     "properties",
     "required",

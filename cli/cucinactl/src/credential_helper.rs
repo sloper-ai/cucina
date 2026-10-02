@@ -33,8 +33,8 @@ use crate::exit::{CliError, ExitCode, exit_code_for};
 
 /// Overrides the base URL used to find the STS in GitHub Actions mode.
 pub const CUCINA_URL_ENV: &str = "CUCINA_URL";
-/// Extra CA bundle (PEM) for the STS in GitHub Actions mode (private CA).
-pub const CUCINA_CA_FILE_ENV: &str = "CUCINA_CA_FILE";
+/// Extra CA bundle (PEM) for a private CA (every mode; see [`crate::tls`]).
+pub use crate::tls::CUCINA_CA_FILE_ENV;
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -153,19 +153,15 @@ pub fn get(input: &str) -> Result<String> {
 }
 
 async fn github_actions(host: &str, actions: &auth::github::ActionsEnv) -> Result<String> {
-    // A private CA can be supplied with CUCINA_CA_FILE (a matching profile's CA wins).
-    let env_ca = std::env::var_os(CUCINA_CA_FILE_ENV).map(std::path::PathBuf::from);
-    // The STS: a profile for this host (if `cucinactl login`/`config` ran), else
+    // A private CA: the matching profile's `ca_file`, plus CUCINA_CA_FILE/SSL_CERT_FILE
+    // (crate::tls). The STS: a profile for this host (if `cucinactl login`/`config` ran), else
     // $CUCINA_URL, else https://<host>; resolved through the discovery document.
     let paths = Paths::resolve().ok();
     let profile = paths
         .as_ref()
         .and_then(|p| Config::load(p).ok())
         .and_then(|c| c.profile_for_host(host));
-    let ca = profile
-        .as_ref()
-        .and_then(|(_, p)| p.ca_file.clone())
-        .or(env_ca);
+    let ca = profile.as_ref().and_then(|(_, p)| p.ca_file.clone());
     let http = crate::http::Http::new(ca.as_deref(), auth::RENEW_HTTP_TIMEOUT)?;
     let token_endpoint = match profile {
         Some((_, p)) if !p.token_endpoint.is_empty() => p.token_endpoint,

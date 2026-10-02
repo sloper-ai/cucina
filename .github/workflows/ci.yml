@@ -3,6 +3,10 @@
 # on Linux, macOS and Windows (each OS runs the targets compatible with it via
 # target_compatible_with), and an RBE job through Cucina itself once the repository
 # variable CUCINA_ENDPOINT is set. Nightly: quarantined tests and the simulation tier.
+#
+# Repository policy: only GitHub-owned actions and an allow-list (jdx/mise-action, ...)
+# may run, each pinned to a full commit SHA. Bazelisk and every other tool come from
+# mise (versions from mise.toml); Bazel's caches are kept with actions/cache.
 name: ci
 
 on:
@@ -25,7 +29,7 @@ jobs:
   lint:
     name: lint + secret scan
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,48 +61,84 @@ jobs:
           - os: windows-latest
             targets: //... -//cli/... -//tools/hello/rust/...
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
     steps:
+      - name: free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ matrix.os }}
-          repository-cache: true
-          cache-save: ${{ github.event_name != 'pull_request' }}
+          install_args: bazelisk
+      - name: configure Bazel caches (user.bazelrc)
+        run: |
+          home="${HOME}"
+          if [ "${RUNNER_OS}" = "Windows" ]; then home="$(cygpath -m "${HOME}")"; fi
+          {
+            if [ "${RUNNER_OS}" = "Windows" ]; then echo "startup --output_user_root=C:/b"; fi
+            echo "common --repository_cache=${home}/.cache/bazel-repo"
+            # Extracted repositories stay out of the saved cache (they're large).
+            echo "common --repo_contents_cache=${home}/.cache/bazel-repo-contents"
+            echo "build --disk_cache=${home}/.cache/bazel-disk"
+            echo "build --experimental_disk_cache_gc_max_size=4G"
+          } > user.bazelrc
+          cat user.bazelrc
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazel-disk
+          key: bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'go.sum', 'Cargo.lock') }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ runner.arch }}-
       - name: bazel build
-        run: bazel build --config=ci -- ${{ matrix.targets }}
+        run: bazelisk build --config=ci -- ${{ matrix.targets }}
       - name: bazel test
-        run: bazel test --config=ci -- ${{ matrix.targets }}
+        run: bazelisk test --config=ci -- ${{ matrix.targets }}
       - name: cross-build Rust release targets (Linux musl, Windows gnullvm)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           for triple in x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnullvm; do
-            bazel build --config=ci --platforms="@rules_rs//rs/platforms:${triple}" //cli/cucinactl //tools/hello/rust:hello_rs
+            bazelisk build --config=ci --platforms="@rules_rs//rs/platforms:${triple}" //cli/cucinactl //tools/hello/rust:hello_rs
           done
 
   nightly:
     name: nightly (quarantine + simulation)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-nightly
-          repository-cache: true
+          install_args: bazelisk
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazel-disk
+          key: bazel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'go.sum', 'Cargo.lock') }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ runner.arch }}-
       - name: quarantined + simulation-tier tests
         run: |
-          targets="$(bazel query --noshow_progress \
+          printf 'common --repository_cache=%s\nbuild --disk_cache=%s\n' "${HOME}/.cache/bazel-repo" "${HOME}/.cache/bazel-disk" > user.bazelrc
+          targets="$(bazelisk query --noshow_progress \
             'attr(tags, "\bquarantine\b", tests(//...)) + attr(tags, "\btier-simulation\b", tests(//...))')"
           if [ -z "${targets}" ]; then
             echo "no quarantined or simulation tests"
             exit 0
           fi
           # shellcheck disable=SC2086 # one target per word
-          bazel test --config=ci --config=nightly ${targets}
+          bazelisk test --config=ci --config=nightly ${targets}
 
   rbe:
     name: bazel test via Cucina RBE
@@ -110,10 +150,9 @@ jobs:
       id-token: write # GitHub OIDC -> Cucina STS (R-AUTH-7)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
-          bazelisk-cache: true
-          repository-cache: true
+          install_args: bazelisk
       - name: configure Cucina remote execution
         env:
           CUCINA_ENDPOINT: ${{ vars.CUCINA_ENDPOINT }}
@@ -126,4 +165,4 @@ jobs:
             echo "build:cucina --credential_helper=${CUCINA_ENDPOINT}=%workspace%/tools/cucina-credential-helper"
           } >> user.bazelrc
       - name: bazel test //... (remote)
-        run: bazel test --config=ci --config=cucina-ci //...
+        run: bazelisk test --config=ci --config=cucina-ci //...

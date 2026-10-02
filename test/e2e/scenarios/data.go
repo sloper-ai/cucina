@@ -30,6 +30,9 @@ func t21() *harness.Scenario {
 		Cost:     harness.CostMedium, EstimateUSD: 6, Essential: true, Timeout: 5 * time.Hour, DependsOn: []string{"T1"},
 		NFRs: []string{"NFR-T7", "NFR-T2"}, Post: Guards,
 		Run: func(c *harness.Context) error {
+			if err := xplatPrecheck(c); err != nil {
+				return err
+			}
 			m, err := newMatrix(c)
 			if err != nil {
 				return err
@@ -57,21 +60,30 @@ func t21() *harness.Scenario {
 }
 
 func repoCacheRun(c *harness.Context, m *matrix, lane Lane, target string) error {
-	lr, err := m.lane(lane)
+	ml, err := m.lane(lane)
 	if err != nil {
 		return err
 	}
-	var tgt Target
-	for _, t := range m.targets.Targets {
-		if t.Name == target {
-			tgt = t
-		}
+	lr := ml.lr
+	tgt, ok := m.targets.target(target)
+	if !ok {
+		return fmt.Errorf("%s is not in platforms/targets.json", target)
 	}
-	rc, err := m.crossRC(lr, Config{Target: tgt})
+	cfg, err := planConfig(tgt, lane, "", ScopeCoverage)
+	if err != nil {
+		return err
+	}
+	raw, err := m.crossRC(lr, cfg)
 	if err != nil {
 		return err
 	}
 	h := lr.host
+	rep := rcContract(m.targets, cfg, h.OS(), raw)
+	if rep.Fatal {
+		return fmt.Errorf("cucinactl bazelrc --cross: %s", strings.Join(rep.Issues, "; "))
+	}
+	// A build: no test step, so no @bazel_tools overlay.
+	rc, _ := composeRC(raw, cfg, "", rep.Fix)
 	rcFile := hjoin(h, lr.ws, "cucina-t21.bazelrc")
 	local := filepath.Join(c.Dir(), lane.Name+"-t21.bazelrc")
 	if err := writeAndPut(c, h, local, rcFile, rc); err != nil {
@@ -80,8 +92,12 @@ func repoCacheRun(c *harness.Context, m *matrix, lane Lane, target string) error
 	run := func(name string, repoContents bool) (int64, *bazelrun.Outcome, error) {
 		repoCache := hjoin(h, h.WorkDir(), "t21", name, "repository-cache")
 		startup := []string{"--bazelrc=" + rcFile, "--output_base=" + hjoin(h, h.WorkDir(), "t21", name, "ob")}
+		// cucinactl's configuration enables the repo contents cache itself;
+		// the command line wins over the rc file for the comparison run.
 		if repoContents {
 			startup = append(startup, "--experimental_remote_repo_contents_cache")
+		} else {
+			startup = append(startup, "--noexperimental_remote_repo_contents_cache")
 		}
 		inv := bazelrun.Invocation{Name: "T21-" + lane.Name + "-" + name, Host: h, Workspace: lr.ws, User: lr.user, Collect: true, Startup: startup, Bazel: bazelBinary(c.Env, h),
 			Command: "build", Args: []string{"--repository_cache=" + repoCache, "--lockfile_mode=off", "--", "//absl/strings/..."}}

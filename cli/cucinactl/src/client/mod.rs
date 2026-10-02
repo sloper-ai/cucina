@@ -7,14 +7,17 @@
 //!   are grpc-go; ADR 0003), on one shared HTTP/2 connection per endpoint that
 //!   reconnects by itself.
 //! * TLS: rustls with the aws-lc-rs provider, OS trust via
-//!   `rustls-platform-verifier`, optional extra CA bundle; plaintext `http://` only
-//!   to loopback (tests).
+//!   `rustls-platform-verifier`, extra CA bundles (`--ca-file`/profile,
+//!   `CUCINA_CA_FILE`, `SSL_CERT_FILE`); plaintext `http://` only to loopback (tests).
+//! * HTTP proxies (`HTTPS_PROXY`, `NO_PROXY`, system settings) through a `CONNECT`
+//!   tunnel ([`connector`]), like reqwest for the STS.
 //! * Every call carries `Authorization: Bearer <Cucina JWT>` from a shared
 //!   [`TokenHandle`] that [`spawn_refresher`] keeps fresh for long sessions.
 //! * Unary calls have a deadline; `Watch*` server streams reconnect with jittered
 //!   exponential backoff ([`watch`]) and stop when the consumer drops the stream.
 //! * The CLI never needs kubeconfig: the controller proxies cluster state.
 
+pub mod connector;
 pub mod reapi;
 pub mod watch;
 
@@ -116,11 +119,19 @@ pub fn channel(opts: &ConnectOptions) -> Result<Channel> {
         .establishment_timeout(opts.connect_timeout)
         .keep_alive_interval(Duration::from_secs(30))
         .keep_alive_while_idle(true);
-    let connection = if tls {
-        let config = crate::tls::client_config(opts.ca_file.as_deref())?;
-        builder.lazy_tls(uri.clone(), Arc::new(config))
+    let tls_config = if tls {
+        Some(crate::tls::client_config(opts.ca_file.as_deref())?)
     } else {
-        builder.lazy_plaintext(uri.clone())
+        None
+    };
+    let connection = match (connector::proxy_for(&uri), tls_config) {
+        (Some(route), config) => {
+            let tunnel = connector::TunnelConnector::new(route, &uri, config)
+                .map_err(|e| CliError::usage(e.to_string()))?;
+            builder.lazy_with_connector(tunnel, uri.clone())
+        }
+        (None, Some(config)) => builder.lazy_tls(uri.clone(), Arc::new(config)),
+        (None, None) => builder.lazy_plaintext(uri.clone()),
     };
     Ok(Channel {
         transport: connection.shared(1024),

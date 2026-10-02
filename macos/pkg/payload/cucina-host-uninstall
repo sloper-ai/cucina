@@ -1,0 +1,171 @@
+#!/bin/sh
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# cucina-host-uninstall — removes the Cucina host package from this Mac (R-MAC-8, UC20 decommission).
+# Installed at /usr/local/cucina/bin/cucina-host-uninstall; also embedded in the payload-free uninstall package
+# (make -C macos/pkg uninstall-pkg) for MDMs that can only deploy packages. Idempotent, POSIX sh, no network.
+#
+# usage: sudo cucina-host-uninstall [--purge] [--keep-state] [--yes] [--dry-run]
+#   default       stop hostd and its VMs (gracefully, like "tart stop"), then remove the LaunchDaemon,
+#                 /usr/local/cucina (binaries, tart.app), the newsyslog rule, /Library/Logs/Cucina, the host state
+#                 /var/db/cucina (identity, L2 cache), the hostd identity key in the System keychain and the package
+#                 receipt. Keeps the Tart user, its auto-login and its VMs/images (~<user>/.tart) so a reinstall is
+#                 fast. Managed preferences and profiles belong to MDM and are left alone.
+#   --purge       additionally delete all VMs and images of the Tart user and, if this package created that user,
+#                 turn its auto-login off and delete it (with its home folder); undo the Local Network escape hatch.
+#   --keep-state  keep /var/db/cucina and the keychain identity (reinstall without a new enrollment approval).
+#   --yes         do not ask for confirmation.
+#   --dry-run     print what would be done.
+# After uninstalling, remove the host from the control plane: cucinactl hosts remove <serial>.
+set -eu
+umask 022
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+
+PREFIX=/usr/local/cucina
+LABEL=ai.sloper.cucina.hostd
+PKG_ID=ai.sloper.cucina.host
+DAEMON_PLIST=/Library/LaunchDaemons/$LABEL.plist
+NEWSYSLOG=/etc/newsyslog.d/ai.sloper.cucina.conf
+STATE_ROOT=/var/db/cucina
+PKG_STATE=$STATE_ROOT/pkg
+LOG_DIR=/Library/Logs/Cucina
+HOSTD_DOMAIN=ai.sloper.cucina.hostd
+KEYCHAIN_SERVICE=ai.sloper.cucina.hostd
+KEYCHAIN_ACCOUNT=host-identity-key
+SYSTEM_KEYCHAIN=/Library/Keychains/System.keychain
+FIREWALL=/usr/libexec/ApplicationFirewall/socketfilterfw
+LOCALNET_PLIST=/Library/Preferences/com.apple.network.local-network
+
+PURGE=0
+KEEP_STATE=0
+YES=0
+DRY_RUN=0
+
+log() { printf 'cucina-host-uninstall: %s\n' "$*"; }
+die() {
+	log "ERROR: $*"
+	exit 1
+}
+run() {
+	if [ "$DRY_RUN" = 1 ]; then
+		log "dry-run: $*"
+		return 0
+	fi
+	"$@"
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	--purge) PURGE=1 ;;
+	--keep-state) KEEP_STATE=1 ;;
+	--yes | -y) YES=1 ;;
+	--dry-run) DRY_RUN=1 ;;
+	-h | --help)
+		sed -n '2,/^set -eu/p' "$0" | sed '$d'
+		exit 0
+		;;
+	*) die "unknown option: $1 (try --help)" ;;
+	esac
+	shift
+done
+
+[ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "must run as root (sudo $0)"
+
+user=$(plutil -extract RunAsUser raw -o - "/Library/Managed Preferences/$HOSTD_DOMAIN.plist" 2>/dev/null ||
+	plutil -extract RunAsUser raw -o - "/Library/Preferences/$HOSTD_DOMAIN.plist" 2>/dev/null || echo cucina)
+case $user in '' | *[!a-z0-9_.-]* | root) user=cucina ;; esac
+
+if [ "$YES" = 0 ] && [ "$DRY_RUN" = 0 ] && [ -t 0 ]; then
+	printf 'Remove Cucina from this Mac%s? [y/N] ' "$([ "$PURGE" = 1 ] && echo " including all VMs and images of $user")"
+	read -r answer
+	case $answer in y | Y | yes) ;; *) die "aborted" ;; esac
+fi
+
+# 1. Firewall entry first (it needs the binary path to exist).
+if [ -x "$FIREWALL" ] && [ -e "$PREFIX/bin/cucina-hostd" ]; then
+	run "$FIREWALL" --remove "$PREFIX/bin/cucina-hostd" >/dev/null 2>&1 || true
+fi
+
+# 2. Stop the daemon. hostd stops its VMs on SIGTERM; ExitTimeOut bounds it.
+if launchctl print "system/$LABEL" >/dev/null 2>&1; then
+	log "stopping $LABEL"
+	run launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
+	waited=0
+	while [ "$DRY_RUN" = 0 ] && launchctl print "system/$LABEL" >/dev/null 2>&1 && [ "$waited" -lt 150 ]; do
+		sleep 1
+		waited=$((waited + 1))
+	done
+fi
+
+# 3. Stop any VM still running as the Tart user, exactly like "tart stop": SIGINT, wait, then SIGKILL.
+if id -u "$user" >/dev/null 2>&1; then
+	pids=$(pgrep -u "$user" -x tart 2>/dev/null || true)
+	if [ -n "$pids" ]; then
+		log "stopping running VMs of $user"
+		# shellcheck disable=SC2086 # one pid per word
+		run kill -INT $pids 2>/dev/null || true
+		waited=0
+		while [ "$DRY_RUN" = 0 ] && pgrep -u "$user" -x tart >/dev/null 2>&1 && [ "$waited" -lt 60 ]; do
+			sleep 1
+			waited=$((waited + 1))
+		done
+		left=$(pgrep -u "$user" -x tart 2>/dev/null || true)
+		# shellcheck disable=SC2086
+		[ -z "$left" ] || run kill -KILL $left 2>/dev/null || true
+	fi
+fi
+
+# 4. Software, launchd job, logs.
+created_user=0
+if [ -f "$PKG_STATE/user-created" ] && grep -qx "user=$user" "$PKG_STATE/user-created" 2>/dev/null; then
+	created_user=1
+fi
+localnet_set=0
+[ ! -f "$PKG_STATE/local-network-set" ] || localnet_set=1
+
+run rm -f "$DAEMON_PLIST" "$NEWSYSLOG"
+run rm -rf "$PREFIX" "$LOG_DIR"
+
+# 5. Host state and identity (unless --keep-state).
+if [ "$KEEP_STATE" = 0 ]; then
+	run rm -rf "$STATE_ROOT"
+	while security find-generic-password -s "$KEYCHAIN_SERVICE" -a "$KEYCHAIN_ACCOUNT" "$SYSTEM_KEYCHAIN" >/dev/null 2>&1; do
+		run security delete-generic-password -s "$KEYCHAIN_SERVICE" -a "$KEYCHAIN_ACCOUNT" "$SYSTEM_KEYCHAIN" >/dev/null 2>&1 || break
+		[ "$DRY_RUN" = 0 ] || break
+	done
+	log "removed host state and identity (re-enrolling this Mac needs 'cucinactl hosts approve <serial>')"
+else
+	log "kept $STATE_ROOT and the keychain identity (--keep-state)"
+fi
+
+# 6. --purge: VMs/images and the Tart user (only if this package created it).
+if [ "$PURGE" = 1 ]; then
+	home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }')
+	if [ -n "$home" ] && [ -d "$home/.tart" ]; then
+		log "deleting VMs and images in $home/.tart"
+		run rm -rf "$home/.tart"
+	fi
+	if [ "$created_user" = 1 ]; then
+		if [ "$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true)" = "$user" ]; then
+			run sysadminctl -autologin off >/dev/null 2>&1 || true
+		fi
+		if [ "$(stat -f %Su /dev/console 2>/dev/null)" = "$user" ]; then
+			log "$user is logged in; delete it after a restart: sudo sysadminctl -deleteUser $user"
+		else
+			log "deleting user $user (created by this package)"
+			run sysadminctl -deleteUser "$user" >/dev/null 2>&1 || log "sysadminctl -deleteUser $user failed"
+		fi
+	else
+		log "user $user was not created by this package; left in place"
+	fi
+	if [ "$localnet_set" = 1 ]; then
+		run defaults delete "$LOCALNET_PLIST" AllowedEthernetLocalNetworkAddresses >/dev/null 2>&1 || true
+	fi
+	[ "$KEEP_STATE" = 1 ] || run rm -rf "$STATE_ROOT"
+fi
+
+# 7. Receipt.
+if pkgutil --pkg-info "$PKG_ID" >/dev/null 2>&1; then
+	run pkgutil --forget "$PKG_ID" >/dev/null
+fi
+log "done"

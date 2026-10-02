@@ -9,11 +9,12 @@ Helm hooks.
       until the finalizers drained and terminated controller-created instances and the
       hosts stopped their VMs (R-OPS-3), while the controller is still running.
 Hook-scoped ServiceAccount/Role/ConfigMap exist only while hooks run (they must exist
-before the release's own objects on install).
+before the release's own objects on install); the CRD hook (hooks/crds.yaml) uses the
+same ServiceAccount.
 */}}
 {{- $paths := include "cucina.paths" . | fromYaml -}}
 {{- $hookAnnotations := dict "helm.sh/hook" "pre-install,pre-upgrade,pre-delete" "helm.sh/hook-weight" "-10" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" -}}
-{{- if or .Values.hooks.bootstrap.enabled .Values.hooks.uninstallPrep.enabled }}
+{{- if or .Values.crds.install .Values.hooks.bootstrap.enabled .Values.hooks.uninstallPrep.enabled }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:

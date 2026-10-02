@@ -7,7 +7,7 @@
 # NFR-P2's denominator, the client VM for the reported speed-up, the dev Mac
 # for macOS outcomes (X2). Prints one JSON line; logs and the BEP go to OUT.
 #
-# Usage: local-baseline.sh <abseil-checkout> <out-dir> [bazel flags, e.g. --config=hermetic]
+# Usage: local-baseline.sh <abseil-checkout> <out-dir> [bazel flags, e.g. --config=lane-linux]
 set -u
 WS=$1
 OUT=$2

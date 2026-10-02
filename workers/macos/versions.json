@@ -1,0 +1,49 @@
+{
+  "$comment": "Pinned inputs of the macOS Tart worker image (R-MAC-7, R-POOL-8, R-VER-1..3). Read by packer/macos.pkr.hcl (jsondecode) and scripts/*.sh (jq). Adding an Xcode = one entry under xcode + `make -C workers/macos image-macos XCODE=<ver>`.",
+  "schemaVersion": 1,
+  "packerPluginTart": "1.21.0",
+  "tart": "2.40.1",
+  "macosReleases": {
+    "golden-gate": {
+      "macos": "27",
+      "baseRepository": "ghcr.io/cirruslabs/macos-golden-gate-base",
+      "xcodeRepository": "ghcr.io/cirruslabs/macos-golden-gate-xcode"
+    },
+    "tahoe": {
+      "macos": "26",
+      "baseRepository": "ghcr.io/cirruslabs/macos-tahoe-base",
+      "xcodeRepository": "ghcr.io/cirruslabs/macos-tahoe-xcode"
+    }
+  },
+  "xcode": {
+    "27.0": {
+      "build": "27A266a",
+      "macosRelease": "golden-gate",
+      "baseImage": "ghcr.io/cirruslabs/macos-golden-gate-xcode:27",
+      "baseImageDigest": "",
+      "source": "local-xcode-app",
+      "$comment": "source=cirrus: keep the base image's Xcode (its build must equal `build`). source=local-xcode-app: the base ships a different 27.x build, so the Packer build copies the operator's Xcode.app (XCODE_APP) in; see docs/adr/0352-xcode-source-for-worker-images.md."
+    }
+  },
+  "buildbarn": {
+    "bbRemoteExecution": "20260930T173749Z-1a3be95",
+    "releaseUrl": "https://github.com/buildbarn/bb-remote-execution/releases/download/20260930T173749Z-1a3be95",
+    "assets": {
+      "bb_worker": {
+        "name": "bb_worker.darwin_arm64",
+        "sha256": "67fbcf00951b7e1ca90aa07781b496795b3d9f7b588c8f03e59ecbe3298656ff"
+      },
+      "bb_runner": {
+        "name": "bb_runner.darwin_arm64",
+        "sha256": "0c8ffbf17da304808a1580d430e0eaeea4dba47fd04b5f2434348980ec181105"
+      }
+    }
+  },
+  "layout": {
+    "builderUser": "builder",
+    "builderUid": 600,
+    "workerUser": "root",
+    "dataVolume": "cucina",
+    "l1DefaultGib": 40
+  }
+}

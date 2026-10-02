@@ -1,6 +1,9 @@
 {
-  "$comment": "FIXTURE owned by the cli agent until the cross-platform agent publishes platforms/targets.json with this schema (docs/cli.md, section Targets schema). cucinactl bazelrc --cross reads it. Labels and names here are placeholders to align.",
+  "$comment": "Test fixture (cli/cucinactl, tests only): a minimal schemaVersion 1 targets catalog with only the fields of the first schema version plus unknown fields, to prove cucinactl keeps reading older and newer documents (docs/cross-compilation.md#schema: fields are only added). The catalog cucinactl embeds is platforms/targets.json.",
   "schemaVersion": 1,
+  "futureTopLevelField": {
+    "ignored": true
+  },
   "execPlatforms": [
     {
       "name": "linux-x86-64",
@@ -75,7 +78,8 @@
         "pool": "linux-x86-64",
         "runner": "native",
         "mode": "native"
-      }
+      },
+      "futureTargetField": "ignored"
     },
     {
       "name": "x86_64-linux-musl",

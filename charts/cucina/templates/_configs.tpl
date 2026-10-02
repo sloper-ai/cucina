@@ -104,28 +104,61 @@ gRPC port to those pods.
 {{- include "cucina.bb.render" (list . $cfg) -}}
 {{- end -}}
 
-{{/* PVC sizes derived from the store layout (+10% and 1 GiB headroom; ext4 reserves blocks). */}}
+{{/*
+PVC sizes derived from the store layout: the filesystem PVC holds the stores plus 10%
+(filesystem overhead, ext4 reserved blocks) and 1 GiB; the block-mode CAS device holds
+its blocks (bb_storage sizes them from the device). StatefulSet volumeClaimTemplates are
+immutable, so an installed release keeps its live claim sizes as long as the stores still
+fit them (with the 10%), and fails with the procedure otherwise (docs/operations/chart.md).
+*/}}
 {{- define "cucina.storage.pvcSizes" -}}
 {{- $layout := include "cucina.bb.storeLayout" . | fromJson -}}
 {{- $gi := 1073741824 -}}
+{{- $block := eq .Values.storage.mode "block" -}}
 {{- $fs := 0 -}}
 {{- range $store, $l := $layout -}}
-{{- if not (and (eq $.Values.storage.mode "block") (eq $store "cas")) -}}
+{{- if not (and $block (eq $store "cas")) -}}
 {{- $fs = add $fs (int64 $l.blocksBytes) -}}
 {{- end -}}
 {{- $fs = add $fs (int64 $l.klmBytes) -}}
 {{- end -}}
-{{- $fsGi := add (div (add (div (mul $fs 11) 10) (sub $gi 1)) $gi) 1 -}}
-{{- $out := dict "filesystem" (printf "%dGi" $fsGi) -}}
-{{- if eq .Values.storage.mode "block" -}}
-{{- $casGi := div (add (int64 $layout.cas.blocksBytes) (sub $gi 1)) $gi -}}
-{{- $_ := set $out "cas" (printf "%dGi" $casGi) -}}
+{{- $fsMin := div (mul $fs 11) 10 -}}
+{{- $out := dict "filesystem" (printf "%dGi" (add (div (add $fsMin (sub $gi 1)) $gi) 1)) -}}
+{{- $min := dict "filesystem" $fsMin -}}
+{{- if $block -}}
+{{- $_ := set $out "cas" (printf "%dGi" (div (add (int64 $layout.cas.blocksBytes) (sub $gi 1)) $gi)) -}}
+{{- $_ := set $min "cas" (int64 $layout.cas.blocksBytes) -}}
 {{- end -}}
 {{- with .Values.storage.persistence.size -}}
 {{- if lt (include "cucina.bytes" . | int64) (include "cucina.bytes" $out.filesystem | int64) -}}
 {{- fail (printf "storage.persistence.size %s is smaller than the stores need (%s); grow the PVC or shrink storage.stores" . $out.filesystem) -}}
 {{- end -}}
 {{- $_ := set $out "filesystem" . -}}
+{{- end -}}
+{{- $live := lookup "apps/v1" "StatefulSet" .Release.Namespace (include "cucina.storage.name" .) -}}
+{{- if $live -}}
+{{- $claims := dict -}}
+{{- range ($live.spec).volumeClaimTemplates -}}
+{{- $_ := set $claims .metadata.name (((.spec).resources).requests).storage -}}
+{{- end -}}
+{{- $fsClaim := ternary "meta" "data" $block -}}
+{{- $want := ternary (list "cas" "meta") (list "data") $block -}}
+{{- if ne (keys $claims | sortAlpha | join ",") (join "," $want) -}}
+{{- fail (printf "storage.mode cannot change after install: the installed StatefulSet has the claims [%s], storage.mode=%s needs [%s] (reinstall the storage with a new cache)" (keys $claims | sortAlpha | join ", ") .Values.storage.mode (join ", " $want)) -}}
+{{- end -}}
+{{- $liveFs := get $claims $fsClaim -}}
+{{- with .Values.storage.persistence.size -}}
+{{- if ne (include "cucina.bytes" .) (include "cucina.bytes" $liveFs) -}}
+{{- fail (printf "storage.persistence.size %s differs from the installed PVCs (%s: %s): StatefulSet claim templates are immutable; expand the PVCs, delete the StatefulSet with --cascade=orphan, then upgrade (docs/operations/chart.md#upgrade)" . $fsClaim $liveFs) -}}
+{{- end -}}
+{{- end -}}
+{{- range $claim, $size := $claims -}}
+{{- $key := ternary "cas" "filesystem" (eq $claim "cas") -}}
+{{- if lt (include "cucina.bytes" $size | int64) (get $min $key | int64) -}}
+{{- fail (printf "the storage PVCs (%s) are %s but the stores need %s: StatefulSet claim templates are immutable; shrink storage.stores, or expand the PVCs, delete the StatefulSet with --cascade=orphan and set storage.persistence.size (docs/operations/chart.md#upgrade)" $claim $size (get $out $key)) -}}
+{{- end -}}
+{{- $_ := set $out $key $size -}}
+{{- end -}}
 {{- end -}}
 {{- toJson $out -}}
 {{- end -}}

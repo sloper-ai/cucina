@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
+<!-- DDM background-tasks variant: one-shot host preparation at every boot (idempotent): the same cucina-host-setup the package's postinstall runs, without bootstrapping a LaunchDaemon (launchd loads hostd from the declaration). Creates the cucina user with auto-login, pmset/systemsetup settings, vmnet DHCP lease, state and log directories. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>ai.sloper.cucina.host-setup</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>/var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/ai.sloper.cucina.hostd/bin/cucina-host-setup</string>
+		<string>install</string>
+		<string>--no-daemon</string>
+		<string>--prefix</string>
+		<string>/var/db/ManagedConfigurationFiles/BackgroundTaskServices/Services/ai.sloper.cucina.hostd</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>LaunchOnlyOnce</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/cucina-host-setup.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/cucina-host-setup.log</string>
+</dict>
+</plist>
