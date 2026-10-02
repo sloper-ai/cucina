@@ -139,6 +139,6 @@ bazel test //internal/workeragent/... //cmd/cucina-worker-agent/...   # + cross_
 | `//internal/workeragent:workeragent_test` | unit | dead-man decision (table + property), supervisor with fake clock/FS (controller gone, idle, busy, restarts, Spot, certificate), L1 placement, sysfs/Get-Disk discovery, Linux volume reuse/format, paths (Linux + Windows), activity parsing, env rendering, machine-document parity |
 | `//internal/workeragent/bootdata:bootdata_test` | unit | codec round trip (property), size limit, no private keys, versions |
 | `//internal/workeragent/imds:imds_test` | integration | IMDSv2 token flow, user data, identity, tags, Spot notice against `imdsfake` |
-| `//internal/workeragent/integration:integration_test` | integration | bootstrap end to end over TLS: success, transient then success, denied, identity rejected, unreachable for the deadline, rogue server certificate, foreign key, invalid/missing/empty user data; file modes, no key in logs, idempotent second run |
+| `//internal/workeragent/integration:integration_test` | integration | bootstrap end to end over TLS: success, transient then success, denied, identity rejected, unreachable for the deadline, rogue server certificate, foreign identity, invalid/missing/empty user data; file modes, no private material in logs, idempotent second run |
 | `//internal/workeragent/hostos:hostos_test` | integration | `porttest.RunFS`/`RunClock` conformance of the real adapters |
 | `//cmd/cucina-worker-agent:cucina-worker-agent_test` | integration | `render` CLI contract |
