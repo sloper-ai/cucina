@@ -8,11 +8,17 @@
 #                         Buildbarn units stay down and the dead-man switch only applies its uptime limits; exit 0 so
 #                         the unit does not restart-loop. The instance stays up.
 #   any other failure  -> fail closed with the agent's exit code (the agent has already requested power-off).
+# Optional root argument stages this same entrypoint in an image/test filesystem;
+# no argument uses the live root. Its agent, policy helper and systemctl belong to that root.
 set -uo pipefail
 
-agent=/opt/cucina/bin/cucina-worker-agent
-install -d -m 0755 /run/cucina
-rm -f /run/cucina/not-a-worker
+if (($# > 1)); then printf 'usage: cucina-bootstrap [absolute-root]\n' >&2; exit 2; fi
+root=${1:-}
+if [[ -n "$root" && "$root" != /* ]]; then printf 'bootstrap root must be absolute\n' >&2; exit 2; fi
+root=${root%/}
+agent=$root/opt/cucina/bin/cucina-worker-agent
+install -d -m 0755 "$root/run/cucina"
+rm -f "$root/run/cucina/not-a-worker"
 if [[ ! -x "$agent" ]]; then
   echo "cucina-bootstrap: $agent not installed; nothing to bootstrap"
   exit 0
@@ -20,8 +26,14 @@ fi
 rc=0
 "$agent" bootstrap || rc=$?
 if ((rc == 2)); then
-  touch /run/cucina/not-a-worker
+  touch "$root/run/cucina/not-a-worker"
   echo "cucina-bootstrap: no EC2 user data: not a worker; Buildbarn stays stopped, the instance stays up"
   exit 0
+fi
+if ((rc == 0)); then
+  # bb-runner's EnvironmentFile was read BEFORE bootstrap. Consume the fresh
+  # rendered file, then reload before bb-runner (and its dependent bb-worker) starts.
+  "$root/opt/cucina/bin/cucina-worker-memory-policy" "$root/etc/cucina/env" \
+    "$root/run/systemd/system" --systemctl "$root/usr/bin/systemctl" || exit "$?"
 fi
 exit "$rc"

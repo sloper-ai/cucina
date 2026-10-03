@@ -3,7 +3,7 @@
 # Linux worker images (R-POOL-4). Usage (from the repo root, after `source .work/env.sh` or equivalent):
 #   make -C workers/linux image-linux ARCH=x86_64 VARIANT=ubuntu     # also: ARCH=arm64, VARIANT=al2023
 #   make -C workers/linux measure-boot ARCH=x86_64 VARIANT=ubuntu N=3
-#   make -C workers/linux validate                                    # packer fmt/validate + shellcheck
+#   make -C workers/linux validate                                    # packer + script checks + policy tests
 # Network/SG/admin CIDR come from the e2e environment outputs (never committed).
 
 SHELL := /bin/bash
@@ -29,6 +29,11 @@ WORKER_AGENT  ?= $(CUCINA_DEV_STORAGE)/images/agent/cucina-worker-agent-linux-$(
 N             ?= 3
 PACKER        ?= packer
 SHELLCHECK    ?= mise exec shellcheck@0.11.0 -- shellcheck
+PYTHON        ?= python3
+# Only explicitly listed Python executables leave the shellcheck inputs; every
+# other files/bin entry remains checked, including newly added shell programs.
+PYTHON_BINS   := $(HERE)/files/bin/cucina-worker-memory-policy
+SHELL_BINS    := $(filter-out $(PYTHON_BINS),$(wildcard $(HERE)/files/bin/*))
 FAMILY        := linux-$(VARIANT)-$(ARCH)
 
 .PHONY: help vars smoke-binaries agent image-linux measure-boot validate fmt
@@ -78,5 +83,8 @@ validate: | $(ARTIFACTS)
 	cd $(HERE)/packer && $(PACKER) init . >/dev/null && for a in x86_64 arm64; do for v in ubuntu al2023; do \
 	  CUCINA_IMAGES_ARTIFACTS="$(ARTIFACTS)" $(PACKER) validate -var-file="$(ARTIFACTS)/validate.pkrvars.json" \
 	    -var arch=$$a -var variant=$$v -var image_version=0.0.0 -var generation=0 . ; done; done
-	$(SHELLCHECK) $(HERE)/scripts/*.sh $(HERE)/files/bin/* $(HERE)/tests/*.sh
+	$(SHELLCHECK) $(HERE)/scripts/*.sh $(SHELL_BINS) $(HERE)/tests/*.sh
+	# Parse the Python 3.9 grammar without importing code or writing __pycache.
+	$(PYTHON) -I -c 'import ast, pathlib, sys; [ast.parse(p.read_text(), filename=str(p), feature_version=(3, 9)) for p in map(pathlib.Path, sys.argv[1:])]' $(PYTHON_BINS)
 	bash $(HERE)/tests/notices_test.sh
+	bash $(HERE)/tests/service_policy_test.sh

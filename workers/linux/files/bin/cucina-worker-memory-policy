@@ -1,0 +1,170 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+"""Install the candidate disk-only bb-worker startup policy (ADR 0415).
+
+Read the freshly rendered EnvironmentFile, never evaluate it or use the inherited
+placement. Only our exact runtime drop-in may be created/removed. The optional
+systemctl path and unit directory allow the same public boundary to be exercised
+in a staged filesystem; bootstrap supplies the live paths by default.
+"""
+import argparse
+import contextlib
+import fcntl
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import subprocess
+import sys
+
+DROP_DIR = "bb-worker.service.d"
+DROP_FILE = "20-cucina-memory-high.conf"
+POLICY = (b"# SPDX-License-Identifier: FSL-1.1-ALv2\n"
+          b"# Owned by cucina-worker-memory-policy (ADR 0415); do not edit.\n"
+          b"[Service]\nMemoryHigh=768M\n")
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+READ_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+RELOAD_TIMEOUT = 10
+
+
+def validate_stat(info, directory=False, owner=True):
+    kind_ok = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+    if not kind_ok or (owner and info.st_uid != os.geteuid()) or info.st_mode & 0o022:
+        raise ValueError("refusing non-regular, unowned or group/world-writable policy/configuration path")
+    if not directory and info.st_nlink != 1:
+        raise ValueError("refusing a multiply-linked policy/configuration file")
+
+
+@contextlib.contextmanager
+def directory(path, create=False):
+    """Walk with directory FDs; no ancestor or leaf symlink is followed."""
+    if not path.is_absolute() or any(p in (".", "..") for p in str(path).split("/")):
+        raise ValueError("paths must be clean and absolute")
+    fd = os.open("/", DIRECTORY_FLAGS)
+    try:
+        for part in path.parts[1:]:
+            try:
+                child = os.open(part, DIRECTORY_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o755, dir_fd=fd)
+                child = os.open(part, DIRECTORY_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            info = os.fstat(fd)
+            # Root/current-user ancestors are trusted. A sticky temporary
+            # ancestor is usable for staged tests; the destination itself is
+            # still required to be owned and not group/world-writable.
+            if info.st_uid not in (0, os.geteuid()) or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX):
+                raise ValueError("refusing an untrusted parent directory")
+        validate_stat(os.fstat(fd), directory=True)
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def read_file(parent, name, limit):
+    fd = os.open(name, READ_FLAGS, dir_fd=parent)
+    with os.fdopen(fd, "rb") as f:
+        info = os.fstat(f.fileno())
+        validate_stat(info)
+        content = f.read(limit + 1)
+        if len(content) > limit:
+            raise ValueError("policy/configuration file exceeds size bound")
+        return content, info
+
+
+def placement(path):
+    with directory(path.parent) as parent:
+        content, _ = read_file(parent, path.name, 1 << 20)
+    text = content.decode("utf-8")
+    if "\x00" in text or "\r" in text:
+        raise ValueError("invalid EnvironmentFile encoding")
+    assignments = [line for line in text.split("\n")
+                   if re.match(r"[ \t]*(?:export[ \t]+)?CUCINA_L1_PLACEMENT\b", line)]
+    if len(assignments) != 1:
+        raise ValueError("exactly one fresh CUCINA_L1_PLACEMENT assignment is required")
+    match = re.fullmatch(r"CUCINA_L1_PLACEMENT='(ebs|root-disk|instance-store|memory)'", assignments[0])
+    if not match:
+        raise ValueError("placement must be the canonical resolved value rendered by the worker agent")
+    return match.group(1)
+
+
+def identity(info):
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def configure(parent, disk):
+    try:
+        fd = os.open(DROP_DIR, DIRECTORY_FLAGS, dir_fd=parent)
+    except FileNotFoundError:
+        if not disk:
+            return
+        os.mkdir(DROP_DIR, 0o755, dir_fd=parent)
+        fd = os.open(DROP_DIR, DIRECTORY_FLAGS, dir_fd=parent)
+    try:
+        validate_stat(os.fstat(fd), directory=True)
+        try:
+            content, previous = read_file(fd, DROP_FILE, len(POLICY))
+        except FileNotFoundError:
+            previous = None
+        else:
+            # A root-owned file is not necessarily ours. Never overwrite an
+            # operator edit or a file that merely happens to share our name.
+            if content != POLICY:
+                raise ValueError("refusing a drop-in not owned by this policy helper")
+        if disk and previous is None:
+            tmp = ".cucina-memory-" + secrets.token_hex(8)
+            out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=fd)
+            try:
+                with os.fdopen(out, "wb") as f:
+                    os.fchmod(f.fileno(), 0o644)
+                    f.write(POLICY)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # Atomic publication with NO replacement: if a foreign entry
+                # appeared since the check, fail instead of replacing it.
+                os.link(tmp, DROP_FILE, src_dir_fd=fd, dst_dir_fd=fd, follow_symlinks=False)
+            finally:
+                os.unlink(tmp, dir_fd=fd)
+        elif not disk and previous is not None:
+            current = os.stat(DROP_FILE, dir_fd=fd, follow_symlinks=False)
+            if identity(current) != identity(previous):
+                raise ValueError("drop-in changed during removal; refusing cleanup")
+            os.unlink(DROP_FILE, dir_fd=fd)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("env_file", type=Path)
+    parser.add_argument("unit_dir", type=Path)
+    parser.add_argument("--systemctl", default="/usr/bin/systemctl", type=Path)
+    args = parser.parse_args()
+    if not args.systemctl.is_absolute():
+        raise ValueError("systemctl path must be absolute")
+    resolved = placement(args.env_file)
+    # Serialize our helpers without an unbounded lock wait. This does not
+    # authorize changes to other files in the unit directory.
+    with directory(args.unit_dir, create=True) as parent:
+        fcntl.flock(parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        configure(parent, resolved != "memory")
+        # Reload even on an idempotent retry: the previous file update may
+        # have succeeded while daemon-reload failed. Never start on that gap.
+        subprocess.run([str(args.systemctl), "daemon-reload"], check=True,
+                       timeout=RELOAD_TIMEOUT,
+                       env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"})
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print("cucina-worker-memory-policy: " + str(error), file=sys.stderr)
+        sys.exit(1)

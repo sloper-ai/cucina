@@ -12,3 +12,20 @@ cucina_sh_test(
     }),
     tier = "integration",
 )
+
+cucina_sh_test(
+    name = "service_policy_test",
+    timeout = "short",
+    srcs = ["tests/service_policy_test.sh"],
+    data = [
+        "files/bin/cucina-bootstrap",
+        "files/bin/cucina-worker-memory-policy",
+        "files/systemd/bb-runner.service",
+        "files/systemd/bb-worker.service",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    tier = "integration",
+)
