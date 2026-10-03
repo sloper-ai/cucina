@@ -54,7 +54,22 @@ cucina_sh_test(
     name = "ci_scripts_test",
     timeout = "short",
     srcs = ["test-ci-scripts.sh"],
+    args = ["policies"],  # all existing cases; new Git fixtures have their own executor requirement
     data = [":scripts"],
+    target_compatible_with = _NOT_WINDOWS,
+    tier = "integration",
+)
+
+cucina_sh_test(
+    name = "ci_changes_test",
+    timeout = "short",
+    srcs = ["test-ci-scripts.sh"],
+    args = ["changes"],
+    data = [
+        ":scripts",
+        "//.githooks:files",
+    ],
+    tags = ["no-remote-exec"],  # needs git on the executor, like githooks_*_test
     target_compatible_with = _NOT_WINDOWS,
     tier = "integration",
 )

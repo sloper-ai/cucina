@@ -33,10 +33,33 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # exact PR commits and Buf's immutable comparison tree
+          persist-credentials: false
+      - name: verify change range and enforce Test-Change on every PR commit
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CHECKOUT_SHA"
+          base="$EVENT_BASE"
+          case "$base" in
+            ''|0000000000000000000000000000000000000000)
+              # New branches, schedules and dispatches compare to the fetched default
+              # branch snapshot. Never turn an unavailable baseline into a skipped gate.
+              git check-ref-format "refs/heads/$DEFAULT_BRANCH"
+              base="$(git rev-parse --verify "refs/remotes/origin/${DEFAULT_BRANCH}^{commit}")"
+              ;;
+          esac
+          args=("$base" "$EVENT_HEAD")
+          if [ "$EVENT" = pull_request ]; then args+=(--check-tests); fi
+          tools/ci/change-context.sh "${args[@]}" >> "$GITHUB_OUTPUT"
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
-          install_args: go rust golangci-lint gitleaks aqua:EmbarkStudios/cargo-deny actionlint shellcheck
+          install_args: go rust golangci-lint gitleaks aqua:EmbarkStudios/cargo-deny actionlint shellcheck buf opentofu tflint
       - name: gitleaks (full history, §12)
         run: gitleaks git --no-banner --redact --config .gitleaks.toml --exit-code 1 .
       - name: golangci-lint
@@ -45,6 +68,16 @@ jobs:
         run: cargo-deny --all-features check
       - name: actionlint
         run: actionlint
+      - name: Buf breaking compatibility (immutable baseline)
+        env:
+          BASE_SHA: ${{ steps.changes.outputs.base }}
+        run: buf breaking --against ".git#ref=${BASE_SHA}" --error-format=github-actions
+      - name: offline OpenTofu, tflint and infrastructure policy
+        env:
+          E2E_TESTS_SKIP: ""
+          AWS_SHARED_CREDENTIALS_FILE: ${{ runner.temp }}/no-aws-credentials
+          AWS_CONFIG_FILE: ${{ runner.temp }}/no-aws-config
+        run: deploy/aws-e2e/tests/run.sh
 
   test:
     name: bazel test (${{ matrix.os }})
@@ -170,6 +203,9 @@ jobs:
           bazelisk test --config=ci --nocache_test_results --test_output=all \
             --test_arg=-test.v --test_arg=-test.timeout=50s \
             --test_env=GOTRACEBACK=all -- //charts/cucina/tests/boot:boot_test
+      - name: clippy (warnings are errors)
+        if: runner.os == 'Linux'
+        run: bazelisk build --config=ci --config=clippy -- //cli/...
       - name: cross-build Rust release targets (Linux musl, Windows gnullvm)
         if: runner.os == 'Linux'
         run: |

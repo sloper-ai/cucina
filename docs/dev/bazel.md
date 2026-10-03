@@ -231,6 +231,20 @@ preserving verbatim upstream licence files and the notices aggregate. All three 
 and test `//...`, including the Windows CLI. The pinned LLVM/rules_rust compatibility patches
 are documented in [ADR 0107](../adr/0107-windows-native-toolchain-compatibility.md).
 
+Every change also runs Buf breaking compatibility and the complete offline OpenTofu/tflint
+script in `lint`, plus the existing warnings-as-errors Clippy configuration in the Linux lane.
+Buf compares with the verified event base (PR/merge group), previous push commit, or the fetched
+default-branch snapshot for a new branch/schedule/dispatch. Missing history is an error, not a
+skip. PRs additionally run the existing Test-Change checker over the exact event base/head
+commit range, with full checkout history; the synthetic merge commit is not the policy range.
+
+`nightly.yml` reuses its 1,000-seed simulation and kind/ct system lanes on relevant PRs.
+`tools/ci/change-context.sh` selects them from a verified, NUL-delimited merge-base diff, including
+deletions and both sides of renames; shared build/CI inputs select both. Quarantine and existing
+PR-diff/weekly-full mutation reports remain in place, with no mutation-score gate. All PR jobs
+are read-only `pull_request` jobs. Repository administrators still own required-check and
+CODEOWNER branch-protection settings; workflows do not configure those protections.
+
 Windows storage setup measures the fixed system/workspace volumes and selects the one with
 most free bytes. Its short root `<drive>:/b` holds the output tree and repository-download
 cache; hardlinks avoid copies of cached download files. The disk action cache and shared

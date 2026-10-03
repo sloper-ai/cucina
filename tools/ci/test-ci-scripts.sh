@@ -4,10 +4,14 @@
 # Tests for the policy checks in tools/ci/: check-quarantine.sh (flake policy),
 # check-manual-tests.sh (manual checklist structure), check-alert-runbooks.sh (alert
 # table of the operations README) and adr-index.sh (ADR index).
-# Each case builds a tiny tree in a temporary directory; nothing outside it is read.
+# Each case builds a tiny tree or Git repository in a temporary directory;
+# the real checkout is never modified.
 #
-# Usage: tools/ci/test-ci-scripts.sh      (exit 0 = all cases passed)
+# Usage: tools/ci/test-ci-scripts.sh [all|policies|changes] (exit 0 = all cases passed)
 set -euo pipefail
+
+suite="${1:-all}"
+case "$suite" in all | policies | changes) ;; *) printf 'unknown suite: %s\n' "$suite" >&2; exit 2 ;; esac
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/cucina-ci-scripts.XXXXXX")"
@@ -40,6 +44,84 @@ expect() {
 mentions() { # mentions <name> <text>: the last output contains <text>
     if grep -q -- "$2" "$out"; then pass "$1"; else fail "$1 (output lacks: $2)"; fi
 }
+
+# R-TEST-2/5 and §6.2: CI must use complete, verified commit ranges, enforce
+# every PR commit, and select the existing expensive lanes from the PR delta.
+changes_tests() {
+    local repo="$work/changes" helper="$here/change-context.sh" base head row path simulation system first docs_head advanced_base
+    local GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 GIT_DEFAULT_HASH=sha1
+    export GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_TERMINAL_PROMPT GIT_DEFAULT_HASH
+    git init -q "$repo"
+    git -C "$repo" symbolic-ref HEAD refs/heads/main
+    snapshot() {
+        git -C "$repo" add --all
+        git -C "$repo" -c core.hooksPath=/dev/null -c commit.gpgsign=false \
+            -c user.name='CI Fixture' -c user.email='ci-fixture@example.invalid' commit -q -m "$1"
+        git -C "$repo" rev-parse HEAD
+    }
+    context() { (cd "$repo" && bash "$helper" "$@"); }
+    printf 'package fixture\nfunc TestPolicy() {}\n' >"$repo/policy_test.go"
+    base="$(snapshot 'Add fixture')"
+    first="$base"
+    for row in \
+        'docs/guide.md|false|false' \
+        'internal/scaling/plan.go|true|false' \
+        'internal/hostd/lifecycle/state.go|true|false' \
+        'charts/cucina/templates/rbac.yaml|false|true' \
+        'internal/controller/selfcheck.go|true|true' \
+        'api/crds/pool.yaml|false|true' \
+        '.github/workflows/nightly.yml|true|true'; do
+        IFS='|' read -r path simulation system <<<"$row"
+        mkdir -p "$repo/$(dirname "$path")"
+        printf 'fixture\n' >"$repo/$path"
+        head="$(snapshot 'Change fixture')"
+        expect "CI classifies $path" ok context "$base" "$head" --check-tests
+        mentions "simulation selection for $path" "^simulation=$simulation$"
+        mentions "system selection for $path" "^system=$system$"
+        if [ "$path" = docs/guide.md ]; then docs_head="$head"; fi
+        base="$head"
+    done
+    advanced_base="$(git -C "$repo" -c user.name='CI Fixture' -c user.email='ci-fixture@example.invalid' \
+        commit-tree "$(git -C "$repo" rev-parse "${head}^{tree}")" -p "$first" -m 'Advance only the synthetic base')"
+    expect 'base-branch changes do not select lanes for a docs-only PR' ok context "$advanced_base" "$docs_head"
+    mentions 'merge-base diff excludes unrelated scaling changes' '^simulation=false$'
+    mentions 'merge-base diff excludes unrelated chart changes' '^system=false$'
+    expect 'a head outside the checkout ancestry is refused' fail context "$first" "$advanced_base"
+    # Filenames, including deletions and embedded newlines, are not a line protocol.
+    path=$'docs/note\ncharts/not-a-chart.md'
+    mkdir -p "$repo/$(dirname "$path")"
+    printf 'fixture\n' >"$repo/$path"
+    head="$(snapshot 'Add unusual documentation path')"
+    expect 'a newline in a doc path does not select chart tests' ok context "$base" "$head"
+    mentions 'NUL-delimited diff preserves path identity' '^system=false$'
+    base="$head"
+    rm "$repo/charts/cucina/templates/rbac.yaml"
+    head="$(snapshot 'Remove chart fixture')"
+    expect 'deleted chart paths still select system tests' ok context "$base" "$head"
+    mentions 'chart deletion selects system' '^system=true$'
+    base="$head"
+    rm "$repo/policy_test.go"
+    head="$(snapshot 'Remove synthetic test without explanation')"
+    expect 'PR enforcement refuses a missing Test-Change reason' fail context "$base" "$head" --check-tests
+    printf 'package fixture\nfunc TestPolicy() {}\n' >"$repo/policy_test.go"
+    base="$(snapshot 'Restore synthetic test')"
+    rm "$repo/policy_test.go"
+    head="$(snapshot $'Remove synthetic test\n\nTest-Change: remove a synthetic fixture to exercise CI acceptance')"
+    expect 'PR enforcement accepts an explained test removal' ok context "$base" "$head" --check-tests
+    expect 'an explained head does not hide an earlier violating commit' fail context "$first" "$head" --check-tests
+    expect 'branch names cannot substitute for event commit SHAs' fail context refs/heads/main "$head"
+    expect 'abbreviated commit SHAs are refused' fail context "${base:0:12}" "$head"
+    expect 'missing commit objects fail closed' fail context 1111111111111111111111111111111111111111 "$head"
+    git clone -q --depth=1 "file://$repo" "$work/shallow"
+    repo="$work/shallow"
+    expect 'shallow history cannot silently omit PR commits' fail context "$head" "$head" --check-tests
+}
+if [ "$suite" != policies ]; then changes_tests; fi
+if [ "$suite" = changes ]; then
+    printf '%s passed, %s failed\n' "$passed" "$failed"
+    [ "$failed" -eq 0 ]
+    exit
+fi
 
 # ------------------------------------------------------------ check-quarantine
 

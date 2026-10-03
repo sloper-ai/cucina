@@ -44,14 +44,22 @@ scenario IDs (`T0`…`T22`). The macros in [`bazel/tiers.bzl`](bazel/tiers.bzl) 
 
 | Tier | Bazel size and tags | Holds | Runs | Declare with |
 | --- | --- | --- | --- | --- |
-| `static` | `small`, `tier-static` | As Bazel tests: compile, `go vet`/nogo, rustfmt, buildifier, `buf` lint, `kubeconform -strict`, `values.schema.json`, type-checked Buildbarn config rendering, drift checks of generated code. Beside Bazel: golangci-lint, cargo-deny, gitleaks (full history) and actionlint in the CI `lint` job; clippy with `bazelisk build --config=clippy`; `tofu validate` and tflint in `deploy/aws-e2e/tests/run.sh`. Planned: `buf` breaking checks, and clippy and the OpenTofu checks as CI jobs | Every change (the Bazel tests and the `lint` job) | `cucina_sh_test(tier = "static")`, or `tags = ["tier-static"]` on third-party test macros |
+| `static` | `small`, `tier-static` | As Bazel tests: compile, `go vet`/nogo, rustfmt, buildifier, `buf` lint, `kubeconform -strict`, `values.schema.json`, type-checked Buildbarn config rendering, drift checks of generated code. CI `lint`: golangci-lint, cargo-deny, gitleaks (full history), actionlint, Buf breaking compatibility against a verified immutable baseline, and the complete offline `deploy/aws-e2e/tests/run.sh` (OpenTofu validation/mock plans, tflint, policy checks; no AWS). The Linux build lane also runs Bazel's `clippy` configuration with warnings as errors. PR CI enforces the Test-Change range policy | Every change (the Bazel, `lint` and Linux clippy gates) | `cucina_sh_test(tier = "static")`, or `tags = ["tier-static"]` on third-party test macros |
 | `unit` | `small`, `tier-unit`: under 1 s, no I/O, no sleeps, one process | Pure cores: the autoscaler `Plan`, VM and instance state machines, trust-policy evaluation, token mint and verify, config rendering (goldens), platform and `bazelrc` generation, the cost model, the credential-helper protocol, managed-preferences parsing. Property-based where the input space is large | `bazel test //...` | `cucina_go_test(tier = "unit")`, `cucina_rust_test(tier = "unit")` |
 | `integration` | `medium`, `tier-integration`: under 30 s, localhost only | Real components at our boundaries against **fakes**: envtest reconcilers with fake Compute, VMRuntime and BuildQueue; the STS against the local `internal/auth/oidctest` issuer fixtures; the pinned Buildbarn binaries booted with rendered configuration (an action round trip); `cucinactl` against fake management and REAPI servers; hostd against a fake `tart`; network faults; conformance suites against the fakes | `bazel test //...` (cheap on RBE) | `cucina_go_test(tier = "integration", envtest = True)` |
-| `simulation` | `large`, `manual`, `tier-simulation` | Deterministic simulation of the controller: scenario files, a nightly 1,000-seed sweep, trace replay | Nightly (the CI `nightly` job); planned: also on pull requests that touch scaling or lifecycle code | `cucina_go_test(tier = "simulation")` |
-| `system` | `large`, `manual`, `requires-docker`, `no-remote-exec` | Planned, no target exists yet: kind with Helm install and upgrade from the previous release, RBAC, leader election, `ct install`. The only tier that may use Docker, in its own CI lane, never on RBE | Planned: nightly, and on pull requests that touch the chart or RBAC | `cucina_go_test(tier = "system")` |
+| `simulation` | `large`, `manual`, `tier-simulation` | Deterministic simulation of the controller: scenario files, a 1,000-seed sweep, trace replay | Nightly and relevant scaling/lifecycle PRs, through the existing `nightly.yml` sweep; manual dispatch | `cucina_go_test(tier = "simulation")` |
+| `system` | `large`, `manual`, `requires-docker`, `no-remote-exec` | Existing dedicated lane: kind, locally built controller image, `ct install`/Helm tests and any declared system-tier Bazel tests. Dedicated previous-release upgrade, RBAC and leader-election scenarios remain planned. The only tier that may use Docker; never on RBE | Nightly and relevant chart/RBAC PRs through the existing `nightly.yml` system lane; manual dispatch | `cucina_go_test(tier = "system")` |
 | `acceptance` | `enormous`, `manual`, `no-remote-exec` | The real AWS and Mac campaign (T0–T22) as scenarios in the e2e harness | Campaign, release, on demand | `cucina_scenario(...)` |
 | `production` | not a Bazel tier | The guards in §12: fail-fast configuration, invariants, SLO burn-rate alerts, canaries | Always, in every deployment | code, rules and dashboards |
 | `manual` | not a Bazel tier | Human checklists, [`docs/testing/manual/`](docs/testing/manual/README.md) | Releases, OS and Xcode changes, hardware changes | `docs/testing/manual/MT-NNN.md` |
+
+PR lane selection uses the complete merge-base-to-head Git delta, including deleted/renamed paths,
+not GitHub's truncated changed-files API. `tools/ci/change-context.sh` owns the path sets: scaling,
+controller/reconciler, worker/host lifecycle and simulation dependencies select the sweep;
+chart/CRD/RBAC/controller and kind-image inputs select the system lane. Shared build/dependency
+and CI-policy changes select both. Selection failure fails the PR job rather than silently skipping work.
+All PR jobs use ordinary `pull_request` events and read-only permissions, never elevated
+`pull_request_target` credentials. Existing scheduled lanes, seed counts and timeouts are unchanged.
 
 Choosing the tier: if the code under test can be a pure function, make it one and use `unit`. If it needs a socket, a
 process or the Kubernetes API server, it is `integration` and talks to fakes and local binaries only. Anything that needs
@@ -102,8 +110,8 @@ Do not write tests for:
 | Mock frameworks on owned ports | `depguard` in [`.golangci.yml`](.golangci.yml) bans `gomock` (both import paths), `mockery` and `testify/mock`; [`deny.toml`](deny.toml) bans `mockall` | active |
 | Docker in the unit, integration and simulation tiers | `depguard` bans `testcontainers-go`; only the `system` tier carries `requires-docker` | active |
 | A test without a tier | the `tier_tags_aspect` in [`.bazelrc`](.bazelrc) fails `bazel build //...` | active |
-| `flaky = True`, the `exclusive` tag, an expired or oversized quarantine | [`tools/ci/check-quarantine.sh`](tools/ci/check-quarantine.sh) (§7) | script ready, CI wiring planned |
-| Deleted, weakened or skipped tests, regenerated goldens, without a reason | [`.githooks/commit-msg`](.githooks/commit-msg), the same check over every commit in CI, CODEOWNERS (§6.2) | hook active (opt-in per clone), CI wiring planned |
+| `flaky = True`, the `exclusive` tag, an expired or oversized quarantine | [`tools/ci/check-quarantine.sh`](tools/ci/check-quarantine.sh) (§7) | enforced on PRs and nightly by `nightly.yml` |
+| Deleted, weakened or skipped tests, regenerated goldens, without a reason | [`.githooks/commit-msg`](.githooks/commit-msg), the same check over every PR commit in `ci.yml`, CODEOWNERS (§6.2) | hook active (opt-in per clone); PR range gate active |
 | Secrets and environment identifiers in the public repository | [`.githooks/pre-push`](.githooks/pre-push) and gitleaks in CI ([`.gitleaks.toml`](.gitleaks.toml)) (§6.3) | active |
 | Assertions on log text | review. Assert on state the fake exposes, or on metrics | review |
 | Snapshots longer than about 50 lines | review. A screen snapshot is one terminal screen; split goldens by component | review |
@@ -164,12 +172,17 @@ How it is enforced, in layers (each layer is cheap; none is the only one):
 
 * **`.githooks/commit-msg`** runs the check on the commit being created. Enable the hooks once per clone:
   `git config core.hooksPath .githooks`. `git commit --no-verify` skips it, so:
-* **CI** repeats the check on every commit of a pull request
-  (`.githooks/lib/test-change.sh range origin/main..HEAD`; wiring into the workflow is planned). This also covers `--amend`, which the hook can
-  only check against the commit being amended. Merge commits are not judged: the commits they bring in are.
+* **CI** repeats the same `.githooks/lib/test-change.sh range` check over the pull request event's
+  exact `base.sha..head.sha`, not a moving branch or GitHub's synthetic merge commit. Checkout fetches
+  full history; `tools/ci/change-context.sh` verifies full commit SHAs, rejects shallow/missing history,
+  and requires the event head to belong to the checked-out revision. An unavailable check fails closed.
+  This also covers `--amend`, which the hook can only check against the commit being amended.
+  Merge commits are not judged: the commits they bring in are.
 * **CODEOWNERS** ([`.github/CODEOWNERS`](.github/CODEOWNERS)) routes changes to tests, testdata, goldens, scenarios, manual
   checklists, BUILD declarations and policy files (hooks, lint configuration, tier macros, workflows) to a maintainer.
-  Repository administrators must require code-owner review in branch protection for this to block merging; the file alone only requests review.
+  Repository administrators must require code-owner review and the intended CI checks in branch protection
+  for them to block merging; neither this file nor the workflow configures those repository settings.
+  Include the PR lane selector and selected simulation/system checks, so a failed selector cannot count as coverage.
 * The heuristics cannot see a semantic weakening that keeps the line count (loosening an assertion). Review and mutation testing (§8) cover that.
 
 The hooks are tested by [`tools/ci/test-githooks.sh`](tools/ci/test-githooks.sh): the `rules` suite has one case per pattern, and
@@ -209,7 +222,7 @@ A flaky test is a bug in the test, the code or the infrastructure.
   )
   ```
 
-  At most five tests may be quarantined at once, and an expired quarantine fails the check: fix the test or delete it (the script is ready; wiring it into CI is planned, §5).
+  At most five tests may be quarantined at once, and an expired quarantine fails the PR/nightly check: fix the test or delete it (§5).
   [`tools/ci/check-quarantine.sh`](tools/ci/check-quarantine.sh) enforces this (and bans `flaky = True` and the `exclusive` tag) by reading the
   BUILD files; run it locally before you push. Quarantined tests still run in the nightly lane (`--config=nightly`).
 * A test that fails only under Cucina's own remote execution is a **Cucina bug**. Track it and fix it; never retry it away.
@@ -226,7 +239,7 @@ coverage, but never add a test just to raise it.
 * **Scope**: STS and auth (`internal/auth`, `internal/sts`, `internal/keys`), the autoscaler core (`internal/scaling`), VM state machines
   (`internal/hostd/lifecycle`), config rendering (`internal/bbconfig`) and the Rust credential helper. A pull request that touches none of
   them needs no mutation run.
-* **When**: diff mode on pull requests, a full run weekly. No CI job runs `gremlins` or `cargo-mutants` yet (planned): until then you run them yourself for a change that touches the scope.
+* **When**: `nightly.yml` already runs diff mode on pull requests and full runs weekly, with artifacts for human review. These are non-blocking reports, not a coverage or repository-wide mutation-score gate. Local runs remain useful for triaging a scoped survivor.
   The git hooks have their own sweep, [`tools/ci/mutate-hooks.sh`](tools/ci/mutate-hooks.sh).
 
   ```sh
@@ -547,9 +560,12 @@ Some behaviour is better guarded at runtime than before merge. Each guard gets *
 | Invariants stay on in production | Predicates in [`invariants/`](invariants) (instances never exceed max, at most two macOS VMs per host, never terminate a busy worker, every launched resource is tagged, no duplicate launch for one idempotency token) are called by the controller *and* the simulation. A violation aborts the operation, increments `cucina_invariant_violations_total{invariant}`, logs, alerts, and crashes the component if its state is suspect |
 | Crash-only components | Restarts are the recovery mechanism (level-triggered reconcilers, launchd `KeepAlive`); acceptance scenario T9 proves it once |
 | Alerts and SLO budgets | The chart ships threshold alerts for queue time, worker failures, leaks, orphans, egress, cache-hit drops, retention, host offline and certificate expiry, plus Sloth-generated burn-rate rules. See the exact [alert/runbook table](docs/operations/README.md#find-the-runbook-from-an-alert); do not assume every threshold alert is a multi-window SLO burn-rate alert. Keep the generated rules aligned with [`slo/`](slo) and test them with `promtool test rules` |
-| Canaries | The leader runs the cache canary every five minutes in-process (`internal/controller/components_canary.go`); `helm test` runs it on demand. It exchanges a token and checks CAS/AC without starting workers. Both need a usable service key (`hooks.test.credentialSecret` after retiring break-glass). Execution probes exist in `internal/canary`, but daily/per-deploy scheduling and a chart-managed CronJob are still planned; do not claim those cadences are active |
+| Canaries | The leader runs cache probes every five minutes, independently of serial per-pool execution probes every 24 hours and on each Helm deployment revision, reusing one probe/auth/TLS path. Execution is enabled by default in the chart, can be disabled independently and is bounded to ≤15 minutes; durable write-ahead reservations survive leadership changes. Paused, offline, failed or shared-route pools are non-passing; no forced cold starts. `helm test` remains cache-only; use `hooks.test.credentialSecret` after break-glass retirement. |
 | Shadow mode | A change of autoscaler policy first decides without acting and is diffed against the current policy |
 | Game days | AWS FIS injects real capacity errors and throttling into the controller's role: [`docs/operations/game-days-fis.md`](docs/operations/game-days-fis.md) |
+
+Canary scheduling, probe and chart regressions passed focused checks. This describes the implementation,
+not live qualification: deployment, leadership-failover and zero-scale proof remain pending.
 
 Adding an invariant: write the predicate in `invariants/` next to the others, call it from the code path it guards, add it to the simulation's step check, and write the one test
 that makes it fire. Metric names are API: they are listed in [`docs/contracts.md`](docs/contracts.md) and pass `testutil.CollectAndLint`.

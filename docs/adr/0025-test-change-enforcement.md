@@ -10,7 +10,7 @@ bypassed (`--no-verify`, `git commit --amend`, a clone without the hooks), and c
 
 ## Decision
 * **One implementation, three call sites.** `.githooks/lib/test-change.sh` reads the change and a commit message. `.githooks/commit-msg` runs it on the commit
-  being created; CI runs `test-change.sh range origin/main..HEAD` on every commit of a pull request, which also covers bypassed hooks and amended commits; reviewers
+  being created; CI runs `test-change.sh range` over the exact event `base.sha..head.sha` on every pull request, which also covers bypassed hooks and amended commits; reviewers
   can run `commit <rev>`.
 * **Two classifiers, both in awk.** `classify-diff.awk` reads `git diff -U0` for Go, Rust, goldens, scenarios and checklists; `classify-build.awk` reads the old and the
   new content of every changed BUILD file, statement by statement, so a test target is compared with its old self (a marker added, a tier changed, a target removed)
@@ -36,6 +36,6 @@ bypassed (`--no-verify`, `git commit --amend`, a clone without the hooks), and c
 * A refactor that merely shrinks a test costs one trailer line; semantic weakening that keeps the line count (loosening an assertion) is not
   detected. Review, CODEOWNERS and mutation testing cover that.
 * A skip added in a new file is not caught by the hook. That is deliberate (it would block every legitimate platform guard) and is covered by the admission rule in review.
-* The hook is opt-in per clone (`git config core.hooksPath .githooks`); CI is the enforcing layer once the range check is wired into the workflow (planned).
+* The hook is opt-in per clone (`git config core.hooksPath .githooks`); `ci.yml` wires the range checker through `tools/ci/change-context.sh`, which verifies full event SHAs, complete fetched history and that the PR head belongs to the checkout. Missing history fails closed; a moving base ref or synthetic merge does not replace the range. Administrators still configure required CI checks and CODEOWNER review in branch protection.
 * `--amend` is checked against the amended commit, not its parent; the CI range check is the complete one.
 * The heuristics are tested by `tools/ci/test-githooks.sh` and mutation-tested by `tools/ci/mutate-hooks.sh` (a few minutes; run it when the hooks change).

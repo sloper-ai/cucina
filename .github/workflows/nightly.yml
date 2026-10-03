@@ -5,7 +5,7 @@
 #                 lane with Docker), security scans (govulncheck, cargo deny, golangci-lint
 #                 against fresh advisory data), quarantine expiry
 #   weekly        full mutation testing (gremlins v0.6.0, cargo-mutants v27.1.0)
-#   pull request  mutation testing of the changed lines and the quarantine check
+#   pull request  relevant-path simulation/system gates, quarantine, and mutation reports
 #
 # Mutation testing is a non-blocking report (artifacts); no score target (R-TEST-5.6).
 # `bazel test //...`, lint, secret scan and the Cucina RBE job live in ci.yml.
@@ -30,11 +30,40 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: select PR simulation and system gates
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      simulation: ${{ steps.scope.outputs.simulation }}
+      system: ${{ steps.scope.outputs.system }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: classify the complete verified PR delta
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHECKOUT_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CHECKOUT_SHA"
+          tools/ci/change-context.sh "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
   simulation:
     name: simulation sweep (1,000 seeds)
+    needs: changes
+    # !cancelled() keeps scheduled/dispatch lanes eligible when the PR-only job is skipped.
     if: >-
+      !cancelled() && (
+      (github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.simulation == 'true') ||
       (github.event_name == 'schedule' && github.event.schedule == '41 3 * * *') ||
-      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',simulation,'))
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',simulation,')))
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:
@@ -78,9 +107,12 @@ jobs:
 
   system:
     name: system tier (kind + ct install)
+    needs: changes
     if: >-
+      !cancelled() && (
+      (github.event_name == 'pull_request' && needs.changes.result == 'success' && needs.changes.outputs.system == 'true') ||
       (github.event_name == 'schedule' && github.event.schedule == '41 3 * * *') ||
-      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',system,'))
+      (github.event_name == 'workflow_dispatch' && contains(format(',{0},', inputs.lanes), ',system,')))
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
