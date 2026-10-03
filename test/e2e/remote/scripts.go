@@ -183,8 +183,11 @@ func (d ps) cmdFile(dir, script string, o Opts) string {
 	// throw (exit 1) under ErrorActionPreference=Stop.
 	full := hdr.String() + script + "\nexit $LASTEXITCODE\n"
 	q := psQuote(dir)
-	return fmt.Sprintf("New-Item -ItemType Directory -Force -Path %s | Out-Null\n[IO.File]::WriteAllText((Join-Path %s 'cmd.ps1'), [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))\n",
-		q, q, psQuote(b64(full)))
+	return fmt.Sprintf(`try { [Console]::Error.WriteLine('owned command-dir/begin') } catch { }
+New-Item -ItemType Directory -Force -Path %s | Out-Null
+try { [Console]::Error.WriteLine('owned command-dir/end') } catch { }
+[IO.File]::WriteAllText((Join-Path %s 'cmd.ps1'), [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
+`, q, q, psQuote(b64(full)))
 }
 
 const psHead64 = `function Get-Head64([string]$f, [int]$n) {

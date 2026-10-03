@@ -316,9 +316,23 @@ func (s *psSSM) failures() string {
 }
 
 func (s *psSSM) jobDiagnostics(root string) string {
-	var stages []string
-	jobs, _ := filepath.Glob(filepath.Join(root, "jobs", "*"))
-	for _, job := range jobs {
+	// Glob suppresses filesystem I/O errors. ReadDir preserves them without
+	// interpreting any characters in the literal temporary-directory path.
+	jobsDir := filepath.Join(root, "jobs")
+	jobs, err := os.ReadDir(jobsDir)
+	inventory := "ok"
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		inventory = "missing"
+	case errors.Is(err, os.ErrPermission):
+		inventory = "permission-denied"
+	case err != nil:
+		inventory = "read-error"
+	}
+	// Fixed classifications only: errors can contain paths or account names.
+	stages := []string{"job inventory=" + inventory}
+	for _, entry := range jobs {
+		job := filepath.Join(jobsDir, entry.Name())
 		var present []string
 		for _, name := range []string{"owner", "ready", "start-error", "exit", "stop", "stopped"} {
 			if _, err := os.Stat(filepath.Join(job, name)); err == nil {

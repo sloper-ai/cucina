@@ -6,7 +6,7 @@ import "fmt"
 
 // The remote CIM supervisor and its stopper share a private, unpredictable job
 // name and mutex. Neither cleanup nor liveness opens a numeric PID for killing.
-const psOwnedJob = `if (-not ('CucinaOwnedJob' -as [type])) { Add-Type -TypeDefinition @'
+const psOwnedJobRuntime = `if (-not ('CucinaOwnedJob' -as [type])) { Add-Type -TypeDefinition @'
 // SPDX-License-Identifier: FSL-1.1-ALv2
 using System;
 using System.ComponentModel;
@@ -72,18 +72,46 @@ function New-OwnedGate([string]$name) {
  $gate=New-Object Threading.Mutex($false,($name+'.gate'),[ref]$created,$acl)
  return $gate
 }
-` + psProtectJobDirectory
+`
 
-const psProtectJobDirectory = `function Protect-OwnedDirectory([string]$path) {
+// Startup tracing already defines these helpers. Keep one copy per script,
+// including the encoded supervisor, to stay below Windows' command-line limit.
+const psOwnedJob = psOwnedJobRuntime + psProtectJobDirectory
+
+// Boundary names below are fixed literals, never paths, identities or payloads.
+// stderr remains available before the directory is safe for diagnostic files.
+const psProtectJobDirectory = `function Write-OwnedBoundary([string]$boundary) {
+ try { [Console]::Error.WriteLine('owned '+$boundary) } catch { }
+}
+function Protect-OwnedDirectory([string]$path) {
+ Write-OwnedBoundary 'protect/begin'
+ Write-OwnedBoundary 'mkdir/begin'
  New-Item -ItemType Directory -Force -Path $path | Out-Null
+ Write-OwnedBoundary 'mkdir/end'
+ Write-OwnedBoundary 'attributes/begin'
  if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'owned job directory is a reparse point' }
+ Write-OwnedBoundary 'attributes/end'
+ Write-OwnedBoundary 'acl-new/begin'
  $acl=New-Object Security.AccessControl.DirectorySecurity
+ Write-OwnedBoundary 'acl-new/end'
+ Write-OwnedBoundary 'acl-inheritance/begin'
  $acl.SetAccessRuleProtection($true,$false)
- foreach($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')) {
+ Write-OwnedBoundary 'acl-inheritance/end'
+ Write-OwnedBoundary 'identity/begin'
+ $ownedDirectorySIDs=@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')
+ Write-OwnedBoundary 'identity/end'
+ foreach($sid in $ownedDirectorySIDs) {
+  Write-OwnedBoundary 'sid/begin'
   $identity=New-Object Security.Principal.SecurityIdentifier($sid)
+  Write-OwnedBoundary 'sid/end'
+  Write-OwnedBoundary 'rule/begin'
   $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
+  Write-OwnedBoundary 'rule/end'
  }
+ Write-OwnedBoundary 'acl-apply/begin'
  Set-Acl -LiteralPath $path -AclObject $acl
+ Write-OwnedBoundary 'acl-apply/end'
+ Write-OwnedBoundary 'protect/end'
 }
 `
 
@@ -102,22 +130,32 @@ function Report-OwnedTraceFailure {
  try { [Console]::Error.WriteLine('owned startup diagnostics unavailable') } catch { }
 }
 $script:OwnedTraceReady=$false
+Write-OwnedBoundary 'protect-call/begin'
 try { Protect-OwnedDirectory $J; $script:OwnedTraceReady=$true } catch { Report-OwnedTraceFailure }
+Write-OwnedBoundary 'protect-call/end'
 function Write-OwnedStage([string]$phase) {
  if (-not $script:OwnedTraceReady) { return }
  $staging=$null; $previous=$null
  try {
   if ($phase -cnotin @('runtime-load','runtime-ready','open-job','assign-self','payload-start','payload-exit','cim-create','cim-created','supervisor-ready')) { throw 'invalid owned startup phase' }
+  Write-OwnedBoundary 'trace-session/begin'
   $record=$phase+' '+[string]([Diagnostics.Process]::GetCurrentProcess().SessionId)
+  Write-OwnedBoundary 'trace-session/end'
   if ($record.Length -gt 96) { throw 'owned startup record exceeds its bound' }
+  Write-OwnedBoundary 'trace-path/begin'
   $path=Join-Path $J %s
   $staging=$path+'.tmp'; $previous=$path+'.previous'
+  Write-OwnedBoundary 'trace-path/end'
+  Write-OwnedBoundary 'trace-write/begin'
   [IO.File]::WriteAllText($staging,$record)
+  Write-OwnedBoundary 'trace-write/end'
+  Write-OwnedBoundary 'trace-publish/begin'
   if ([IO.File]::Exists($path)) {
    # PS5 marshals a null backup argument as an empty path. Supply a real,
    # private same-directory backup so replacement remains atomic.
    [IO.File]::Replace($staging,$path,$previous)
   } else { [IO.File]::Move($staging,$path) }
+  Write-OwnedBoundary 'trace-publish/end'
  } catch { Report-OwnedTraceFailure } finally {
   foreach($file in @($staging,$previous)) {
    try { if ($file -and [IO.File]::Exists($file)) { [IO.File]::Delete($file) } } catch { Report-OwnedTraceFailure }
@@ -131,7 +169,7 @@ Write-OwnedStage 'runtime-load'
 func psStartOwnedJob(dir, id, prepare string) string {
 	name := psQuote(windowsJobName(id))
 	q := psQuote(dir)
-	runner := psStartupTrace(dir, "supervisor") + psOwnedJob + fmt.Sprintf(`
+	runner := psStartupTrace(dir, "supervisor") + psOwnedJobRuntime + fmt.Sprintf(`
 $J=%s; $name=%s
 Write-OwnedStage 'runtime-ready'
 $startupPhase='runtime-ready'
@@ -166,7 +204,7 @@ try {
  throw
 } finally { [CucinaOwnedJob]::Close($h);$gate.Dispose() }
 `, q, name, psRunCmd(dir))
-	return psStartupTrace(dir, "launcher") + psOwnedJob + fmt.Sprintf(`
+	return psStartupTrace(dir, "launcher") + psOwnedJobRuntime + fmt.Sprintf(`
 $J=%s; $name=%s
 Write-OwnedStage 'runtime-ready'
 Protect-OwnedDirectory $J
