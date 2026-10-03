@@ -209,11 +209,26 @@ jobs:
         run: bazelisk build --config=ci -- //...
       - name: bazel test
         id: tests
-        # Windows repeats the complete suite uncached: an earlier isolated pass
-        # must not hide a failure under normal suite concurrency.
+        # Keep the full Windows suite uncached and repeat native boundaries:
+        # macOS repetitions cannot qualify Windows-only branches. A single failed
+        # repetition must fail the gate, not become a passing FLAKY aggregate.
         run: |
           if [ "${RUNNER_OS}" = Windows ]; then
-            bazelisk test --config=ci --nocache_test_results -- //...
+            repetitions=()
+            for target in \
+              //charts/cucina/tests/boot:boot_test \
+              //cli/cucinactl:tui_pty_test \
+              //internal/bbconfig/boottest:boottest_test \
+              //internal/bbtest:bbtest_test \
+              //internal/envtest/internal/testing/process:process_test \
+              //internal/workeragent/integration:integration_test \
+              //test/e2e/bazelrun:windows_wait_test \
+              //test/e2e/remote:windows_ownership_test \
+              //tools/envtest:envtest_test; do
+              repetitions+=("--runs_per_test=^${target}\$@20")
+            done
+            bazelisk test --config=ci --nocache_test_results \
+              --noruns_per_test_detects_flakes "${repetitions[@]}" -- //...
           else
             bazelisk test --config=ci -- //...
           fi
