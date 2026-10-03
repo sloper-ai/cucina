@@ -218,7 +218,7 @@ jobs:
         with:
           install_args: go rust golangci-lint
       - name: govulncheck (reachable Go vulnerabilities)
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: cargo deny (advisories, bans, licences, sources)
         if: success() || failure()
         run: mise exec cargo-deny@0.20.2 -- cargo-deny --all-features check

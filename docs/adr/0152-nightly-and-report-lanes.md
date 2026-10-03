@@ -1,7 +1,9 @@
 <!-- SPDX-License-Identifier: FSL-1.1-ALv2 -->
 # 0152 — Nightly, system and mutation lanes outside the gating CI
 
-* Status: accepted (2026-10-02)
+* Status: accepted; govulncheck pin superseded by 0113 (accepted 2026-10-02; pin superseded 2026-10-03)
+
+Only the scanner version is superseded by [ADR 0113](0113-govulncheck-go127-compatibility.md); the original lane decision below is retained.
 
 ## Context
 R-TEST-2 puts the 1,000-seed simulation sweep and the kind/`ct install` system tier into nightly

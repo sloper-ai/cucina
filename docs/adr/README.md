@@ -101,9 +101,11 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0110](0110-build-oci-images-with-rules-img.md) | Build OCI images with rules_img | accepted | build (bazel) |
 | [0111](0111-hosted-windows-bazel-storage.md) | Avoid duplicate build caches on hosted Windows | accepted | build (bazel) |
 | [0112](0112-envtest-windows-owned-process-cleanup.md) | Reap envtest children before removing Windows state | accepted | build (bazel) |
+| [0113](0113-govulncheck-go127-compatibility.md) | Update govulncheck without reducing source analysis | accepted | build (bazel) |
+| [0114](0114-grpc-advisory-applicability.md) | Record grpc advisory applicability without rewriting scan results | accepted | build (bazel) |
 | [0150](0150-release-versioning-and-stamping.md) | One release version, stamped by Bazel from the VERSION file | accepted | build (bazel) |
 | [0151](0151-release-pipeline-and-publishing.md) | Release pipeline: per-runner Bazel builds, one assembly, publish from verified bytes | accepted | build (bazel) |
-| [0152](0152-nightly-and-report-lanes.md) | Nightly, system and mutation lanes outside the gating CI | accepted | build (bazel) |
+| [0152](0152-nightly-and-report-lanes.md) | Nightly, system and mutation lanes outside the gating CI | accepted; govulncheck pin superseded by 0113 | build (bazel) |
 | [0200](0200-e2e-vpc-raw-resources.md) | The e2e VPC is built from raw resources, not `terraform-aws-modules/vpc` | accepted | aws (infra) |
 | [0201](0201-e2e-ipv6-egress-and-ssm.md) | Private-subnet workers reach SSM over IPv6 only with dual-stack endpoints enabled | accepted | aws (infra) |
 | [0202](0202-e2e-iam-least-privilege.md) | Least-privilege IAM for the e2e environment: tag-gated controller, protected nodes, confined SSM | accepted | aws (infra) |
