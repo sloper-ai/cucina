@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	mathrand "math/rand/v2"
 	"net"
@@ -148,6 +149,46 @@ func (p *Process) StopContext(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("%s did not exit after SIGKILL: %w", p.Name, ctx.Err())
+	}
+}
+
+// KillContext abruptly terminates only this owned child and waits for it to be
+// reaped, without requesting a graceful flush. Persistence tests use this after
+// an observed checkpoint so Unix and Windows exercise the same crash boundary.
+// The reap allowance is the same five seconds used by StopContext after a kill.
+func (p *Process) KillContext(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, stopGrace)
+	defer cancel()
+	// Called only after done closes, which publishes cmd.Wait's result. An
+	// exit status confirms reaping; pipe/Wait failures must remain visible.
+	joined := func(killErr error) error {
+		switch p.err.(type) { //nolint:errorlint // Cmd.Wait returns ExitError directly; a wrapped/joined error may also contain a wait failure.
+		case nil, *exec.ExitError:
+			return nil
+		default:
+			return fmt.Errorf("%s did not complete its owned wait: %w", p.Name, errors.Join(killErr, p.err))
+		}
+	}
+	select {
+	case <-p.done:
+		return joined(nil)
+	default:
+	}
+	// The OS child may already have exited while Cmd.Wait is still finishing.
+	// Windows can report EINVAL/access denied in that gap; only our completed
+	// wait, never a particular errno, establishes that cleanup succeeded.
+	killErr := p.cmd.Process.Kill()
+	select {
+	case <-p.done:
+		return joined(killErr)
+	case <-ctx.Done():
+		// Completion and cancellation may become ready together.
+		select {
+		case <-p.done:
+			return joined(killErr)
+		default:
+		}
+		return fmt.Errorf("%s was not reaped after an abrupt kill: %w", p.Name, errors.Join(killErr, ctx.Err()))
 	}
 }
 

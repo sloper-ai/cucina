@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -210,7 +211,10 @@ func wire(t *testing.T, c bbConfig, root string, pki *bbtest.PKI, server bbtest.
 			sock := filepath.Join(root, fmt.Sprintf("%s-%d.sock", list, i))
 			delete(srv, "listenAddresses")
 			srv["listenPaths"] = []any{sock}
-			addr := "unix://" + sock
+			// A drive-qualified Windows path is an opaque UNIX endpoint, not a
+			// URI authority. "unix://C:\\..." fails URL parsing and gRPC falls
+			// back to DNS, so every readiness probe used to time out on Windows.
+			addr := (&url.URL{Scheme: "unix", Opaque: sock}).String()
 			out.listeners[fmt.Sprintf("%s[%d]", list, i)] = addr
 			_, hasTLS := srv["tls"]
 			if out.probe == "" || (probeHasTLS && !hasTLS) {
@@ -224,7 +228,8 @@ func wire(t *testing.T, c bbConfig, root string, pki *bbtest.PKI, server bbtest.
 	if probeHasTLS {
 		out.probeTLS = pki.ClientTLS(nil, "localhost")
 	}
-	unreachable := "unix://" + filepath.Join(root, "unreachable.sock")
+	unreachable := (&url.URL{Scheme: "unix", Opaque: filepath.Join(root, "unreachable.sock")}).String()
+	backingFiles := map[string]struct{}{}
 	var walk func(v any) any
 	walk = func(v any) any {
 		switch n := v.(type) {
@@ -258,6 +263,11 @@ func wire(t *testing.T, c bbConfig, root string, pki *bbtest.PKI, server bbtest.
 			for k, val := range n {
 				n[k] = walk(val)
 			}
+			if file, ok := n["file"].(map[string]any); ok && file["sizeBytes"] != nil {
+				if p, ok := file["path"].(string); ok {
+					backingFiles[p] = struct{}{}
+				}
+			}
 			return n
 		case []any:
 			for i := range n {
@@ -281,6 +291,9 @@ func wire(t *testing.T, c bbConfig, root string, pki *bbtest.PKI, server bbtest.
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for p := range backingFiles {
+		prepareSparseBackingFile(t, p)
 	}
 	write := func(rel string, b []byte) {
 		if err := os.WriteFile(filepath.Join(root, rel), b, 0o600); err != nil {

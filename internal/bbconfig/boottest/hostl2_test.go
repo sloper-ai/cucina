@@ -4,15 +4,19 @@ package boottest_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	localpb "github.com/buildbarn/bb-storage/pkg/proto/blobstore/local"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/sloper-ai/cucina/internal/bbconfig"
 	"github.com/sloper-ai/cucina/internal/bbtest"
@@ -60,6 +64,16 @@ func TestHostL2(t *testing.T) {
 	}
 	config, err := bbconfig.RenderHostL2(settings)
 	require.NoError(t, err)
+	var rendered map[string]any
+	require.NoError(t, json.Unmarshal(config, &rendered))
+	persistent := rendered["contentAddressableStorage"].(map[string]any)["backend"].(map[string]any)["readCaching"].(map[string]any)["fast"].(map[string]any)["local"].(map[string]any)["persistent"].(map[string]any)
+	require.Equal(t, "300s", persistent["minimumEpochInterval"], "production persistence cadence must stay unchanged")
+	// Localize only the external process's checkpoint clock for this bounded
+	// integration test. The production renderer still emits 300s above; the
+	// checkpoint barrier below, not this interval, proves the blob is durable.
+	persistent["minimumEpochInterval"] = "0.1s"
+	config, err = json.Marshal(rendered)
+	require.NoError(t, err)
 	vmTLS := pki.ClientTLS(&vm, "localhost")
 	l2 := bbtest.BootStorage(t, config, bbtest.GRPCReady(l2Addr, vmTLS))
 
@@ -100,7 +114,13 @@ func TestHostL2(t *testing.T) {
 	require.NoError(t, err, "a cached blob must not need the WAN")
 	assert.Equal(t, central2, got)
 
-	l2.Stop()
+	// ReadCaching writes go only to the slow store: central2 is the first and
+	// only blob fetched into this fresh local cache. Wait for its completed
+	// durable checkpoint, not just a successful read. Windows Stop is a hard
+	// kill and cannot perform Unix SIGTERM's final synchronization (CI failure
+	// 37097548348); neither stopping nor elapsed wall time proves persistence.
+	require.NoError(t, waitL2Checkpoint(ctx, filepath.Join(cacheDir, "state", "state"), int64(len(central2))))
+	require.NoError(t, l2.KillContext(ctx), "abruptly stop the cache without a graceful flush")
 	bbtest.BootStorage(t, config, bbtest.GRPCReady(l2Addr, vmTLS))
 	afterRestart := client(&vm, l2Addr)
 	got, err = afterRestart.Read(ctx, bbtest.DigestOf(central2))
@@ -112,5 +132,44 @@ func TestHostL2(t *testing.T) {
 	for _, kp := range []*bbtest.KeyPair{&foreignVM, &host} {
 		_, err = client(kp, l2Addr).Read(ctx, bbtest.DigestOf(central2))
 		assert.Equal(t, codes.Unauthenticated, status.Code(err), "%v", err)
+	}
+}
+
+// Wait on the pinned persistent-state file, atomically published only after
+// the data sync. This stays inside the test's original 20s operation context;
+// a missing/empty checkpoint is a failure, never permission to accept a cold cache.
+func waitL2Checkpoint(ctx context.Context, path string, minimumBytes int64) error {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	last := "state file absent"
+	for {
+		data, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read L2 checkpoint: %w", err)
+		}
+		if err == nil {
+			var state localpb.PersistentState
+			if err := proto.Unmarshal(data, &state); err != nil {
+				return fmt.Errorf("decode L2 checkpoint: %w", err)
+			}
+			// Epoch seeds are attached to the last allocated block, which need
+			// not be the block containing the blob. They qualify the complete
+			// published block list, not each block independently.
+			var epochs int
+			var written int64
+			for _, b := range state.GetBlocks() {
+				epochs += len(b.GetEpochHashSeeds())
+				written += b.GetWriteOffsetBytes()
+			}
+			last = fmt.Sprintf("%d blocks, %d epochs, %d bytes", len(state.GetBlocks()), epochs, written)
+			if state.GetOldestEpochId() > 0 && epochs > 0 && written >= minimumBytes {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("L2 did not publish a durable checkpoint for its cached blob (%s): %w", last, ctx.Err())
+		case <-tick.C:
+		}
 	}
 }

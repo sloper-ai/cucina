@@ -50,7 +50,10 @@ go_library(
 cucina_go_test(
     name = "bbtest_test",
     timeout = "short",
-    srcs = ["nfsmount_test.go"],
+    srcs = [
+        "nfsmount_test.go",
+        "process_test.go",
+    ],
     embed = [":bbtest"],
     tier = "integration",
     deps = [
