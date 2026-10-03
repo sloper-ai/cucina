@@ -74,6 +74,21 @@ cucina_sh_test(
     tier = "integration",
 )
 
+# Public system-lane orchestration against local executable fixtures, never a cluster.
+cucina_sh_test(
+    name = "system_install_test",
+    timeout = "short",
+    srcs = ["test-system-install.sh"],
+    data = [
+        "system-install.py",
+        "system_install_test.py",
+        "//:.github/workflows/nightly.yml",
+    ],
+    tags = ["no-remote-exec"],  # Uses the CI/development host's Python standard library.
+    target_compatible_with = _NOT_WINDOWS,
+    tier = "integration",
+)
+
 # The real manual checklists have the structure TESTING.md requires.
 cucina_sh_test(
     name = "manual_tests_check",

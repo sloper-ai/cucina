@@ -164,6 +164,8 @@ jobs:
           # shellcheck disable=SC2086 # one target per word
           bazelisk test --config=ci --config=nightly $targets
       - name: ct install and helm test (bare-kind profile)
+        id: system_install
+        timeout-minutes: 15
         run: |
           work="$RUNNER_TEMP/ct"
           mkdir -p "$work/charts"
@@ -173,12 +175,27 @@ jobs:
           mkdir -p "$work/charts/cucina/ci"
           cp release/kind-values.yaml "$work/charts/cucina/ci/kind-values.yaml"
           cd "$work"
-          mise exec "$CT" -- ct install --charts charts/cucina --chart-dirs charts
-      - name: cluster state on failure
-        if: failure()
+          # Prepare private recording, then exec ct: GitHub owns its process tree and status.
+          # Verified --skip-clean-up retains this same install until the always kind deletion.
+          mise exec "$CT" -- python3 "$GITHUB_WORKSPACE/tools/ci/system-install.py" install
+      - name: capture sanitized system evidence
+        id: system_capture
+        if: always()
+        timeout-minutes: 2
+        env:
+          INSTALL_OUTCOME: ${{ steps.system_install.outcome }}
         run: |
-          kubectl get pods -A -o wide || true
-          kubectl get events -A --sort-by=.lastTimestamp | tail -n 50 || true
+          cd "$RUNNER_TEMP/ct"
+          mise exec "$CT" -- python3 "$GITHUB_WORKSPACE/tools/ci/system-install.py" capture "$RUNNER_TEMP/system-diagnostics/evidence.json" "$INSTALL_OUTCOME"
+      - name: retain sanitized system evidence
+        if: always() && steps.system_capture.outputs.evidence_ready == 'true'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: system-install-evidence
+          path: ${{ runner.temp }}/system-diagnostics/evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: delete the dedicated kind cluster
         if: always()
         run: mise exec "$KIND" -- kind delete cluster --name cucina

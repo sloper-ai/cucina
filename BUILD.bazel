@@ -28,6 +28,7 @@ exports_files(
         "Cargo.toml",
         "Cargo.lock",
         ".gitleaks.toml",
+        ".github/workflows/nightly.yml",
         "deny.toml",
         # Licence documents distributed by //release (ADR 0151).
         "LICENSE.md",
