@@ -132,6 +132,41 @@ fn tui_session_in_a_pty() {
 fn tui_session_in_a_pty() {
     use expectrl::{Expect, Session};
 
+    const BOOTSTRAP: &str = "CUCINA_PTY_BOOTSTRAP";
+    if std::env::var_os(BOOTSTRAP).as_deref() == Some(std::ffi::OsStr::new("1")) {
+        use std::io::IsTerminal;
+        use std::process::{Command, Stdio};
+
+        // Only this re-executed child is attached to ConPTY. Open its console
+        // devices read/write: shell `>CONOUT$` is write-only, but GetConsoleMode
+        // (and therefore IsTerminal) requires GENERIC_READ even on stdout.
+        let input = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(r"\\.\CONIN$")
+            .expect("open ConPTY input read/write");
+        let output = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(r"\\.\CONOUT$")
+            .expect("open ConPTY output read/write");
+        assert!(input.is_terminal(), "ConPTY input must be a terminal");
+        assert!(output.is_terminal(), "ConPTY output must be a terminal");
+        let error = output.try_clone().expect("clone ConPTY error output");
+        // Rust duplicates these owned Files as inheritable handles and uses
+        // STARTF_USESTDHANDLES. Wait for the real CLI and propagate its exit;
+        // the parent Session still owns the attached process tree on failure.
+        let status = Command::new(std::env::var_os("CUCINA_PTY_EXE").expect("cucinactl path"))
+            .arg("tui")
+            .env_remove(BOOTSTRAP)
+            .stdin(Stdio::from(input))
+            .stdout(Stdio::from(output))
+            .stderr(Stdio::from(error))
+            .status()
+            .expect("run cucinactl with ConPTY console handles");
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
     // CI must report the cause of a failed PTY session, not only ExpectTimeout.
     // Read at most 64 KiB without blocking after the original deadline, and print
     // only escaped 2 KiB head/tail samples (no raw terminal-control sequences).
@@ -185,10 +220,11 @@ fn tui_session_in_a_pty() {
 
     let (_rt, mgmt, dir) = fixture();
     assert_pipes_are_not_a_terminal(dir.path());
-    // conpty 0.5.1 constructs CreateProcessW itself and forwards only explicitly
-    // set environment entries. It attaches cmd to the pseudoconsole through
-    // STARTUPINFOEXW, without STARTF_USESTDHANDLES, so the TUI must inherit cmd's
-    // console handles, not reopen them with shell redirection.
+    // Guards: R-CLI-4 / Windows startup — conpty 0.5.1 omits
+    // STARTF_USESTDHANDLES, so Windows can duplicate Bazel's redirected standard
+    // handles despite bInheritHandles=false (microsoft/terminal discussion 15814).
+    // Re-execute this test only as a console-handle bootstrap, before any fixture
+    // or server is created. conpty forwards only explicitly set environment entries.
     let mut cmd = support::command_at(std::path::Path::new("cmd.exe"), dir.path());
     for name in [
         "SystemRoot",
@@ -207,13 +243,20 @@ fn tui_session_in_a_pty() {
     cmd.env(
         "CUCINA_PTY_EXE",
         std::path::absolute(support::bin()).expect("absolute cucinactl path"),
-    );
+    )
+    .env(
+        "CUCINA_PTY_TEST_EXE",
+        std::env::current_exe().expect("current PTY test executable"),
+    )
+    .env(BOOTSTRAP, "1");
     // conpty concatenates the program and arguments verbatim (no path quoting),
     // so retain cmd's /S /C outer quotes and expand the executable path once.
-    // Guards: R-CLI-4 / Windows startup — `>CONOUT$` opens stdout write-only.
-    // Rust's IsTerminal calls GetConsoleMode, which requires GENERIC_READ even
-    // on stdout. Keep ConPTY's read/write console handles, not that redirection.
-    cmd.args(["/d", "/s", "/c", r#"""%CUCINA_PTY_EXE%" tui""#]);
+    cmd.args([
+        "/d",
+        "/s",
+        "/c",
+        r#"""%CUCINA_PTY_TEST_EXE%" --exact tui_session_in_a_pty --nocapture""#,
+    ]);
     let mut p = Session::spawn(cmd).expect("spawn cucinactl tui in ConPTY");
     // ConPTY without a parent console starts tiny: give the TUI room.
     p.get_process_mut().resize(100, 30).expect("resize");
