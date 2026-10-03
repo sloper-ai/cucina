@@ -21,17 +21,18 @@ import (
 type Server struct {
 	*httptest.Server
 
-	mu          sync.Mutex
-	tokens      map[string]bool
-	tokenPuts   int
-	userData    []byte
-	document    []byte
-	signature   string
-	instanceID  string
-	tags        map[string]string // nil = instance-metadata tags disabled
-	spotAction  []byte
-	failures    map[string][]int // path -> queued HTTP status codes
-	getRequests map[string]int
+	mu            sync.Mutex
+	tokens        map[string]bool
+	tokenPuts     int
+	userData      []byte
+	document      []byte
+	signature     string
+	instanceID    string
+	tags          map[string]string // nil = instance-metadata tags disabled
+	spotAction    []byte
+	failures      map[string][]int // path -> queued HTTP status codes
+	getRequests   map[string]int
+	extraMetadata map[string][]byte
 }
 
 // New starts a fake IMDS; it is closed when the test ends.
@@ -51,6 +52,17 @@ func (s *Server) SetIdentity(document []byte, signature, instanceID string) {
 	s.mu.Lock()
 	s.document, s.signature, s.instanceID = document, signature, instanceID
 	s.mu.Unlock()
+}
+
+// SetMetadata supplies a metadata field such as the local interface/VPC CIDR.
+// It still requires the fake's IMDSv2 token and participates in FailNext.
+func (s *Server) SetMetadata(path string, value []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.extraMetadata == nil {
+		s.extraMetadata = map[string][]byte{}
+	}
+	s.extraMetadata[path] = append([]byte(nil), value...)
 }
 
 // SetTags enables instance-metadata tags with the given tags (nil disables).
@@ -117,6 +129,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) lookup(path string) ([]byte, bool) {
+	if value, ok := s.extraMetadata[path]; ok {
+		return value, true
+	}
 	switch path {
 	case "/latest/user-data":
 		return s.userData, s.userData != nil

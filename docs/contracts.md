@@ -193,10 +193,52 @@ must separately inventory tagged instances, volumes, interfaces and IPs.
 
 Hostd (`/metrics`): `cucina_hostd_vms{state}`, `cucina_hostd_l2_requests_total{result}`, `cucina_hostd_wan_bytes_total{direction}`,
 `cucina_hostd_l2_size_bytes`, `cucina_hostd_disk_free_bytes`. All metrics pass `testutil.CollectAndLint`.
-Canaries (`internal/canary`, `cucina-controller canary cache|exec`): `cucina_canary_up{canary}`, `cucina_canary_runs_total{canary,result}`,
-`cucina_canary_duration_seconds`, `cucina_canary_step_duration_seconds{step}`, `cucina_canary_exec_queue_seconds{pool}`,
-`cucina_canary_last_run_timestamp_seconds`, `cucina_canary_last_success_timestamp_seconds`. The shared SLO / recording-rule definitions live in
-`slo/` (Go data, exported as `slo/rules.json` and `slo/sloth.json`); scenarios, canaries and the chart's PrometheusRules query the same rules.
+
+`cucina_cert_expiry_seconds{role}` reports observed seconds remaining, including negative values for known expired identities;
+missing identities produce no sample, not a fabricated healthy value. Hostd exports its current host identity independently.
+The worker-role aggregate is the minimum expiry across all running/stopping macOS VM identities, but is emitted only when
+every expected active identity has a known expiry; stopped/replaced identities and dormant disks do not contribute.
+Provisioning journals the observed expiry. If any legacy or otherwise unknown adopted identity lacks that observation,
+the aggregate is omitted and the telemetry-missing guard reports incomplete coverage until fresh provisioning supplies it.
+`cucina_hostd_vm_certificates_expected` is a label-free gauge counting those expected identities from the same lifecycle snapshot.
+It counts actual running/stopping identities, not the management inventory's broader `stopping` alias; disk deletion contributes
+no identity. The missing-worker-expiry guard uses this count, so a stalled disk deletion does not imply a missing certificate.
+The count is accepted only from `SOURCE_HOSTD`, with a finite nonnegative integer value and no supplied identity labels.
+These gauges travel on `SOURCE_HOSTD`, independently of guest Buildbarn scrape success. The relay accepts the expiry family only as
+a gauge with the single `role` label set to `host` or `worker`; guest `SOURCE_WORKER` and `SOURCE_HOST_L2` inputs cannot inject it.
+
+EC2 supervisors export their worker identity through a separate private diagnostics target. `/sd/worker-agents` advertises
+private instance addresses on port `9982`, labelled `cucina_component="worker-agent"` without `cucina_buildbarn=true`;
+`/sd/workers` and Buildbarn RSS/byte selectors remain separate. The managed default binds only the IMDSv2 local IPv4 address,
+never a wildcard/public fallback. Windows setup additionally confines its owned firewall rule to the agent executable, local
+address and containing VPC IPv4 range; the infrastructure security group admits diagnostics only from the control plane.
+Explicit listener overrides or disabling diagnostics require corresponding operator monitoring configuration.
+
+Expiry warnings/critical thresholds reflect the configured lifetimes: host `min(24h, hostTTL/6)` / `min(6h, hostTTL/24)`;
+worker `min(2h, 2*min(workerTTL, vmTTL)/3)` / `min(30m, min(workerTTL, vmTTL)/24)`. CA/server/controller retain the configured
+warning threshold and one-day critical threshold. Expected targets missing expiry telemetry for five minutes are not healthy;
+retired targets and hosts with no active VM identities do not imply missing worker certificates. Existing supervisor retirement
+before a worker certificate reaches one hour remaining is unchanged and may precede a critical-expiry sample.
+
+Canaries (`internal/canary`, `cucina-controller canary cache|exec`): `cucina_canary_up{kind,pool}`,
+`cucina_canary_runs_total{kind,pool,result}`, `cucina_canary_duration_seconds{kind,pool}`,
+`cucina_canary_step_duration_seconds{kind,step}`, `cucina_canary_exec_queue_seconds{pool}`,
+`cucina_canary_last_run_timestamp_seconds{kind,pool}` and `cucina_canary_last_success_timestamp_seconds{kind,pool}`.
+`kind` is `cache` or `exec`; run results are `success` or `failure`. Restoring durable execution results after leadership changes
+does not count them again. Scheduled execution `up` also requires current pool availability and evidence for the current deployment:
+paused, stale, failed, unsupported or unverified pools must not retain a historical passing value. Historical success timestamps
+remain historical, not proof of present health. Queue time is not independently a cold-start qualification.
+
+The Helm-configured leader runs cache probes every five minutes and independently schedules serial, uncached execution probes
+per pool every 24 hours and deployment revision. `canary.execution.enabled` defaults to true; timeout defaults to 15 minutes and
+must be positive and at most 15 minutes. Both paths reuse the configured canary credentials and TLS. Stable deployment identity
+and write-ahead reservations prevent fresh controller processes from inventing new deployment attempts. A standalone controller
+without explicit deployment identity retains cache-only behavior. Probes never drain workers to force a cold start, and shared
+REAPI routes without verifiable per-pool attribution are non-passing rather than silently credited to another pool (ADR 1007).
+
+The shared SLO / recording-rule definitions live in `slo/` (Go data, exported as `slo/rules.json` and `slo/sloth.json`);
+scenarios, canaries and the chart's PrometheusRules query the same rules.
+
 Buildbarn blob bytes: both pinned storage versions (§4) expose
 `buildbarn_blobstore_blob_access_operations_blob_size_bytes_sum` with case-sensitive labels: `storage_type="cas"` (not `CAS`),
 `backend_type="grpc"`, local backends `local_block_device` / `local_in_memory` (not `local`), and operations `Get`, `Put`,

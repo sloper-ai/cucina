@@ -5,6 +5,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -18,11 +19,11 @@ import (
 	"github.com/sloper-ai/cucina/internal/keys"
 )
 
-// Synthetic cache canary (R-TEST-7, agent e2e's internal/canary): the leader
-// runs it every 5 minutes in-process (STS token exchange + JWKS check + AC/CAS
-// round trip through the client endpoint; it starts no workers) and exports
-// cucina_canary_*. One-shot runs (`helm test`, the CronJob, the e2e harness)
-// POST their results to /canary/results on the metrics listener.
+// Synthetic canaries (R-TEST-7): independent leader-only schedules share the
+// probe, credentials and TLS. Cache runs every five minutes without workers;
+// execution runs serially per pool daily and once per deployment identity.
+// One-shot runs (`helm test`, the e2e harness) may also POST their results to
+// /canary/results on the metrics listener.
 func init() {
 	RegisterComponent(Factory{Name: "canary", Modes: []Mode{ModeController}, Order: 20, New: newCanary})
 }
@@ -41,7 +42,30 @@ func newCanary(_ context.Context, d *Deps) (any, error) {
 	if os.Getenv("CUCINA_CANARY_DISABLE") == "true" {
 		return struct{}{}, nil
 	}
+	execTimeout, err := time.ParseDuration(canaryEnv("EXEC_TIMEOUT", canary.ExecutionTimeout.String()))
+	if err != nil || execTimeout <= 0 || execTimeout > canary.ExecutionTimeout {
+		return nil, fmt.Errorf("CUCINA_CANARY_EXEC_TIMEOUT must be a positive duration no greater than %s", canary.ExecutionTimeout)
+	}
 	c := &canaryLoop{d: d, m: m}
+	deployment := os.Getenv("CUCINA_CANARY_DEPLOYMENT")
+	// Outside Helm, preserve the cache-only default until the operator supplies
+	// an explicit stable deployment identity. A process/pod restart is not a deploy.
+	if os.Getenv("CUCINA_CANARY_EXEC_DISABLE") != "true" && deployment != "" {
+		// A separate runnable prevents a 15-minute cold start from delaying
+		// the existing cache cadence. Both require the manager's leader lease.
+		exec := &canary.ExecutionScheduler{
+			Client: d.Client, Reader: d.APIReader, Namespace: d.Config.Namespace,
+			InstanceNames: d.Config.InstanceNames, Catalog: d.Catalog, Clock: d.Clock,
+			Deployment: deployment, Timeout: execTimeout,
+			Metrics: m, Log: d.Log.With("component", "execution-canary"),
+			Probe: func(ctx context.Context, target canary.ExecutionTarget) canary.Result {
+				return c.probeFor(ctx, canary.KindExec, target, execTimeout)
+			},
+		}
+		if err := d.Manager.Add(exec); err != nil {
+			return nil, err
+		}
+	}
 	d.Share(sharedCanary, c)
 	return c, nil
 }
@@ -108,16 +132,27 @@ func canaryEnv(name, def string) string {
 // in-cluster Services. The key is the mounted canary key or, by default, the
 // break-glass key (the same default as `helm test`).
 func (c *canaryLoop) probe(ctx context.Context) canary.Result {
+	return c.probeFor(ctx, canary.KindCache, canary.ExecutionTarget{}, 2*time.Minute)
+}
+
+func (c *canaryLoop) probeFor(ctx context.Context, kind string, target canary.ExecutionTarget, timeout time.Duration) canary.Result {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	cfg := c.d.Config
 	start := c.d.Clock.Now()
 	fail := func(err error) canary.Result {
-		return canary.Result{Kind: canary.KindCache, Started: start, Success: false, Error: err.Error()}
+		return canary.Result{Kind: kind, Pool: target.Pool, Instance: target.Instance, Started: start, Success: false, Error: err.Error()}
 	}
 	ep := canary.Endpoint{
 		Target:       canaryEnv("ENDPOINT", cfg.Endpoints.ClientEndpoint),
 		InstanceName: canaryEnv("INSTANCE", cfg.InstanceNames[0]),
 		CAFile:       canaryEnv("CA_FILE", cfg.TLS.CAFile),
 		ServerName:   canaryEnv("SERVER_NAME", ""),
+	}
+	if kind == canary.KindExec {
+		// The selected instance must actually be served by this pool; the
+		// cache canary's INSTANCE override cannot redirect execution elsewhere.
+		ep.InstanceName = target.Instance
 	}
 	stsURL := strings.TrimSuffix(canaryEnv("STS_URL", cfg.Endpoints.STSURL), "/")
 	if ep.Target == "" || stsURL == "" {
@@ -131,10 +166,12 @@ func (c *canaryLoop) probe(ctx context.Context) canary.Result {
 	if err != nil {
 		return fail(err)
 	}
+	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	defer transport.CloseIdleConnections()
 	p := &canary.Probe{
-		Kind:     canary.KindCache,
+		Kind: kind, Pool: target.Pool, Platform: target.Platform, Timeout: timeout,
 		Endpoint: ep,
-		Tokens:   &canary.STS{URL: stsURL, Key: key, HTTP: &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsCfg}}},
+		Tokens:   &canary.STS{URL: stsURL, Key: key, HTTP: &http.Client{Timeout: 30 * time.Second, Transport: transport}},
 		Now:      c.d.Clock.Now,
 	}
 	return p.Run(ctx)

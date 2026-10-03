@@ -228,8 +228,9 @@ tests:
               summary: Orphaned pool volumes exist
               description: 1 tagged resources without a running worker survived the periodic sweep; run `cucinactl pools gc`.
 
-  # Certificate expiry (warning within 7 days, critical within a day).
-  - interval: 1m
+  # Certificate expiry (infrastructure retains warning 7d, critical 1d).
+  - name: certificate infrastructure roles
+    interval: 1m
     input_series:
       - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="server"}'
         values: '86500'
@@ -240,10 +241,138 @@ tests:
           - exp_labels: {severity: warning, namespace: cucina, role: server}
             exp_annotations:
               summary: A server certificate expires in 1d 0h 1m 40s
-              description: "Automatic renewal did not happen (runbook: rotate CA/credentials)."
+              description: "Renewal or lifecycle replacement did not complete (runbook: rotate CA/credentials)."
       - eval_time: 0m
         alertname: CucinaCertificateExpiryImminent
         exp_alerts: []
+
+  # Healthy host/worker leaves must not inherit infrastructure 7d/1d thresholds.
+  - name: certificate healthy short-lived roles
+    interval: 1m
+    input_series:
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="host"}'
+        values: '518400'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="worker"}'
+        values: '43200'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: CucinaCertificateExpiringSoon
+        exp_alerts: []
+      - eval_time: 0m
+        alertname: CucinaCertificateExpiryImminent
+        exp_alerts: []
+
+  - name: certificate host worker approaching expiry
+    interval: 1m
+    input_series:
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="host"}'
+        values: '36000'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="worker"}'
+        values: '3600'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: CucinaCertificateExpiringSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, role: host}
+            exp_annotations:
+              summary: A host certificate expires in 10h 0m 0s
+              description: "Renewal or lifecycle replacement did not complete (runbook: rotate CA/credentials)."
+          - exp_labels: {severity: warning, namespace: cucina, role: worker}
+            exp_annotations:
+              summary: A worker certificate expires in 1h 0m 0s
+              description: "Renewal or lifecycle replacement did not complete (runbook: rotate CA/credentials)."
+      - eval_time: 0m
+        alertname: CucinaCertificateExpiryImminent
+        exp_alerts: []
+
+  - name: certificate host worker critical
+    interval: 1m
+    input_series:
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="host"}'
+        values: '3600'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",role="worker"}'
+        values: '-60'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: CucinaCertificateExpiryImminent
+        exp_alerts:
+          - exp_labels: {severity: critical, namespace: cucina, role: host}
+            exp_annotations:
+              summary: A host certificate is near expiry
+              description: "Renew or replace the affected identity now (runbook: rotate CA/credentials)."
+          - exp_labels: {severity: critical, namespace: cucina, role: worker}
+            exp_annotations:
+              summary: A worker certificate is near expiry
+              description: "Renew or replace the affected identity now (runbook: rotate CA/credentials)."
+
+  - name: certificate expected telemetry missing and retired
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="cucina",node="i-missing",cucina_component="worker-agent"}'
+        values: '1x12'
+      - series: 'up{namespace="cucina",node="i-retired",cucina_component="worker-agent"}'
+        values: '0x3 stale _x8'
+      - series: 'up{namespace="cucina",node="host-idle",cucina_component="hostd"}'
+        values: '1x12'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",node="host-idle",cucina_component="hostd",role="host"}'
+        values: '400000x12'
+      - series: 'cucina_hostd_vms{namespace="cucina",node="host-idle",cucina_component="hostd",state="running"}'
+        values: '0x12'
+      - series: 'up{namespace="cucina",node="host-stopping",cucina_component="hostd"}'
+        values: '1x12'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",node="host-stopping",cucina_component="hostd",role="host"}'
+        values: '400000x12'
+      - series: 'cucina_hostd_vms{namespace="cucina",node="host-stopping",cucina_component="hostd",state="stopping"}'
+        values: '1x12'
+      - series: 'up{namespace="cucina",node="host-stopped",cucina_component="hostd"}'
+        values: '1x12'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",node="host-stopped",cucina_component="hostd",role="host"}'
+        values: '400000x12'
+      - series: 'cucina_hostd_vms{namespace="cucina",node="host-stopped",cucina_component="hostd",state="stopped"}'
+        values: '1x12'
+      - series: 'cucina_hostd_vm_certificates_expected{namespace="cucina",node="host-idle",cucina_component="hostd"}'
+        values: '0x12'
+      - series: 'cucina_hostd_vm_certificates_expected{namespace="cucina",node="host-stopping",cucina_component="hostd"}'
+        values: '1x12'
+      - series: 'cucina_hostd_vm_certificates_expected{namespace="cucina",node="host-stopped",cucina_component="hostd"}'
+        values: '0x12'
+      - series: 'cucina_hostd_vm_certificates_expected{namespace="cucina",node="host-active",cucina_component="hostd"}'
+        values: '1x12'
+      # Management deliberately aliases stalled deletion as stopping, but no
+      # live identity remains. Only the atomic expected-count gauge is authoritative.
+      - series: 'up{namespace="cucina",node="host-deleting",cucina_component="hostd"}'
+        values: '1x12'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",node="host-deleting",cucina_component="hostd",role="host"}'
+        values: '400000x12'
+      - series: 'cucina_hostd_vms{namespace="cucina",node="host-deleting",cucina_component="hostd",state="stopping"}'
+        values: '1x12'
+      - series: 'cucina_hostd_vm_certificates_expected{namespace="cucina",node="host-deleting",cucina_component="hostd"}'
+        values: '0x12'
+      - series: 'up{namespace="cucina",node="host-active",cucina_component="hostd"}'
+        values: '1x12'
+      - series: 'cucina_cert_expiry_seconds{namespace="cucina",node="host-active",cucina_component="hostd",role="host"}'
+        values: '400000x12'
+      - series: 'cucina_hostd_vms{namespace="cucina",node="host-active",cucina_component="hostd",state="running"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: CucinaCertificateTelemetryMissing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CucinaCertificateTelemetryMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, namespace: cucina, node: i-missing, cucina_component: worker-agent}
+            exp_annotations:
+              summary: Expected certificate telemetry is missing
+              description: "Check the private agent listener or host relay; absent expiry is not healthy (runbook: rotate CA/credentials)."
+          - exp_labels: {severity: warning, namespace: cucina, node: host-stopping, cucina_component: hostd}
+            exp_annotations:
+              summary: Expected certificate telemetry is missing
+              description: "Check the private agent listener or host relay; absent expiry is not healthy (runbook: rotate CA/credentials)."
+          - exp_labels: {severity: warning, namespace: cucina, node: host-active, cucina_component: hostd}
+            exp_annotations:
+              summary: Expected certificate telemetry is missing
+              description: "Check the private agent listener or host relay; absent expiry is not healthy (runbook: rotate CA/credentials)."
 
   # R-DATA-7: egress anomaly (200 MiB/s over the Mac-site WAN for 30m).
   - interval: 1m

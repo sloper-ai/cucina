@@ -94,6 +94,33 @@ spec:
 apiVersion: monitoring.coreos.com/v1alpha1
 kind: ScrapeConfig
 metadata:
+  name: {{ include "cucina.fullname" . }}-worker-agents
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cucina.labels" (dict "ctx" . "component" "worker-agent") | nindent 4 }}
+    {{- with $m.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  httpSDConfigs:
+    - url: {{ printf "http://%s:9090/sd/worker-agents" (include "cucina.fqdn" (list . (include "cucina.controllerLeader.name" .))) }}
+      refreshInterval: {{ $m.workerScrapeConfig.refreshInterval }}
+  metricsPath: /metrics
+  honorLabels: false
+  relabelings:
+    - targetLabel: namespace
+      replacement: {{ .Release.Namespace }}
+    - targetLabel: cucina_component
+      replacement: worker-agent
+    - targetLabel: cucina_buildbarn
+      replacement: "false"
+    - sourceLabels: [pool]
+      targetLabel: kubernetes_service
+      replacement: worker-agent-$1
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
   name: {{ include "cucina.fullname" . }}-hosts
   namespace: {{ .Release.Namespace }}
   labels:

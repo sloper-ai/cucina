@@ -9,6 +9,7 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//api/proto/cucina/v1:cucina",
+        "//internal/pki",
         "@com_github_prometheus_client_model//go",
         "@com_github_prometheus_common//expfmt",
         "@com_github_prometheus_common//model",

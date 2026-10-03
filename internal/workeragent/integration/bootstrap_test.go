@@ -217,17 +217,19 @@ func newBootEnv(t *testing.T, enroll *fakeEnrollment, serverCA *agenttest.CA) *b
 func TestBootstrapEnrollmentOutcomes(t *testing.T) {
 	unavailable := status.Error(codes.Unavailable, "controller starting")
 	cases := []struct {
-		name          string
-		enroll        enrollBehaviour
-		rogueTLS      bool // the endpoint presents a certificate from another CA
-		noUserData    bool
-		emptyUserData bool
-		badUserData   bool
-		wantReason    string // "" = success
-		wantCalls     func(int) bool
+		name                string
+		enroll              enrollBehaviour
+		rogueTLS            bool // the endpoint presents a certificate from another CA
+		noUserData          bool
+		emptyUserData       bool
+		badUserData         bool
+		metricsSetupRefused bool
+		wantReason          string // "" = success
+		wantCalls           func(int) bool
 	}{
 		{name: "transient errors then success", enroll: enrollBehaviour{fail: []error{unavailable, status.Error(codes.ResourceExhausted, "rate limited"), unavailable}},
 			wantCalls: func(n int) bool { return n == 4 }},
+		{name: "privileged metrics setup refused", metricsSetupRefused: true, wantReason: "metrics", wantCalls: func(n int) bool { return n == 1 }},
 		{name: "enrollment denied", enroll: enrollBehaviour{failAlways: status.Error(codes.PermissionDenied, "instance not in pool")},
 			wantReason: "enrollment-refused", wantCalls: func(n int) bool { return n == 1 }},
 		{name: "identity document rejected", enroll: enrollBehaviour{failAlways: status.Error(codes.Unauthenticated, "bad signature")},
@@ -255,6 +257,13 @@ func TestBootstrapEnrollmentOutcomes(t *testing.T) {
 				serverCA = agenttest.NewCA(t, "rogue ca")
 			}
 			e := newBootEnv(t, enroll, serverCA)
+			if tc.metricsSetupRefused {
+				e.b.PrepareMetrics = func(context.Context) error {
+					_, err := workeragent.LoadState(e.b.FS, e.paths.StateFile)
+					require.NoError(t, err, "privileged network setup requires a valid worker bootstrap first")
+					return errors.New("refusing unowned metrics firewall rule")
+				}
+			}
 			if tc.noUserData {
 				e.imds.SetUserData(nil)
 			}
@@ -287,7 +296,11 @@ func TestBootstrapEnrollmentOutcomes(t *testing.T) {
 				require.Less(t, elapsed, time.Second, "refusals power off immediately, without backoff")
 			}
 			_, statErr := os.Stat(e.paths.WorkerConfig())
-			require.ErrorIs(t, statErr, os.ErrNotExist, "no configuration without an identity")
+			if tc.metricsSetupRefused {
+				require.NoError(t, statErr, "identity/configuration exists, but failed network setup prevents successful bootstrap")
+			} else {
+				require.ErrorIs(t, statErr, os.ErrNotExist, "no configuration without an identity")
+			}
 		})
 	}
 }

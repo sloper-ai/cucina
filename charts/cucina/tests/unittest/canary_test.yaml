@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+# Guards: R-TEST-7 — Helm deploys have distinct durable execution-canary keys;
+# execution has an independent opt-out and budget, without a credential CronJob.
+suite: execution canary scheduling
+templates:
+  - templates/controller/deployment.yaml
+tests:
+  - it: schedules bounded execution on the installation revision
+    release: {name: canary, revision: 1}
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CUCINA_CANARY_DEPLOYMENT, value: 'canary/1'}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CUCINA_CANARY_EXEC_DISABLE, value: 'false'}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CUCINA_CANARY_EXEC_TIMEOUT, value: '15m'}
+  - it: triggers a fresh execution schedule even on a configuration-identical upgrade
+    release: {name: canary, revision: 2, isUpgrade: true}
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CUCINA_CANARY_DEPLOYMENT, value: 'canary/2'}
+  - it: can disable paid executions without disabling the cache canary
+    set:
+      canary.execution.enabled: false
+      canary.execution.timeout: 90s
+    documentSelector: {path: kind, value: Deployment}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CUCINA_CANARY_EXEC_DISABLE, value: 'true'}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CUCINA_CANARY_EXEC_TIMEOUT, value: 90s}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: CUCINA_CANARY_ENDPOINT, value: 'grpcs://RELEASE-NAME-cucina-frontend.NAMESPACE.svc.cluster.local:8980'}

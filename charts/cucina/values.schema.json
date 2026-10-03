@@ -1989,6 +1989,36 @@
       "$ref": "#/definitions/stringMap",
       "description": "Labels added to every object."
     },
+    "canary": {
+      "additionalProperties": false,
+      "description": "Controller-managed production canaries.",
+      "properties": {
+        "execution": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Run a tiny uncached action per pool daily and after each Helm deployment; this may launch workers from zero without interrupting busy workers.",
+              "type": "boolean"
+            },
+            "timeout": {
+              "$ref": "#/definitions/goDuration",
+              "default": "15m",
+              "description": "Positive Go duration no greater than 15m, including cold start; bounds are enforced by the controller."
+            }
+          },
+          "required": [
+            "enabled",
+            "timeout"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "execution"
+      ],
+      "type": "object"
+    },
     "controller": {
       "additionalProperties": false,
       "description": "cucina-controller settings.",
@@ -2559,7 +2589,7 @@
               "type": "string"
             },
             "credentialSecret": {
-              "description": "Secret with the service-account key of the canaries (helm test and the controller's 5-minute loop); empty = the break-glass key.",
+              "description": "Secret with the service-account key of the canaries (helm test and the controller's cache/execution loops); empty = the break-glass key.",
               "type": "string"
             },
             "enabled": {
@@ -2684,7 +2714,8 @@
                   "$ref": "#/definitions/simpleDuration"
                 },
                 "certificateExpiry": {
-                  "$ref": "#/definitions/simpleDuration"
+                  "$ref": "#/definitions/simpleDuration",
+                  "description": "CA/server/controller certificate warning threshold; host and worker thresholds scale with their shorter configured lifetimes."
                 },
                 "egressBytesPerSecond": {
                   "minimum": 1,
@@ -2738,7 +2769,7 @@
           "additionalProperties": false,
           "properties": {
             "enabled": {
-              "description": "ScrapeConfigs using the leader's HTTP discovery for EC2 workers and Mac host/VM metrics relayed through HostService.",
+              "description": "Separate ScrapeConfigs using the leader's HTTP discovery for EC2 Buildbarn workers, private worker-agent diagnostics, and Mac host/VM metrics relayed through HostService.",
               "type": "boolean"
             },
             "refreshInterval": {
@@ -3094,6 +3125,7 @@
     "auth",
     "buildbarn",
     "storage",
+    "canary",
     "controller",
     "hooks",
     "monitoring"

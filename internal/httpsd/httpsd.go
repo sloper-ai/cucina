@@ -29,6 +29,12 @@ import (
 // Path is where the handler is mounted on the metrics listener.
 const Path = "/sd/workers"
 
+// AgentPath discovers private worker-agent telemetry separately from Buildbarn.
+const AgentPath = "/sd/worker-agents"
+
+// AgentMetricsPort is the fixed EC2 worker-agent telemetry port.
+const AgentMetricsPort = 9982
+
 // Group is one Prometheus HTTP SD target group.
 type Group struct {
 	Targets []string          `json:"targets"`
@@ -116,7 +122,9 @@ type Handler struct {
 		Instances(ctx context.Context) ([]ports.Instance, error)
 	}
 	Port uint32
-	Log  *slog.Logger
+	// AgentMetrics selects the private agent port and a distinct target label.
+	AgentMetrics bool
+	Log          *slog.Logger
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +141,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "listing worker instances failed", http.StatusServiceUnavailable)
 		return
 	}
-	b, err := json.Marshal(Groups(instances, h.Port))
+	port := h.Port
+	if h.AgentMetrics {
+		port = AgentMetricsPort
+		// Match the IMDSv2 local IPv4 listener; do not invent a public or
+		// wildcard fallback. PrivateIP is the provider's VPC interface field,
+		// not an RFC1918 restriction (shared-address VPC ranges are valid).
+		private := make([]ports.Instance, 0, len(instances))
+		for _, in := range instances {
+			if in.PrivateIP.Is4() && in.PrivateIP.IsGlobalUnicast() && !in.PrivateIP.IsLoopback() {
+				private = append(private, in)
+			}
+		}
+		instances = private
+	}
+	groups := Groups(instances, port)
+	if h.AgentMetrics {
+		for _, group := range groups {
+			group.Labels["cucina_component"] = "worker-agent"
+		}
+	}
+	b, err := json.Marshal(groups)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

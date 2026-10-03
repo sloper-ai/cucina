@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,6 +30,9 @@ const (
 
 // Metrics are the canary's Prometheus collectors.
 type Metrics struct {
+	mu     sync.Mutex
+	execUp map[string]prometheus.Gauge // known execution health, including pools since deleted
+
 	runs        *prometheus.CounterVec
 	duration    *prometheus.HistogramVec
 	step        *prometheus.HistogramVec
@@ -41,6 +45,7 @@ type Metrics struct {
 // NewMetrics registers the canary collectors on reg.
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
+		execUp: make(map[string]prometheus.Gauge),
 		runs: prometheus.NewCounterVec(prometheus.CounterOpts{Name: MetricRuns,
 			Help: "Canary runs by kind (cache, exec), pool and result (success, failure)."}, []string{"kind", "pool", "result"}),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: MetricDuration,
@@ -54,7 +59,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		lastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: MetricLastSuccess,
 			Help: "Unix time of the last successful canary run."}, []string{"kind", "pool"}),
 		up: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: MetricUp,
-			Help: "1 if the last canary run succeeded, else 0."}, []string{"kind", "pool"}),
+			Help: "1 if the last canary run succeeded, else 0; scheduled execution also requires current pool availability and deployment evidence."}, []string{"kind", "pool"}),
 		queue: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: MetricQueue,
 			Help: "Queue time of the last execution canary (a cold-start sample when the pool was at zero), in seconds."}, []string{"pool"}),
 	}
@@ -64,23 +69,54 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 
 // Observe records one result.
 func (m *Metrics) Observe(r Result) {
-	result, up := "failure", 0.0
+	result := "failure"
 	if r.Success {
-		result, up = "success", 1
+		result = "success"
 	}
-	end := r.Started.Add(r.Duration)
 	m.runs.WithLabelValues(r.Kind, r.Pool, result).Inc()
 	m.duration.WithLabelValues(r.Kind, r.Pool).Observe(r.Duration.Seconds())
 	for _, s := range r.Steps {
 		m.step.WithLabelValues(r.Kind, s.Name).Observe(s.Duration.Seconds())
 	}
+	m.restore(r)
+}
+
+// restore rehydrates durable results after a leadership change without counting
+// the same run again in counters and histograms.
+func (m *Metrics) restore(r Result) {
+	up := 0.0
+	if r.Success {
+		up = 1
+	}
+	end := r.Started.Add(r.Duration)
 	m.lastRun.WithLabelValues(r.Kind, r.Pool).Set(float64(end.Unix()))
-	m.up.WithLabelValues(r.Kind, r.Pool).Set(up)
+	m.setUp(r.Kind, r.Pool, up)
 	if r.Success {
 		m.lastSuccess.WithLabelValues(r.Kind, r.Pool).Set(float64(end.Unix()))
 		if r.Kind == KindExec {
 			m.queue.WithLabelValues(r.Pool).Set(r.QueueTime.Seconds())
 		}
+	}
+}
+
+func (m *Metrics) setUp(kind, pool string, up float64) {
+	gauge := m.up.WithLabelValues(kind, pool)
+	if kind == KindExec {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.execUp[pool] = gauge
+	}
+	gauge.Set(up)
+}
+
+// maskExecution withdraws current execution health before refreshing inventory
+// or on a failed refresh. Historical successes and cache-canary health survive;
+// a deleted pool stays non-passing even though its history is still exported.
+func (m *Metrics) maskExecution() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, gauge := range m.execUp {
+		gauge.Set(0)
 	}
 }
 

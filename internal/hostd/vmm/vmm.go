@@ -85,16 +85,17 @@ type Options struct {
 type Manager struct {
 	o Options
 
-	mu        sync.Mutex
-	host      lifecycle.Host
-	tun       Tunables
-	ips       map[string]netip.Addr
-	ports     map[string]uint32
-	lastCount map[string]uint64
-	inflight  map[string]bool
-	adopting  map[string]bool
-	kick      chan struct{}
-	wg        sync.WaitGroup
+	mu           sync.Mutex
+	host         lifecycle.Host
+	tun          Tunables
+	ips          map[string]netip.Addr
+	ports        map[string]uint32
+	lastCount    map[string]uint64
+	certificates map[string]time.Time // latest issued/adopted worker leaf by VM name
+	inflight     map[string]bool
+	adopting     map[string]bool
+	kick         chan struct{}
+	wg           sync.WaitGroup
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)
@@ -131,7 +132,7 @@ func New(o Options) *Manager {
 	}
 	return &Manager{
 		o: o, host: lifecycle.Host{Slots: 2}, tun: Tunables{Slots: 2},
-		ips: map[string]netip.Addr{}, ports: map[string]uint32{}, lastCount: map[string]uint64{},
+		ips: map[string]netip.Addr{}, ports: map[string]uint32{}, lastCount: map[string]uint64{}, certificates: map[string]time.Time{},
 		inflight: map[string]bool{}, adopting: map[string]bool{}, kick: make(chan struct{}, 1),
 	}
 }
@@ -165,6 +166,7 @@ type journalVM struct {
 	ClonedGeneration string           `json:"clonedGeneration,omitempty"`
 	ClonedAt         time.Time        `json:"clonedAt,omitempty"`
 	MetricsPort      uint32           `json:"metricsPort,omitempty"`
+	CertNotAfter     time.Time        `json:"certNotAfter,omitempty"`
 	Failures         int              `json:"failures,omitempty"`
 	FailuresAtClone  int              `json:"failuresAtClone,omitempty"`
 	RetryAt          time.Time        `json:"retryAt,omitempty"`
@@ -200,6 +202,7 @@ func (m *Manager) Load() error {
 	m.host.Cordoned = j.Cordoned
 	for _, v := range j.VMs {
 		m.ports[v.Name] = v.MetricsPort
+		m.certificates[v.Name] = v.CertNotAfter
 		m.host.VMs = append(m.host.VMs, lifecycle.VM{
 			Name: v.Name, Pool: v.Pool, Node: v.Node, Intent: v.Intent, Image: v.Image, Generation: v.Generation,
 			CPU: v.CPU, MemoryGiB: v.MemoryGiB, DiskGiB: v.DiskGiB, MaxAge: v.MaxAge, Reimage: v.Reimage,
@@ -220,7 +223,7 @@ func (m *Manager) saveLocked() {
 		j.VMs = append(j.VMs, journalVM{Name: v.Name, Pool: v.Pool, Node: v.Node, Intent: v.Intent, Image: v.Image,
 			Generation: v.Generation, CPU: v.CPU, MemoryGiB: v.MemoryGiB, DiskGiB: v.DiskGiB, MaxAge: v.MaxAge,
 			Reimage: v.Reimage, StopReason: v.StopReason, ClonedImage: v.ClonedImage,
-			ClonedGeneration: v.ClonedGeneration, ClonedAt: v.ClonedAt, MetricsPort: m.ports[v.Name],
+			ClonedGeneration: v.ClonedGeneration, ClonedAt: v.ClonedAt, MetricsPort: m.ports[v.Name], CertNotAfter: m.certificates[v.Name],
 			Failures: v.Failures, FailuresAtClone: v.FailuresAtClone, RetryAt: v.RetryAt, LastError: v.LastError})
 	}
 	b, _ := json.MarshalIndent(j, "", "  ")
@@ -404,6 +407,29 @@ func (m *Manager) infoLocked(vm lifecycle.VM) *cucinav1.VMInfo {
 	return info
 }
 
+// CertificateSnapshot atomically returns the expected live identity count and
+// complete known expiries. Any unknown running/stopping identity withholds the
+// expiry map, but not the expected count. Deleting/dormant disks are excluded.
+func (m *Manager) CertificateSnapshot() (int, map[string]time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	expected := 0
+	out := map[string]time.Time{}
+	for _, vm := range m.host.VMs {
+		if vm.Phase != lifecycle.Running && vm.Phase != lifecycle.Stopping {
+			continue
+		}
+		expected++
+		if expiry := m.certificates[vm.Name]; !expiry.IsZero() {
+			out[vm.Name] = expiry // expired values remain real evidence, never clamped
+		}
+	}
+	if len(out) != expected {
+		return expected, nil
+	}
+	return expected, out
+}
+
 // MetricsTarget is a running, managed VM's locally reachable worker endpoint.
 // It is resolved from runtime state, never from controller-provided scrape URLs.
 type MetricsTarget struct {
@@ -570,6 +596,9 @@ func (m *Manager) reconcile(ctx context.Context) {
 			err := m.execute(ctx, a)
 			m.mu.Lock()
 			lifecycle.Complete(&m.host, a, err, m.o.Clock.Now())
+			if err == nil && (a.Kind == lifecycle.Stop || a.Kind == lifecycle.Delete) {
+				delete(m.certificates, a.VM)
+			}
 			delete(m.inflight, a.VM)
 			m.saveLocked()
 			m.mu.Unlock()
@@ -875,6 +904,10 @@ func (m *Manager) start(ctx context.Context, vm lifecycle.VM) error {
 	if idr.GetSettings() == nil {
 		return errors.New("IssueVMIdentity returned no worker settings")
 	}
+	leaf, err := identity.ParseLeaf(idr.GetCertificatePem())
+	if err != nil {
+		return fmt.Errorf("issued VM certificate: %w", err)
+	}
 	ws := proto.Clone(idr.GetSettings()).(*cucinav1.WorkerSettings)
 	gw, ok := m.o.Gateway(ip)
 	if !ok {
@@ -927,6 +960,7 @@ func (m *Manager) start(ctx context.Context, vm lifecycle.VM) error {
 	m.mu.Lock()
 	m.ips[vm.Name] = ip
 	m.ports[vm.Name] = ws.GetMetricsPort()
+	m.certificates[vm.Name] = leaf.NotAfter
 	delete(m.lastCount, vm.Name)
 	m.mu.Unlock()
 	if res, err := m.o.Runtime.GuestExec(ctx, tn, act); err != nil {

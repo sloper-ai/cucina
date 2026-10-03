@@ -375,12 +375,17 @@ func (a *Agent) Run(ctx context.Context) error {
 		run("l2", a.l2.Run)
 	}
 	reg := metrics.Registry(a.metricsSource())
+	expiry := certificateCollector{agent: a}
+	reg.MustRegister(expiry)
 	if cfg.MetricsListen != "" {
 		run("metrics", func(ctx context.Context) error { return metrics.Serve(ctx, cfg.MetricsListen, reg) })
 	}
 	relayRegistry := prometheus.Gatherer(reg)
 	if a.o.MetricsGatherer != nil {
-		relayRegistry = a.o.MetricsGatherer
+		// The override replaces OS/process sampling, not certificate evidence.
+		certs := prometheus.NewRegistry()
+		certs.MustRegister(expiry)
+		relayRegistry = prometheus.Gatherers{a.o.MetricsGatherer, certs}
 	}
 	run("metrics-relay", func(ctx context.Context) error { return a.relayMetrics(ctx, relayRegistry) })
 	run("housekeeping", a.housekeeping)

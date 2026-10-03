@@ -491,11 +491,26 @@ func TestRenderedNATAndLeaderContracts(t *testing.T) {
 			if !excludesEndpoints {
 				t.Error("controller ServiceMonitor would duplicate the leader scrape")
 			}
-			for _, suffix := range []string{"workers", "hosts"} {
+			for _, suffix := range []string{"workers", "worker-agents", "hosts"} {
 				sc := objects["ScrapeConfig/cucina-"+suffix]
 				wantSD := []any{map[string]any{"url": "http://cucina-controller-leader.cucina.svc.cluster.local:9090/sd/" + suffix, "refreshInterval": "30s"}}
 				if !reflect.DeepEqual(sc.Spec["httpSDConfigs"], wantSD) {
 					t.Errorf("%s SD does not use the leader Service: %v", suffix, sc.Spec["httpSDConfigs"])
+				}
+				if suffix == "worker-agents" {
+					if sc.Spec["honorLabels"] != false {
+						t.Error("agent target identity labels must override payload labels")
+					}
+					labels := map[string]any{}
+					for _, value := range sc.Spec["relabelings"].([]any) {
+						rule := value.(map[string]any)
+						if key, ok := rule["targetLabel"].(string); ok {
+							labels[key] = rule["replacement"]
+						}
+					}
+					if labels["cucina_component"] != "worker-agent" || labels["cucina_buildbarn"] != "false" || labels["kubernetes_service"] != "worker-agent-$1" {
+						t.Error("worker-agent telemetry would pollute Buildbarn worker selectors")
+					}
 				}
 				if suffix == "hosts" {
 					if sc.Spec["honorLabels"] != false {

@@ -108,6 +108,7 @@ func Run(ctx context.Context, o Options) error {
 	extra := map[string]http.Handler{}
 	if o.Mode == ModeController {
 		extra[httpsd.Path] = &httpsd.Handler{Source: sd, Port: cfg.Worker.MetricsPort, Log: log}
+		extra[httpsd.AgentPath] = &httpsd.Handler{Source: sd, AgentMetrics: true, Log: log}
 	}
 	grace := 30 * time.Second
 	le := cfg.LeaderElection

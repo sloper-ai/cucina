@@ -66,6 +66,10 @@ type Bootstrap struct {
 	// KeyReaders are extra Windows accounts (names or SIDs) granted read
 	// access to the key file (a low-privilege bb_worker service account).
 	KeyReaders []string
+	// PrepareMetrics performs privileged network setup after successful
+	// enrollment/state validation, before the boot orchestrator starts services.
+	// It also runs on same-boot resume; a failure is fail-closed bootstrap.
+	PrepareMetrics func(context.Context) error
 	// BuildUser is the unprivileged user actions run as (Linux runCommandsAs,
 	// R-SEC-5); nil runs actions as bb_runner's user.
 	BuildUser *UnixUser
@@ -104,6 +108,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		deadline = DefaultBootstrapDeadline
 	}
 	err := b.run(ctx, log, start, start.Add(deadline))
+	if err == nil && b.PrepareMetrics != nil {
+		if setupErr := b.PrepareMetrics(ctx); setupErr != nil {
+			err = fail("metrics", setupErr)
+		}
+	}
 	if err == nil {
 		return nil
 	}

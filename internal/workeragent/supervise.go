@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	"github.com/sloper-ai/cucina/internal/pki"
 	"github.com/sloper-ai/cucina/internal/ports"
 	"github.com/sloper-ai/cucina/internal/workeragent/imds"
 )
@@ -132,6 +133,9 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.settings = ws
 	s.limits = LimitsFromSettings(ws.GetDeadman())
 	s.certNotAfter = st.CertNotAfter
+	if s.Metrics != nil {
+		s.Metrics.setCertificate(s.Clock, st.CertNotAfter)
+	}
 	now := s.Clock.Now()
 	s.lastActivity = s.loadTimestamp(s.Paths.LastActivityFile(), now)
 	s.lastContact = s.loadTimestamp(s.Paths.LastContactFile(), now)
@@ -300,6 +304,7 @@ type AgentMetrics struct {
 	uptime    prometheus.Gauge
 	idle      prometheus.Gauge
 	reachable prometheus.Gauge
+	expiry    *pki.ExpiryTracker
 }
 
 // NewAgentMetrics registers cucina_agent_uptime_seconds,
@@ -316,6 +321,21 @@ func NewAgentMetrics() *AgentMetrics {
 	}
 	m.Registry.MustRegister(m.uptime, m.idle, m.reachable)
 	return m
+}
+
+// setCertificate is called when bootstrap state is loaded, using the same
+// clock as the supervisor. Re-loading replaces the one worker identity; an
+// unknown expiry is absent, not a synthetic zero/expired certificate.
+func (m *AgentMetrics) setCertificate(clock ports.Clock, notAfter time.Time) {
+	if m.expiry == nil {
+		m.expiry = pki.NewExpiryTracker(clock)
+		m.Registry.MustRegister(m.expiry)
+	}
+	if notAfter.IsZero() {
+		m.expiry.Delete(pki.ExpiryRoleWorker, "self")
+	} else {
+		m.expiry.Set(pki.ExpiryRoleWorker, "self", notAfter)
+	}
 }
 
 func (m *AgentMetrics) update(o DeadmanObservation, reachable bool) {

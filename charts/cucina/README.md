@@ -33,6 +33,18 @@ commands. Operations (upgrade, rollback, uninstall, rotation): [`docs/operations
 Exposure options (k3s ServiceLB, AWS NLB, Ingress/Gateway, NodePort): [`docs/operations/exposure.md`](../../docs/operations/exposure.md).
 EKS: [`docs/operations/eks.md`](../../docs/operations/eks.md). Sizing: [`docs/sizing.md`](../../docs/sizing.md).
 
+## Production canaries
+
+The controller leader runs cache canaries every five minutes and independently runs one uncached execution per pool daily
+and after each Helm revision. `canary.execution.enabled=false` disables paid execution probes without disabling cache checks;
+execution timeout defaults to `15m` and cannot exceed it. Both paths use `hooks.test.credentialSecret`, or the bootstrap
+break-glass key until it is replaced. `helm test` remains cache-only.
+
+Unavailable pools and shared routes without verifiable per-pool attribution are non-passing. Naturally zero pools may launch
+through the normal autoscaler, but the canary never drains workers to manufacture a cold start. A historical success does not
+certify a paused or unverified deployment. See [ADR 1007](../../docs/adr/1007-leader-scheduled-execution-canaries.md) for
+reservation, recovery and failure semantics.
+
 ## Values
 
 `values.schema.json` validates every key (unknown keys are errors); `sizeProfile` (`small`, `medium`, `large`,
@@ -63,6 +75,9 @@ test profiles: [`ci/`](ci).
 | `buildbarn.storage.averageObjectSize` | object | Average object size per store, used to size the key-location maps. |
 | `buildbarn.storage.keyLocationMapFactor` | integer | Key-location map entries per expected object (upstream: 2-10). |
 | `buildbarn.storage.minimumEpochInterval` | string | fsync interval of the persistent state (upstream: 300s). |
+| `canary` | object | Controller-managed production canaries. |
+| `canary.execution.enabled` | boolean | Run a tiny uncached action per pool daily and after each Helm deployment; this may launch workers from zero without interrupting busy workers. |
+| `canary.execution.timeout` | string | Positive Go duration no greater than 15m, including cold start; bounds are enforced by the controller. |
 | `clusterDomain` | string | Kubernetes cluster DNS domain. |
 | `clusterId` | string | Installation ID (cucina:cluster tag on cloud resources); unique per installation. Default <namespace>-<release>. |
 | `commonLabels` | object | Labels added to every object. |
@@ -177,7 +192,7 @@ test profiles: [`ci/`](ci).
 | `hooks.resources.limits` | object |  |
 | `hooks.resources.requests` | object |  |
 | `hooks.test.credentialKey` | string |  |
-| `hooks.test.credentialSecret` | string | Secret with the service-account key of the canaries (helm test and the controller's 5-minute loop); empty = the break-glass key. |
+| `hooks.test.credentialSecret` | string | Secret with the service-account key of the canaries (helm test and the controller's cache/execution loops); empty = the break-glass key. |
 | `hooks.test.enabled` | boolean | helm test cache canary (R-CP-7). |
 | `hooks.uninstallPrep.enabled` | boolean | pre-delete Job that drains and terminates every worker (R-OPS-3). |
 | `hooks.uninstallPrep.timeout` | string |  |
@@ -211,7 +226,7 @@ test profiles: [`ci/`](ci).
 | `monitoring.pushgateway.resources` | object |  |
 | `monitoring.serviceMonitors.enabled` | boolean |  |
 | `monitoring.serviceMonitors.interval` | string |  |
-| `monitoring.workerScrapeConfig.enabled` | boolean | ScrapeConfigs using the leader's HTTP discovery for EC2 workers and Mac host/VM metrics relayed through HostService. |
+| `monitoring.workerScrapeConfig.enabled` | boolean | Separate ScrapeConfigs using the leader's HTTP discovery for EC2 Buildbarn workers, private worker-agent diagnostics, and Mac host/VM metrics relayed through HostService. |
 | `monitoring.workerScrapeConfig.refreshInterval` | string |  |
 | `nameOverride` | string | Replaces the chart name in object names. |
 | `networkPolicy.enabled` | boolean | Restrict the in-cluster-only ports (storage gRPC, scheduler client and BuildQueueState). |

@@ -43,8 +43,9 @@ import (
 // version is set at link time (-X main.version=…).
 var version = "dev"
 
-// DefaultMetricsListen is where supervise serves the agent's own metrics.
-const DefaultMetricsListen = "127.0.0.1:9982"
+// DefaultMetricsListen resolves the EC2 VPC-local interface, never a wildcard.
+// Darwin supervision (when used) retains a loopback default.
+const DefaultMetricsListen = workeragent.EC2MetricsListen
 
 type globalFlags struct {
 	logLevel     string
@@ -209,6 +210,15 @@ func bootstrapCmd(g *globalFlags, code *int) *cobra.Command {
 				Host: workeragent.NewHost(e.fs, e.paths.SysRoot), FS: e.fs, Clock: e.clock, Power: e.power, Log: e.log,
 				BootDataFile: bootData, Deadline: deadline, KeyReaders: keyReaders, BuildUser: bu,
 			}
+			if runtime.GOOS == "windows" {
+				b.PrepareMetrics = func(ctx context.Context) error {
+					self, err := os.Executable()
+					if err != nil {
+						return err
+					}
+					return workeragent.PrepareWindowsAgentMetrics(ctx, e.imds, e.exec, self)
+				}
+			}
 			if err := b.Run(ctx); err != nil {
 				*code = 1
 				var be *workeragent.BootError
@@ -275,9 +285,13 @@ func superviseCmd(g *globalFlags, code *int) *cobra.Command {
 			ctx, cancel := signalContext()
 			defer cancel()
 			metrics := workeragent.NewAgentMetrics()
-			if metricsListen != "" {
+			listen, err := workeragent.ResolveMetricsListen(ctx, metricsListen, e.imds)
+			if err != nil {
+				return err
+			}
+			if listen != "" {
 				go func() {
-					if err := metrics.Serve(ctx, metricsListen); err != nil {
+					if err := metrics.Serve(ctx, listen); err != nil {
 						e.log.Warn("agent metrics endpoint failed", "event", "metrics.failed", "error", err.Error())
 					}
 				}()
@@ -317,7 +331,11 @@ func superviseCmd(g *globalFlags, code *int) *cobra.Command {
 		},
 	}
 	f := c.Flags()
-	f.StringVar(&metricsListen, "metrics-listen", DefaultMetricsListen, "serve the agent's /metrics here (empty disables)")
+	listenDefault := DefaultMetricsListen
+	if runtime.GOOS == "darwin" {
+		listenDefault = "127.0.0.1:9982"
+	}
+	f.StringVar(&metricsListen, "metrics-listen", listenDefault, "agent /metrics address (ec2-private resolves IMDS local IPv4:9982; empty disables)")
 	f.StringVar(&workerService, "worker-service", workeragent.DefaultWorkerService(runtime.GOOS), "bb_worker service to drain on a Spot interruption notice")
 	return c
 }

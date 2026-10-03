@@ -44,6 +44,7 @@ The chart's alert rules (`monitoring.prometheusRules.enabled`) and where to go w
 | `CucinaHostOffline` | warning | [Add or remove a Mac host](add-remove-mac-host.md), troubleshooting; after an update, [macOS update](macos-update.md) |
 | `CucinaIdleInstancesWithEmptyQueue`, `CucinaOrphanedResources` | warning | [Cost leak](cost-leak.md) |
 | `CucinaCertificateExpiringSoon`, `CucinaCertificateExpiryImminent` | warning, critical | [Rotate the CA and credentials](rotate-ca-credentials.md) |
+| `CucinaCertificateTelemetryMissing` | warning | [Rotate the CA and credentials](rotate-ca-credentials.md), private expiry telemetry troubleshooting |
 | `CucinaEgressAnomaly` | warning | [Data transfer and client guidance](data-transfer.md) |
 | `CucinaInvariantViolated` | critical | No runbook: the controller refused an operation to protect the fleet. Read the leader's log around the time of the alert (it names the invariant), collect `cucinactl diag --include-logs`, and escalate |
 | `CucinaFrontendAvailabilityBudgetBurn` | critical (page), warning (ticket) | No dedicated runbook: the frontend is failing too many requests. `cucinactl status`, `kubectl -n cucina get pods -l app.kubernetes.io/component=frontend`, the frontend's log; after an upgrade see [Helm upgrade, rollback and uninstall](helm-upgrade-rollback-uninstall.md); authentication failures after a key or CA change are [Revocation](revocation.md) and [Rotate the CA and credentials](rotate-ca-credentials.md) |

@@ -4,6 +4,12 @@
 # the rendered output with `promtool test rules`. Metric names: docs/contracts.md §6 and
 # the pinned Buildbarn releases.
 {{- $t := .Values.monitoring.prometheusRules.thresholds }}
+{{- $hostTTL := include "cucina.seconds" .Values.pki.hostCertTTL | int64 }}
+{{- $workerTTL := min (include "cucina.seconds" .Values.pki.workerCertTTL | int64) (include "cucina.seconds" .Values.pki.vmCertTTL | int64) }}
+{{- $hostWarning := min 86400 (div $hostTTL 6) }}
+{{- $hostCritical := min 21600 (div $hostTTL 24) }}
+{{- $workerWarning := min 7200 (div (mul $workerTTL 2) 3) }}
+{{- $workerCritical := min 1800 (div $workerTTL 24) }}
 {{- $storagePVC := printf "(data|meta|cas)-%s-[0-9]+" (include "cucina.storage.name" .) }}
 groups:
   - name: cucina-recording-rules
@@ -152,19 +158,39 @@ groups:
           description: "{{ "{{" }} $value {{ "}}" }} tagged resources without a running worker survived the periodic sweep; run `cucinactl pools gc`."
       # --- Certificate expiry ---
       - alert: CucinaCertificateExpiringSoon
-        expr: min by (namespace, role) (cucina_cert_expiry_seconds) < {{ include "cucina.seconds" $t.certificateExpiry }}
+        expr: |
+          (min by (namespace, role) (cucina_cert_expiry_seconds{role=~"ca|server|controller"}) < {{ include "cucina.seconds" $t.certificateExpiry }})
+          or (min by (namespace, role) (cucina_cert_expiry_seconds{role="host"}) < {{ $hostWarning }})
+          or (min by (namespace, role) (cucina_cert_expiry_seconds{role="worker"}) < {{ $workerWarning }})
         labels:
           severity: warning
         annotations:
           summary: "A {{ "{{" }} $labels.role {{ "}}" }} certificate expires in {{ "{{" }} $value | humanizeDuration {{ "}}" }}"
-          description: "Automatic renewal did not happen (runbook: rotate CA/credentials)."
+          description: "Renewal or lifecycle replacement did not complete (runbook: rotate CA/credentials)."
       - alert: CucinaCertificateExpiryImminent
-        expr: min by (namespace, role) (cucina_cert_expiry_seconds) < 86400
+        expr: |
+          (min by (namespace, role) (cucina_cert_expiry_seconds{role=~"ca|server|controller"}) < 86400)
+          or (min by (namespace, role) (cucina_cert_expiry_seconds{role="host"}) < {{ $hostCritical }})
+          or (min by (namespace, role) (cucina_cert_expiry_seconds{role="worker"}) < {{ $workerCritical }})
         labels:
           severity: critical
         annotations:
-          summary: "A {{ "{{" }} $labels.role {{ "}}" }} certificate expires within a day"
-          description: "Renew it now (runbook: rotate CA/credentials)."
+          summary: "A {{ "{{" }} $labels.role {{ "}}" }} certificate is near expiry"
+          description: "Renew or replace the affected identity now (runbook: rotate CA/credentials)."
+      - alert: CucinaCertificateTelemetryMissing
+        expr: |
+          max by (namespace, node, cucina_component) (
+            (up{cucina_component="worker-agent"} == 0)
+            or ((up{cucina_component="worker-agent"} == 1) unless on (namespace, node, cucina_component) cucina_cert_expiry_seconds{role="worker",cucina_component="worker-agent"})
+            or ((up{cucina_component="hostd"} == 1) unless on (namespace, node, cucina_component) cucina_cert_expiry_seconds{role="host",cucina_component="hostd"})
+            or ((cucina_hostd_vm_certificates_expected{cucina_component="hostd"} > 0) unless on (namespace, node, cucina_component) cucina_cert_expiry_seconds{role="worker",cucina_component="hostd"})
+          )
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Expected certificate telemetry is missing"
+          description: "Check the private agent listener or host relay; absent expiry is not healthy (runbook: rotate CA/credentials)."
       # --- Egress anomalies (R-DATA-7) ---
       - alert: CucinaEgressAnomaly
         expr: (cucina:frontend_cas_read_bytes:rate5m > {{ $t.egressBytesPerSecond | int64 }}) or (cucina:hostd_wan_received_bytes:rate5m > {{ $t.egressBytesPerSecond | int64 }})

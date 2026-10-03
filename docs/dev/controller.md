@@ -15,7 +15,7 @@ version). The autoscaler policy itself is `internal/scaling` (see [scaling.md](s
 | `wait-for --file P --tcp H:P [--timeout 5m]` | init containers | Waits until files exist and addresses accept TCP; exit 1 with the pending targets on timeout. |
 | `bootstrap --config F [--certs C]` | Helm pre-install/pre-upgrade hook | Idempotent, never overwrites: CA Secret, server certificate Secrets (from `--certs`), signing keys + JWKS/deny-list ConfigMaps, break-glass key. Prints nothing secret. |
 | `uninstall-prep [--config F] [--timeout 20m]` | Helm pre-delete hook | Deletes every WorkerPool and MacHost, waits for their finalizers (VMs drained and terminated/stopped), then (with `aws` configured) checks that no instance of the cluster is pending/running/stopped. Exit 1 otherwise (R-OPS-3). |
-| `canary cache\|exec [flags]` | `helm test`, canary CronJob, e2e | `internal/canary.Command()` (agent e2e): the cache canary (STS token exchange + JWKS check + AC/CAS round trip, starts no workers) or the execution canary (one uncached action on a pool). Flags default from `CUCINA_CANARY_*`; `--report-to` POSTs the result to the controller's `/canary/results`. |
+| `canary cache\|exec [flags]` | `helm test`, operators, e2e | `internal/canary.Command()`: a one-shot cache canary (STS token exchange + JWKS check + AC/CAS round trip, starts no workers) or execution canary (one uncached action; `--pool` is verified against the executing worker). Flags default from `CUCINA_CANARY_*`; `--report-to` POSTs to `/canary/results`. Scheduled probes reuse the library in-process, not a CronJob. |
 | `keys rotate` / `keys compromise --kid K\|*` | operators (`kubectl exec` into the controller Pod) | Publish a successor signing key (the leader promotes it once every frontend and the scheduler accept a probe token signed with it), or remove a key from the JWKS at once, activate a fresh key and rolling-restart frontends and scheduler (R-AUTH-9, T10e). |
 | `version` | humans, CI | JSON: version, commit, Go, protocol version, compiled-in components. |
 
@@ -66,11 +66,27 @@ queues beyond the idle timeout, invariant violations, failing canary), EC2 worke
 Command, only on running workers that a tag-filtered Describe shows as this cluster's), the controller log ring
 (`LogTee` → `mgmt.NewLogRing`) and the support sources (TrustPolicies, metrics text).
 
-Cache canary (R-TEST-7): the leader runs `internal/canary` every 5 min (±10 %) in-process with the mounted canary key
-(`CUCINA_CANARY_KEY_FILE`, default `/var/run/secrets/cucina/canary/key`) or else the break-glass key, against
-`CUCINA_CANARY_ENDPOINT`/`CUCINA_CANARY_STS_URL` (default: the configured public endpoints) and exports
-`cucina_canary_*`; one-shot runs POST to `/canary/results` on the metrics listener. `CUCINA_CANARY_DISABLE=true` turns
-the loop off.
+Canaries (R-TEST-7, [ADR 1007](../adr/1007-leader-scheduled-execution-canaries.md)): the leader runs the cache probe
+in-process every 5 min (up to +10% jitter), with the mounted key (`CUCINA_CANARY_KEY_FILE`, default
+`/var/run/secrets/cucina/canary/key`) or else break-glass, against `CUCINA_CANARY_ENDPOINT`/`CUCINA_CANARY_STS_URL`
+(default: configured public endpoints). It starts no workers. An independent execution scheduler runs the same probe
+library serially per pool every 24 hours and after each Helm revision, with a 15-minute maximum probe deadline. It
+uses the pool's catalog-native/Xcode runner and a served instance, verifies the executing worker's pool, and never
+drains busy workers or forces a pool to zero. Naturally empty pools can scale out through the ordinary autoscaler.
+Shared instance/property routes that cannot select one pool fail explicitly; they are not qualified by another pool.
+
+Helm sets `CUCINA_CANARY_DEPLOYMENT=<release>/<revision>`; standalone controllers remain cache-only until given an
+explicit stable deployment identity. `canary.execution.enabled=false` (`CUCINA_CANARY_EXEC_DISABLE=true`) disables
+only execution; `canary.execution.timeout` (`CUCINA_CANARY_EXEC_TIMEOUT`, default `15m`) bounds it. Existing
+`CUCINA_CANARY_DISABLE=true` disables both schedules. `hooks.test.credentialSecret` supplies both loops after retiring
+break-glass; its key needs cache permissions and `execute` on each selected instance. `helm test` stays cache-only.
+
+WorkerPool annotation `cucina.sloper.ai/execution-canary` persists reservations and results across leader changes.
+Incomplete attempts are non-passing, block new execution until the deadline plus two-minute remote cleanup grace,
+and are not retried before the next daily/deployment attempt. Paused/offline/failed or not-yet-observed pools never
+report current execution `up=1`; historical last-success timestamps are retained. Metrics use `kind` and `pool` labels
+(`cucina_canary_*`); one-shot tools can still POST to `/canary/results`. Probe queue time alone is not verified cold-start
+evidence. Focused offline regressions passed; live deployment/leader-failover/scale-from-zero qualification was not run.
 
 ## Replicas and leader routing
 

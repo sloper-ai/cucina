@@ -378,6 +378,14 @@ sts:
   topologySpreadConstraints: []
   priorityClassName: ""
 
+canary:
+  execution:
+    # -- Run a tiny uncached action per pool daily and after each Helm deployment.
+    # This may launch workers from zero; it never interrupts busy workers.
+    enabled: true
+    # -- Positive Go duration, at most 15m; bounds execution including cold start.
+    timeout: 15m
+
 hooks:
   bootstrap:
     # -- pre-install/pre-upgrade Job: CA, server certificates, signing keys, JWKS,
@@ -392,7 +400,7 @@ hooks:
     # -- `helm test`: cache canary through the client endpoint (R-CP-7).
     enabled: true
     # -- Secret with the service-account key of the canaries (`helm test` and the controller's
-    # 5-minute loop, mounted as a directory). Default: the break-glass key; set it before
+    # cache/execution loops, mounted as a directory). Default: the break-glass key; set it before
     # disabling auth.breakGlass.
     credentialSecret: ""
     credentialKey: key
@@ -415,8 +423,9 @@ monitoring:
   serviceMonitors:
     enabled: false
     interval: 30s
-  # -- Prometheus HTTP discovery through the leader metrics Service: EC2 workers (/sd/workers)
-  # and Mac host/VM metrics relayed over HostService (/sd/hosts), one ScrapeConfig each.
+  # -- Prometheus HTTP discovery through the leader metrics Service: EC2 Buildbarn workers
+  # (/sd/workers), private worker-agent diagnostics (/sd/worker-agents), and Mac host/VM
+  # metrics relayed over HostService (/sd/hosts), one ScrapeConfig each.
   workerScrapeConfig:
     enabled: false
     refreshInterval: 30s
@@ -433,7 +442,8 @@ monitoring:
       storageFreeRatio: 0.1
       # -- AC hit ratio below which to alert (when there is traffic).
       cacheHitRatio: 0.5
-      # -- Certificates expiring sooner than this.
+      # -- CA/server/controller certificate warning threshold. Host/worker thresholds
+      # are derived from their shorter configured lifetimes.
       certificateExpiry: 168h
       # -- Host heartbeat age considered offline.
       hostOffline: 5m

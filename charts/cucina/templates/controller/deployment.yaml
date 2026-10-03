@@ -116,8 +116,15 @@ spec:
             {{- with include "cucina.goEnv" $eff.resources }}
             {{- . | nindent 12 }}
             {{- end }}
-            # The leader's 5-minute cache canary (as `helm test`): in-cluster targets,
-            # the break-glass key unless hooks.test.credentialSecret is mounted.
+            # Independent leader-only cache/execution loops share these credentials
+            # and targets. Every Helm revision schedules execution again, not every
+            # Pod restart; disabling execution preserves the 5-minute cache cadence.
+            - name: CUCINA_CANARY_DEPLOYMENT
+              value: {{ printf "%s/%d" .Release.Name (int .Release.Revision) | quote }}
+            - name: CUCINA_CANARY_EXEC_DISABLE
+              value: {{ not .Values.canary.execution.enabled | quote }}
+            - name: CUCINA_CANARY_EXEC_TIMEOUT
+              value: {{ .Values.canary.execution.timeout | quote }}
             - name: CUCINA_CANARY_ENDPOINT
               value: {{ $canary.endpoint | quote }}
             - name: CUCINA_CANARY_STS_URL

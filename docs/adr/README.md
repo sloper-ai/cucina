@@ -100,12 +100,14 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0109](0109-windows-gawk-gnu-abi.md) | Build the Windows awk tool with its supported GNU ABI | accepted | build (bazel) |
 | [0110](0110-build-oci-images-with-rules-img.md) | Build OCI images with rules_img | accepted | build (bazel) |
 | [0111](0111-hosted-windows-bazel-storage.md) | Avoid duplicate build caches on hosted Windows | accepted | build (bazel) |
+| [0112](0112-envtest-windows-owned-process-cleanup.md) | Reap envtest children before removing Windows state | accepted | build (bazel) |
 | [0150](0150-release-versioning-and-stamping.md) | One release version, stamped by Bazel from the VERSION file | accepted | build (bazel) |
 | [0151](0151-release-pipeline-and-publishing.md) | Release pipeline: per-runner Bazel builds, one assembly, publish from verified bytes | accepted | build (bazel) |
 | [0152](0152-nightly-and-report-lanes.md) | Nightly, system and mutation lanes outside the gating CI | accepted | build (bazel) |
 | [0200](0200-e2e-vpc-raw-resources.md) | The e2e VPC is built from raw resources, not `terraform-aws-modules/vpc` | accepted | aws (infra) |
 | [0201](0201-e2e-ipv6-egress-and-ssm.md) | Private-subnet workers reach SSM over IPv6 only with dual-stack endpoints enabled | accepted | aws (infra) |
 | [0202](0202-e2e-iam-least-privilege.md) | Least-privilege IAM for the e2e environment: tag-gated controller, protected nodes, confined SSM | accepted | aws (infra) |
+| [0203](0203-client-eni-launch-tags.md) | Tag client ENIs at launch without replacing campaign clients | accepted | aws (infra) |
 | [0301](0301-windows-service-wrapper-shawl.md) | shawl (not WinSW) wraps bb_worker/bb_runner as Windows services | accepted | images |
 | [0302](0302-windows-boot-orchestration-and-accounts.md) | Windows worker boot orchestration and service accounts | accepted | images |
 | [0303](0303-windows-defender-exclusions.md) | Microsoft Defender — path/process exclusions by default, Dev Drive as an option | accepted | images |
@@ -130,6 +132,7 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [0412](0412-config-boot-tests-on-the-dev-mac.md) | Booting every rendered profile with darwin binaries | accepted | chart and buildbarn |
 | [0413](0413-host-l2-rendering-and-trust.md) | Host L2: rendering, listener trust and compression | accepted | chart and buildbarn |
 | [0414](0414-buildqueue-adapter-semantics.md) | BuildQueue adapter: counts, errors and retries | accepted | chart and buildbarn |
+| [0415](0415-linux-worker-mapped-page-reclaim.md) | Apply Linux worker reclaim policy only to disk-backed L1 | proposed — candidate for a fresh campaign image and representative Abseil validation; not a qualified release default | chart and buildbarn |
 | [0500](0500-autoscaler-core-observation-decision-loop.md) | Autoscaler core: one pure decision function over raw observations | accepted | controller and scaling |
 | [0501](0501-launch-ledger-idempotency.md) | Deterministic launch tokens from a write-ahead launch ledger | accepted | controller and scaling |
 | [0502](0502-startup-failure-circuit-breaker.md) | Startup failures: probe one VM at a time, back off per event | accepted | controller and scaling |
@@ -189,6 +192,7 @@ The table is generated; do not edit it by hand. After adding or retitling an ADR
 | [1004](1004-canary-result-export.md) | Canary results reach Prometheus through the controller, not a Pushgateway | accepted | testing and e2e |
 | [1005](1005-nfr-measurement-methods.md) | How the campaign computes the NFRs that need a definition | accepted | testing and e2e |
 | [1006](1006-cross-campaign-evidence.md) | Cross-campaign setup and incomplete evidence | Accepted | testing and e2e |
+| [1007](1007-leader-scheduled-execution-canaries.md) | Schedule execution canaries on the controller leader with durable reservations | accepted | testing and e2e |
 <!-- END ADR INDEX -->
 
 ## The baseline decisions

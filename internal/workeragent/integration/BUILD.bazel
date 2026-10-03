@@ -5,12 +5,15 @@ cucina_go_test(
     name = "integration_test",
     srcs = [
         "bootstrap_test.go",
+        "metrics_network_test.go",
         "permissions_unix_test.go",
         "permissions_windows_test.go",
     ],
     tier = "integration",
     deps = [
         "//api/proto/cucina/v1:cucina",
+        "//internal/fakes",
+        "//internal/ports",
         "//internal/workeragent",
         "//internal/workeragent/agenttest",
         "//internal/workeragent/bootdata",

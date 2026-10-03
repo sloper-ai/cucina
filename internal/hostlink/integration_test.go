@@ -64,6 +64,7 @@ type hostEnv struct {
 	metricsGatherer prometheus.Gatherer
 	enableL2        bool
 	wanListener     net.Listener
+	runtimeWrap     func(ports.VMRuntime) ports.VMRuntime
 }
 
 // newEnv builds the test bed inside a synctest bubble; ef comes from
@@ -85,7 +86,10 @@ func (e *hostEnv) start(t *testing.T) {
 	cfg.SiteEnrollmentToken = e.token
 	cfg.MetricsListen = ""
 	dial := grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) { return e.net.Dial(ctx, addr) })
-	rt := tart.New(tart.Options{Exec: e.tart, Binary: "tart"})
+	var rt ports.VMRuntime = tart.New(tart.Options{Exec: e.tart, Binary: "tart"})
+	if e.runtimeWrap != nil {
+		rt = e.runtimeWrap(rt)
+	}
 	if e.metricsClient == nil {
 		e.metricsClient = &http.Client{Transport: metricsTransport(func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("no metrics endpoint in this fixture")
@@ -493,6 +497,9 @@ func TestHostCertificateRenewal(t *testing.T) {
 		require.Len(t, hosts, 1)
 		require.Equal(t, e.agent.CertificateExpiry(), hosts[0].CertExpiry, "enroll recorded the renewal")
 		require.Less(t, time.Since(first.Add(-lifetime)), lifetime, "renewed before expiry")
+		advanceUntil(t, "renewed certificate expiry delivered", time.Minute, func() bool {
+			return hostCertificateRoles(t, e)["host"] > (6 * 24 * time.Hour).Seconds()
+		})
 		require.NoError(t, e.ctrl.Host().Ping(context.Background(), serial))
 		e.powerOff(t)
 	})

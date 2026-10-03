@@ -7,11 +7,15 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -73,6 +77,7 @@ func newSupervised(t *testing.T, ws *cucinav1.WorkerSettings, certNotAfter time.
 		Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), Power: sv.power, Worker: sv.worker, Spot: spot,
 		NewActivity:  func(*cucinav1.WorkerSettings) workeragent.ActivityProbe { return activity },
 		NewScheduler: func(*cucinav1.WorkerSettings) (workeragent.SchedulerProbe, error) { return scheduler, nil },
+		Metrics:      workeragent.NewAgentMetrics(),
 		Intervals:    workeragent.Intervals{Tick: time.Minute, Spot: time.Minute, Activity: time.Minute, Contact: time.Minute},
 	}
 	require.NoError(t, sv.s.Start(context.Background()))
@@ -154,6 +159,34 @@ func TestSupervisorDeadman(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, strconv.FormatInt(agenttest.Epoch.Add(3*time.Minute).Unix(), 10)+"\n", string(b), p)
 	}
+}
+
+// Guards: R-TEST-7 / R-OBS-1 — the production agent HTTP registry delivers
+// current certificate lifetime, including expiration, rather than an uncollected gauge.
+func TestSupervisorCertificateMetrics(t *testing.T) {
+	sv := newSupervised(t, agenttest.Settings(), agenttest.Epoch.Add(24*time.Hour), nil,
+		activityFunc(func() (workeragent.Activity, error) { return workeragent.Activity{}, nil }), probeFunc(func() error { return nil }), nil)
+	for _, tc := range []struct {
+		advance time.Duration
+		value   string
+	}{
+		{value: "86400"}, {advance: 23 * time.Hour, value: "3600"}, {advance: 2 * time.Hour, value: "-3600"},
+	} {
+		sv.clock.Advance(tc.advance)
+		recorder := httptest.NewRecorder()
+		promhttp.HandlerFor(sv.s.Metrics.Registry, promhttp.HandlerOpts{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		require.Equal(t, http.StatusOK, recorder.Code)
+		require.Contains(t, recorder.Body.String(), `cucina_cert_expiry_seconds{role="worker"} `+tc.value+"\n")
+		require.False(t, strings.Contains(recorder.Body.String(), `role="host"`), "a worker agent cannot claim a host identity")
+	}
+	state, err := workeragent.LoadState(sv.fs, sv.paths.StateFile)
+	require.NoError(t, err)
+	state.CertNotAfter = time.Time{}
+	require.NoError(t, workeragent.SaveState(sv.fs, sv.paths.StateFile, state))
+	require.NoError(t, sv.s.Start(t.Context()))
+	recorder := httptest.NewRecorder()
+	promhttp.HandlerFor(sv.s.Metrics.Registry, promhttp.HandlerOpts{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	require.NotContains(t, recorder.Body.String(), "cucina_cert_expiry_seconds", "unknown replacement identity must not retain an old expiry or invent zero")
 }
 
 // Guards: R-POOL-2 (SHOULD) Spot interruption — the 2-minute notice drains

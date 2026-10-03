@@ -247,17 +247,22 @@ func TestCanaryFailureIsReported(t *testing.T) {
 }
 
 // Guards R-TEST-7's execution canary: exact runner routing, verified stdout,
-// queue timing and worker identity. The Windows row guards the real preflight
-// failure: REAPI does not inherit PATH, so relative cmd.exe cannot be resolved.
+// queue timing and worker identity (another pool must never qualify this one).
+// The Windows row guards the real preflight failure: REAPI does not inherit PATH,
+// so relative cmd.exe cannot be resolved.
 func TestExecCanaryAgainstBuildbarn(t *testing.T) {
 	for _, tc := range []struct {
-		os    string
-		shell string
+		name       string
+		os         string
+		shell      string
+		workerPool string
+		wantError  string
 	}{
-		{os: "linux", shell: "/bin/sh"},
-		{os: "windows", shell: `C:\Windows\System32\cmd.exe`},
+		{name: "linux", os: "linux", shell: "/bin/sh"},
+		{name: "windows", os: "windows", shell: `C:\Windows\System32\cmd.exe`},
+		{name: "wrong pool cannot pass", os: "linux", shell: "/bin/sh", workerPool: "other-pool", wantError: "executed on pool"},
 	} {
-		t.Run(tc.os, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			pool := tc.os + "-x86-64"
 			props := map[string]string{"OSFamily": tc.os, "ISA": "x86-64"}
 			schedClient, schedWorker, schedBQS := bbtest.FreeAddr(t), bbtest.FreeAddr(t), bbtest.FreeAddr(t)
@@ -276,6 +281,9 @@ func TestExecCanaryAgainstBuildbarn(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { _ = sconn.Close() }()
 			workerID := map[string]string{"pool": pool, "node": "i-canary", "thread": "0"}
+			if tc.workerPool != "" {
+				workerID["pool"] = tc.workerPool
+			}
 			identity, err := json.Marshal(workerID)
 			require.NoError(t, err)
 			worker := bbtest.NewFakeWorker(wconn, workerID, "main", props, 0)
@@ -318,6 +326,11 @@ func TestExecCanaryAgainstBuildbarn(t *testing.T) {
 			p := &Probe{Kind: KindExec, Pool: pool, Platform: props, Endpoint: Endpoint{Target: "grpc://" + storage, InstanceName: "main"}, Timeout: 25 * time.Second}
 			r := p.Run(ctx)
 			require.NoError(t, <-done)
+			if tc.wantError != "" {
+				require.False(t, r.Success, "a result from another pool must not qualify this pool")
+				require.Contains(t, r.Error, tc.wantError)
+				return
+			}
 			require.True(t, r.Success, r.Error)
 			require.Equal(t, 1500*time.Millisecond, r.QueueTime)
 			require.Contains(t, r.Worker, "i-canary")

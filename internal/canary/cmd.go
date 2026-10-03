@@ -97,9 +97,9 @@ func Main(ctx context.Context, kind string, o Options, stdout, stderr io.Writer)
 	return 0
 }
 
-// Command returns `canary cache|exec` for cucina-controller (agent coreb adds
-// it to the root command). Flags default from CUCINA_CANARY_* environment
-// variables so the CronJob and `helm test` pods need no arguments.
+// Command returns `canary cache|exec` for cucina-controller. Flags default
+// from CUCINA_CANARY_* environment variables for one-shot tools and helm tests;
+// scheduled probes reuse this package in-process, not a separate CronJob.
 func Command() *cobra.Command {
 	var o Options
 	var platform []string
@@ -137,7 +137,7 @@ func Command() *cobra.Command {
 	}
 	cache := &cobra.Command{Use: "cache", Short: "AC/CAS round trip through the client endpoint plus token mint/verify (starts no workers)", Args: cobra.NoArgs, RunE: run(KindCache)}
 	exec := &cobra.Command{Use: "exec", Short: "Run a tiny uncached action on one pool (may scale it from zero)", Args: cobra.NoArgs, RunE: run(KindExec)}
-	exec.Flags().StringVar(&o.Pool, "pool", os.Getenv("CUCINA_CANARY_POOL"), "pool name (metric label)")
+	exec.Flags().StringVar(&o.Pool, "pool", os.Getenv("CUCINA_CANARY_POOL"), "pool name (verified against the executed worker identity)")
 	exec.Flags().StringSliceVar(&platform, "platform", nil, "runner property key=value (repeat; exact set of the pool's runner)")
 	root.AddCommand(cache, exec)
 	return root

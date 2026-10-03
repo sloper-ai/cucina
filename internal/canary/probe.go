@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,8 +27,8 @@ type Probe struct {
 	Kind     string
 	Endpoint Endpoint
 	Tokens   TokenSource // nil: unauthenticated (local tests only)
-	// Pool and Platform select the exec canary's target: the exact runner
-	// property set of the pool (Buildbarn matches the whole set).
+	// Platform selects the exact runner property set (Buildbarn matches the
+	// whole set); nonempty Pool must match the resulting worker identity.
 	Pool     string
 	Platform map[string]string
 	// Timeout bounds the whole probe (default 2 min cache, 15 min exec: an
@@ -285,9 +286,23 @@ func (p *Probe) exec(ctx context.Context, rec *recorder, conn *grpc.ClientConn, 
 		if s := resp.GetStatus(); s.GetCode() != int32(codes.OK) {
 			return fmt.Errorf("execute status %s: %s", codes.Code(s.GetCode()), s.GetMessage())
 		}
+		if resp.GetCachedResult() {
+			return errors.New("execution canary returned a cached result")
+		}
 		res := resp.GetResult()
 		md := res.GetExecutionMetadata()
 		rec.r.Worker = md.GetWorker()
+		if p.Pool != "" {
+			// Buildbarn encodes the worker-id label map as JSON. A pool is
+			// evidence to verify, not merely a label to attach to any success.
+			var worker map[string]string
+			if err := json.Unmarshal([]byte(rec.r.Worker), &worker); err != nil {
+				return errors.New("execution result has no verifiable worker pool identity")
+			}
+			if worker["pool"] != p.Pool {
+				return fmt.Errorf("executed on pool %q, expected %q", worker["pool"], p.Pool)
+			}
+		}
 		if q, w := md.GetQueuedTimestamp(), md.GetWorkerStartTimestamp(); q != nil && w != nil {
 			rec.r.QueueTime = w.AsTime().Sub(q.AsTime())
 		}

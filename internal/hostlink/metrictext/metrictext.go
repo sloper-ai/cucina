@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	"github.com/sloper-ai/cucina/internal/pki"
 )
 
 const (
@@ -58,7 +59,7 @@ func allowed(source cucinav1.MetricsSnapshot_Source, name string) bool {
 		// L2/WAN/disk aggregates are already on the controller's main registry.
 		// Do not publish a second copy that would double-count unqualified sums.
 		switch name {
-		case "cucina_hostd_vms", "cucina_hostd_controller_connected", "cucina_hostd_relay_bytes_total":
+		case "cucina_hostd_vms", "cucina_hostd_controller_connected", "cucina_hostd_relay_bytes_total", "cucina_hostd_vm_certificates_expected", pki.ExpiryMetricName:
 			return true
 		}
 		return false
@@ -119,6 +120,13 @@ func normalize(source cucinav1.MetricsSnapshot_Source, raw []byte, filter bool) 
 		seen := map[string]bool{}
 		for _, m := range mf.GetMetric() {
 			workerRSS := name == "cucina_worker_resident_memory_bytes"
+			certExpiry := name == pki.ExpiryMetricName
+			if name == "cucina_hostd_vm_certificates_expected" && (mf.GetType() != dto.MetricType_GAUGE || len(m.Label) != 0 || m.GetGauge().GetValue() < 0 || math.Trunc(m.GetGauge().GetValue()) != m.GetGauge().GetValue()) {
+				return nil, errors.New("invalid expected VM identity count")
+			}
+			if certExpiry && (mf.GetType() != dto.MetricType_GAUGE || len(m.Label) != 1 || m.Label[0].GetName() != "role" || (m.Label[0].GetValue() != pki.ExpiryRoleHost && m.Label[0].GetValue() != pki.ExpiryRoleWorker)) {
+				return nil, errors.New("invalid host certificate expiry role or type")
+			}
 			if workerRSS && (mf.GetType() != dto.MetricType_GAUGE || len(m.Label) != 1 || m.Label[0].GetName() != "source" || m.Label[0].GetValue() != "guest-ps" || m.GetGauge().GetValue() <= 0) {
 				return nil, errors.New("invalid measured worker RSS provenance")
 			}
@@ -129,7 +137,7 @@ func normalize(source cucinav1.MetricsSnapshot_Source, raw []byte, filter bool) 
 			var key strings.Builder
 			last := ""
 			for _, l := range m.Label {
-				if (!allowedLabel(l.GetName()) && !workerRSS) || l.GetName() == last || len(l.GetValue()) > MaxLabelBytes || strings.ContainsAny(l.GetValue(), "\r\n\x00") {
+				if (!allowedLabel(l.GetName()) && !workerRSS && !certExpiry) || l.GetName() == last || len(l.GetValue()) > MaxLabelBytes || strings.ContainsAny(l.GetValue(), "\r\n\x00") {
 					return nil, errors.New("forbidden, duplicate or excessive metric label")
 				}
 				last = l.GetName()

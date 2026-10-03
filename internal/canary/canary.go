@@ -11,11 +11,11 @@
 //   - The execution canary (per pool, daily and after each deploy) runs a tiny
 //     action with skip_cache_lookup (Bazel's --noremote_accept_cached
 //     semantics) and do_not_cache on the pool's exact runner properties, so a
-//     pool at zero scales out for it; the queue time it observes is a
-//     cold-start sample.
+//     naturally zero pool may scale out for it. It never drains workers to
+//     manufacture a cold start; queue time alone is not cold-start evidence.
 //
 // Results are exported as cucina_canary_* metrics (Metrics) either in-process
-// (Loop) or, for one-shot runs from a CronJob or `helm test`, pushed to the
+// (Loop and ExecutionScheduler) or, for one-shot runs such as `helm test`, pushed to the
 // controller's Handler. `cucina-controller canary cache|exec` is Command().
 package canary
 

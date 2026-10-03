@@ -21,6 +21,7 @@ import (
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
 	hostmetrics "github.com/sloper-ai/cucina/internal/hostd/metrics"
 	"github.com/sloper-ai/cucina/internal/hostlink/metrictext"
+	"github.com/sloper-ai/cucina/internal/pki"
 	"github.com/sloper-ai/cucina/internal/ports"
 )
 
@@ -38,6 +39,32 @@ func (a *Agent) wanBytes() (received, sent uint64) {
 		return a.wan.BytesToVMs.Load(), a.wan.BytesFromVMs.Load()
 	}
 	return 0, 0
+}
+
+// certificateCollector snapshots only current identities at collection time.
+// A fresh tracker avoids retaining stopped/replaced VMs in a role minimum and
+// uses the existing PKI collector's clock/metric semantics.
+var expectedCertificatesDesc = prometheus.NewDesc("cucina_hostd_vm_certificates_expected",
+	"Number of running or stopping VM identities that require certificate expiry coverage.", nil, nil)
+
+type certificateCollector struct{ agent *Agent }
+
+func (c certificateCollector) Describe(ch chan<- *prometheus.Desc) {
+	pki.NewExpiryTracker(c.agent.o.Clock).Describe(ch)
+	ch <- expectedCertificatesDesc
+}
+
+func (c certificateCollector) Collect(ch chan<- prometheus.Metric) {
+	t := pki.NewExpiryTracker(c.agent.o.Clock)
+	if expiry := c.agent.CertificateExpiry(); !expiry.IsZero() {
+		t.Set(pki.ExpiryRoleHost, "self", expiry)
+	}
+	expected, expiries := c.agent.vmm.CertificateSnapshot()
+	ch <- prometheus.MustNewConstMetric(expectedCertificatesDesc, prometheus.GaugeValue, float64(expected))
+	for name, expiry := range expiries {
+		t.Set(pki.ExpiryRoleWorker, name, expiry)
+	}
+	t.Collect(ch)
 }
 
 func (a *Agent) relayMetrics(ctx context.Context, registry prometheus.Gatherer) error {

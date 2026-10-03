@@ -31,9 +31,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	"github.com/sloper-ai/cucina/internal/domain"
 	"github.com/sloper-ai/cucina/internal/hostd/identity"
 	"github.com/sloper-ai/cucina/internal/hostlink"
 	"github.com/sloper-ai/cucina/internal/hostlink/hostlinktest"
+	"github.com/sloper-ai/cucina/internal/ports"
 	cproto "github.com/sloper-ai/cucina/internal/proto"
 	"github.com/sloper-ai/cucina/internal/providers/tart/faketart"
 )
@@ -243,6 +245,34 @@ func TestMetricsRelayTrustAndFreshness(t *testing.T) {
 			}
 			send(cucinav1.MetricsSnapshot_SOURCE_WORKER, "vm-1", data)
 			require.Equal(t, http.StatusNotFound, request(path).Code, "%s: reject invalid replacement; do not retain false freshness", tc.name)
+		}
+		for _, count := range []string{"0", "2"} {
+			send(cucinav1.MetricsSnapshot_SOURCE_HOSTD, "", "# TYPE cucina_hostd_vm_certificates_expected gauge\ncucina_hostd_vm_certificates_expected "+count+"\n")
+			require.Equal(t, http.StatusOK, request("/metrics/hosts/TESTSERIAL01/hostd").Code)
+		}
+		for _, data := range []string{
+			"# TYPE cucina_hostd_vm_certificates_expected gauge\ncucina_hostd_vm_certificates_expected -1\n",
+			"# TYPE cucina_hostd_vm_certificates_expected gauge\ncucina_hostd_vm_certificates_expected 0.5\n",
+			"# TYPE cucina_hostd_vm_certificates_expected gauge\ncucina_hostd_vm_certificates_expected +Inf\n",
+			"# TYPE cucina_hostd_vm_certificates_expected gauge\ncucina_hostd_vm_certificates_expected{node=\"other\"} 1\n",
+			"# TYPE cucina_hostd_vm_certificates_expected counter\ncucina_hostd_vm_certificates_expected 1\n",
+			"# TYPE cucina_cert_expiry_seconds gauge\ncucina_cert_expiry_seconds{role=\"ca\"} 3600\n",
+			"# TYPE cucina_cert_expiry_seconds counter\ncucina_cert_expiry_seconds{role=\"host\"} 3600\n",
+			"# TYPE cucina_cert_expiry_seconds gauge\ncucina_cert_expiry_seconds{role=\"host\",serial=\"OTHERHOST\"} 3600\n",
+		} {
+			send(cucinav1.MetricsSnapshot_SOURCE_HOSTD, "", data)
+			require.Equal(t, http.StatusNotFound, request("/metrics/hosts/TESTSERIAL01/hostd").Code, "host expiry cannot forge CA roles, types or identity labels")
+		}
+		for _, source := range []cucinav1.MetricsSnapshot_Source{cucinav1.MetricsSnapshot_SOURCE_WORKER, cucinav1.MetricsSnapshot_SOURCE_HOST_L2} {
+			vm := ""
+			path := "/metrics/hosts/TESTSERIAL01/host-l2"
+			if source == cucinav1.MetricsSnapshot_SOURCE_WORKER {
+				vm, path = "vm-1", "/metrics/hosts/TESTSERIAL01/worker/vm-1"
+			}
+			send(source, vm, "# TYPE cucina_cert_expiry_seconds gauge\ncucina_cert_expiry_seconds{role=\"worker\"} 3600\n")
+			require.Equal(t, http.StatusNotFound, request(path).Code, "raw guest/L2 scrapes cannot inject identity expiry")
+			send(source, vm, "# TYPE cucina_hostd_vm_certificates_expected gauge\ncucina_hostd_vm_certificates_expected 1\n")
+			require.Equal(t, http.StatusNotFound, request(path).Code, "raw guest/L2 scrapes cannot inject expected identity counts")
 		}
 		send(cucinav1.MetricsSnapshot_SOURCE_WORKER, "unowned", text)
 		require.Equal(t, http.StatusNotFound, request("/metrics/hosts/TESTSERIAL01/worker/unowned").Code)
@@ -457,6 +487,189 @@ func TestHostdRelaysOnlyFreshScrapes(t *testing.T) {
 			advanceUntil(t, "adopted VM metrics after hostd restart", 2*time.Minute, func() bool { return get(path).Code == http.StatusOK })
 		}
 	})
+}
+
+// Guards: R-TEST-7 / R-OBS-1 — host and active Mac worker certificate expiry
+// reaches controller HTTP metrics; stopped/replaced identities leave the minimum.
+func TestCertificateExpiryRelayTracksLiveIdentities(t *testing.T) {
+	ef := hostlinktest.NewEnroll(t)
+	synctest.Test(t, func(t *testing.T) {
+		e := newEnv(t, ef)
+		e.start(t)
+		defer e.powerOff(t)
+		e.ctrl.Approve(t, serial)
+		advanceUntil(t, "host online", time.Minute, e.online(t))
+		roles := func() map[string]float64 { return hostCertificateRoles(t, e) }
+		advanceUntil(t, "host expiry delivered", time.Minute, func() bool { _, ok := roles()["host"]; return ok })
+		require.Greater(t, roles()["host"], (6 * 24 * time.Hour).Seconds())
+		require.NotContains(t, roles(), "worker", "no active identity is not a zero-expiry worker")
+		require.NoError(t, e.ctrl.Host().StartVM(t.Context(), serial, startReq("vm-1")))
+		advanceUntil(t, "first VM expiry delivered", time.Minute, func() bool { _, ok := roles()["worker"]; return ok })
+		first := roles()["worker"]
+		<-time.After(2 * time.Minute)
+		require.NoError(t, e.ctrl.Host().StartVM(t.Context(), serial, startReq("vm-2")))
+		advanceUntil(t, "second VM running", time.Minute, func() bool { return e.vmState(t, "vm-2") == domain.VMRegistered })
+		require.Less(t, roles()["worker"], first, "the older running identity still controls the minimum")
+		beforeStop := roles()["worker"]
+		require.NoError(t, e.ctrl.Host().StopVM(t.Context(), serial, "vm-1", time.Minute, "test"))
+		advanceUntil(t, "stopped oldest identity leaves minimum", time.Minute, func() bool { return roles()["worker"] > beforeStop+60 })
+		e.stop(t)
+		synctest.Wait()
+		e.start(t)
+		advanceUntil(t, "active identity restored after adoption", time.Minute, func() bool { _, ok := roles()["worker"]; return ok })
+		require.NoError(t, e.ctrl.Host().StopVM(t.Context(), serial, "vm-2", time.Minute, "test"))
+		advanceUntil(t, "all stopped identities absent", time.Minute, func() bool { _, ok := roles()["worker"]; return !ok && len(roles()) == 1 })
+		require.NoError(t, e.ctrl.Host().StartVM(t.Context(), serial, startReq("vm-1")))
+		advanceUntil(t, "reused VM reports its newly issued identity", time.Minute, func() bool {
+			return roles()["worker"] > (12*time.Hour - time.Minute).Seconds()
+		})
+
+		// Mixed legacy adoption: one known healthy identity cannot certify the
+		// whole host when a second live VM has an unknown/possibly expired leaf.
+		require.NoError(t, e.ctrl.Host().StartVM(t.Context(), serial, startReq("vm-2")))
+		advanceUntil(t, "two live identities before legacy restart", time.Minute, func() bool {
+			return e.vmState(t, "vm-1") == domain.VMRegistered && e.vmState(t, "vm-2") == domain.VMRegistered
+		})
+		e.stop(t)
+		synctest.Wait()
+		journalPath := filepath.Join(e.stateDir, "vms.json")
+		b, err := os.ReadFile(journalPath)
+		require.NoError(t, err)
+		var journal map[string]any
+		require.NoError(t, json.Unmarshal(b, &journal))
+		for _, value := range journal["vms"].([]any) {
+			vm := value.(map[string]any)
+			if vm["name"] == "vm-2" {
+				delete(vm, "certNotAfter")
+			}
+		}
+		b, err = json.Marshal(journal)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(journalPath, b, 0o600))
+		stopping, stopRelease := make(chan struct{}, 1), make(chan struct{})
+		deleting, deleteRelease := make(chan struct{}, 1), make(chan struct{})
+		e.runtimeWrap = func(base ports.VMRuntime) ports.VMRuntime {
+			return &expiryGatedRuntime{VMRuntime: base, stopping: stopping, stopRelease: stopRelease, deleting: deleting, deleteRelease: deleteRelease}
+		}
+		e.start(t)
+		advanceUntil(t, "known and unknown live VMs adopted", time.Minute, func() bool {
+			return e.vmState(t, "vm-1") == domain.VMRegistered && e.vmState(t, "vm-2") == domain.VMRegistered
+		})
+		<-time.After(30 * time.Second) // two virtual relay cadences after adoption
+		synctest.Wait()
+		require.Contains(t, roles(), "host", "host identity evidence remains available")
+		require.NotContains(t, roles(), "worker", "a partial known minimum must not hide an unknown live identity")
+		require.NoError(t, e.ctrl.Host().StopVM(t.Context(), serial, "vm-2", time.Minute, "test"))
+		<-stopping
+		<-time.After(30 * time.Second)
+		synctest.Wait()
+		require.Equal(t, float64(2), hostExpectedCertificates(t, e), "unknown true-stopping identity remains expected")
+		require.NotContains(t, roles(), "worker")
+		close(stopRelease)
+		advanceUntil(t, "coverage restored when unknown VM stops", time.Minute, func() bool { _, ok := roles()["worker"]; return ok })
+		require.NoError(t, e.ctrl.Host().StopVM(t.Context(), serial, "vm-1", time.Minute, "test"))
+		advanceUntil(t, "all identities stopped before disk cleanup", time.Minute, func() bool { return e.vmState(t, "vm-1") == domain.VMStopped })
+		require.NoError(t, e.agent.VMs().DeleteVM("vm-2"))
+		<-deleting
+		<-time.After(6 * time.Minute) // stalled disk cleanup must not expect a certificate
+		synctest.Wait()
+		require.Equal(t, domain.VMStopping, e.vmState(t, "vm-2"), "legacy management state remains unchanged")
+		require.Zero(t, hostExpectedCertificates(t, e), "deleting an already-stopped disk has no live identity")
+		require.NotContains(t, roles(), "worker")
+		close(deleteRelease)
+		synctest.Wait()
+		require.NoError(t, e.ctrl.Host().StartVM(t.Context(), serial, startReq("vm-1")))
+		advanceUntil(t, "known identity running again", time.Minute, func() bool { return e.vmState(t, "vm-1") == domain.VMRegistered })
+
+		// A known expired persisted identity remains negative evidence; the
+		// unknown certificate of a stopped disk must not suppress it.
+		e.stop(t)
+		synctest.Wait()
+		b, err = os.ReadFile(journalPath)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(b, &journal))
+		for _, value := range journal["vms"].([]any) {
+			vm := value.(map[string]any)
+			if vm["name"] == "vm-1" {
+				vm["certNotAfter"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+			}
+		}
+		b, err = json.Marshal(journal)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(journalPath, b, 0o600))
+		e.start(t)
+		advanceUntil(t, "known expired active identity remains observable", time.Minute, func() bool { return roles()["worker"] < 0 })
+	})
+}
+
+type expiryGatedRuntime struct {
+	ports.VMRuntime
+	stopping, stopRelease, deleting, deleteRelease chan struct{}
+}
+
+func (r *expiryGatedRuntime) Stop(ctx context.Context, name string, timeout time.Duration) error {
+	if strings.HasSuffix(name, "vm-2") {
+		select {
+		case r.stopping <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.stopRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.VMRuntime.Stop(ctx, name, timeout)
+}
+
+func (r *expiryGatedRuntime) Delete(ctx context.Context, name string) error {
+	if strings.HasSuffix(name, "vm-2") {
+		select {
+		case r.deleting <- struct{}{}:
+		default:
+		}
+		select {
+		case <-r.deleteRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.VMRuntime.Delete(ctx, name)
+}
+
+func hostExpectedCertificates(t *testing.T, e *hostEnv) float64 {
+	t.Helper()
+	w := httptest.NewRecorder()
+	e.ctrl.Host().MetricsHandler("test").ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://controller.test:9090/metrics/hosts/"+serial+"/hostd", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	parser := expfmt.NewTextParser(model.LegacyValidation)
+	families, err := parser.TextToMetricFamilies(strings.NewReader(w.Body.String()))
+	require.NoError(t, err)
+	metrics := families["cucina_hostd_vm_certificates_expected"].GetMetric()
+	require.Len(t, metrics, 1, "expected identity count must reach the public relay")
+	require.Empty(t, metrics[0].GetLabel())
+	return metrics[0].GetGauge().GetValue()
+}
+
+func hostCertificateRoles(t *testing.T, e *hostEnv) map[string]float64 {
+	t.Helper()
+	w := httptest.NewRecorder()
+	e.ctrl.Host().MetricsHandler("test").ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://controller.test:9090/metrics/hosts/"+serial+"/hostd", nil))
+	values := map[string]float64{}
+	if w.Code != http.StatusOK {
+		return values
+	}
+	p := expfmt.NewTextParser(model.LegacyValidation)
+	families, err := p.TextToMetricFamilies(strings.NewReader(w.Body.String()))
+	require.NoError(t, err)
+	for _, metric := range families["cucina_cert_expiry_seconds"].GetMetric() {
+		for _, label := range metric.GetLabel() {
+			if label.GetName() == "role" {
+				values[label.GetValue()] = metric.GetGauge().GetValue()
+			}
+		}
+	}
+	return values
 }
 
 // Guards: NFR-T4/T6 / R-DATA-7 — WAN telemetry measures the transported byte

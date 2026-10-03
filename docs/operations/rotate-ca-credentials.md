@@ -18,9 +18,46 @@
 | Service-account keys, the break-glass key | until revoked | Section 3 |
 | macOS package-signing certificate | one year | [Rotate the package-signing certificate](rotate-pkg-signing-cert.md) |
 
-The metric `cucina_cert_expiry_seconds{role}` is the time to the earliest expiry per role. The controller exports `ca`, `server` and `controller`; the roles `host` and `worker` are reserved for hostd and the worker agent and are **not exported yet** (planned), so watch Mac host renewal with `cucinactl hosts list`.
+The metric `cucina_cert_expiry_seconds{role}` is the time to the earliest known expiry per role (negative when expired).
+The controller exports `ca`, `server` and `controller`. Hostd exports `host` from its current identity and `worker` from
+only its live macOS VM identities through its ordinary registry and outbound `/sd/hosts` relay. Stopped/replaced
+identities leave the minimum; journaled identities survive adoption. If **any running or stopping VM** has unknown
+expiry (for example a legacy journal), the entire worker-role aggregate is withheld, even if another VM has a healthy
+known certificate. The label-free `cucina_hostd_vm_certificates_expected` gauge is emitted from the same atomic
+running/stopping identity snapshot and makes missing coverage alertable; a partial minimum is not fleet health.
+Deleting/dormant/stopped disks contribute zero expected identities, even when the legacy management/VM-count
+state calls disk deletion “stopping”. Those existing state mappings are unchanged.
+Unknown identities stay unknown until fresh provisioning, while all-known expired identities still report negative values.
 
-The chart's alerts (`monitoring.prometheusRules`) fire for every role below `thresholds.certificateExpiry` (default 168 h, a warning) and below one day (critical). That is the "renewal failed" signal for `server` and `controller`, but it is far too late for the CA: add your own rule that fires for `role="ca"` below 180 days, which is when to start a rotation.
+EC2 agents export `worker` from their bootstrap certificate state on the VPC-local interface at TCP 9982. The controller's
+separate `/sd/worker-agents` discovery uses private instance addresses and `cucina_component="worker-agent"`; these
+are **not** Buildbarn targets and do not enter worker RSS/blob-byte selectors. Default interface resolution uses IMDSv2
+local IPv4, never a wildcard/public fallback. The worker security group permits this port only from the control-plane
+security group (the acceptance infrastructure's existing 9980–9989 range). Windows privileged bootstrap configures one
+owned firewall rule for the exact agent executable, local interface and containing VPC CIDR; supervisor needs no new
+privilege. Metadata/rule-ownership failures are errors, not permission to open wider access. Explicit listener overrides
+or disabling metrics require matching monitoring configuration; no agent target should be made publicly reachable.
+
+The chart's certificate alerts use role/lifetime-aware thresholds. With `T = min(pki.workerCertTTL, pki.vmCertTTL)`:
+
+| Role | Warning | Critical | Defaults |
+| --- | --- | --- | --- |
+| `ca`, `server`, `controller` | `thresholds.certificateExpiry` | 1 day | 7 days / 1 day |
+| `host` | `min(24h, pki.hostCertTTL / 6)` | `min(6h, pki.hostCertTTL / 24)` | 24 h / 6 h |
+| `worker` | `min(2h, 2 × T / 3)` | `min(30m, T / 24)` | 2 h / 30 min |
+
+Host renewal begins at two-thirds of its lifetime; the warning is after that renewal window, not immediately on issuance.
+Short configured lifetimes scale down rather than inheriting seven-day alerts. Workers still receive identities at boot/start;
+no worker renewal protocol is added. The supervisor's existing exit below one hour may preempt the worker critical threshold:
+`CucinaCertificateTelemetryMissing` catches expected agent targets that are down or lack expiry for five minutes. A live hostd
+target must report `host`, and when `cucina_hostd_vm_certificates_expected` is positive it must also report `worker`; zero-expected-identity hosts need no worker
+sample. Targets removed by normal retirement cease to be expected. Missing telemetry is not a measured zero or healthy expiry.
+
+For a missing-telemetry alert, check private discovery, target reachability, the agent's bootstrap state and the hostd relay
+before interpreting certificate age. Unknown legacy VM identities need normal re-provisioning, not manufactured metrics.
+Deploy controller/relay whitelist and discovery support **before** new hostd/worker-agent binaries and worker images; older
+controllers reject an unknown metric family as a whole snapshot. These source-level checks do not prove a live fleet rollout.
+For CA expiry, seven days is far too late: add an operator rule for `role="ca"` below 180 days, when rotation preparation starts.
 
 ## 1. Rotate the Cucina CA (two-root bundle)
 

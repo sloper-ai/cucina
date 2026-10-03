@@ -44,11 +44,26 @@ func TestWorkersEndpoint(t *testing.T) {
 	]`, get())
 	get()
 	assert.Equal(t, 1, calls, "a fresh cache must not call EC2 again")
+	// R-OBS-1 / certificate delivery: the private agent listener is a
+	// separate target class, never a bb_worker RSS/byte source.
+	agent := &httpsd.Handler{Source: cache, AgentMetrics: true}
+	rec := httptest.NewRecorder()
+	agent.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, httpsd.AgentPath, nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `[
+	  {"targets":["10.0.1.11:9982"],"labels":{"pool":"linux","node":"i-a","generation":"v1","instance_type":"c7i.8xlarge","cucina_component":"worker-agent"}},
+	  {"targets":["10.0.1.12:9982"],"labels":{"pool":"linux","node":"i-b","generation":"v2","instance_type":"c8i.8xlarge","cucina_component":"worker-agent"}}
+	]`, rec.Body.String())
+	assert.Equal(t, 1, calls, "agent discovery reuses the same private-instance cache")
 
 	now = now.Add(31 * time.Second)
 	cache.Publish(fleet[:1]) // the leader's loop publishes a fresh observation
 	assert.JSONEq(t, `[{"targets":["10.0.1.12:9987"],"labels":{"pool":"linux","node":"i-b","generation":"v2","instance_type":"c8i.8xlarge"}}]`, get())
 	assert.Equal(t, 1, calls)
+	rec = httptest.NewRecorder()
+	agent.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, httpsd.AgentPath, nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `[{"targets":["10.0.1.12:9982"],"labels":{"pool":"linux","node":"i-b","generation":"v2","instance_type":"c8i.8xlarge","cucina_component":"worker-agent"}}]`, rec.Body.String())
 
 	now = now.Add(31 * time.Second)
 	get()
