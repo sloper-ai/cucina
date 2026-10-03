@@ -20,12 +20,15 @@ import (
 // a privileged daemon's log or make provisioning follow a planted link.
 func TestActivationProtectsDaemonLogs(t *testing.T) {
 	builder := guest.Console{User: "builder", UID: 600, GID: 20}
+	shell := fixtureShell(t)
 	for _, tc := range []struct {
-		name   string
-		worker guest.Console
-		attack string
+		name       string
+		worker     guest.Console
+		attack     string
+		modelModes bool
 	}{
 		{name: "root worker", worker: guest.Console{User: "root"}},
+		{name: "modeled guest permissions", worker: guest.Console{User: "root"}, modelModes: true},
 		{name: "unprivileged worker", worker: builder},
 		{name: "log directory symlink", attack: "directory-symlink"},
 		{name: "worker log symlink", attack: "worker-symlink"},
@@ -35,12 +38,15 @@ func TestActivationProtectsDaemonLogs(t *testing.T) {
 		{name: "non-file worker log", attack: "worker-directory"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			modelModes := tc.modelModes || runtime.GOOS == "windows"
+			root := filepath.Join(t.TempDir(), "guest root")
+			require.NoError(t, os.Mkdir(root, 0o755))
 			logs := filepath.Join(root, "logs")
 			outside := filepath.Join(root, "outside")
 			require.NoError(t, os.Mkdir(outside, 0o755))
 			target := filepath.Join(outside, "protected")
 			require.NoError(t, os.WriteFile(target, []byte("must not change\n"), 0o600))
+			require.NoError(t, os.WriteFile(target+".mode", []byte("0600\n"), 0o600))
 			if tc.attack == "directory-symlink" {
 				require.NoError(t, os.Symlink(outside, logs))
 			} else {
@@ -65,16 +71,25 @@ func TestActivationProtectsDaemonLogs(t *testing.T) {
 			}
 			cmd, err := guest.ActivateCmd(builder, tc.worker, nil)
 			require.NoError(t, err)
-			// Run the public provisioning command without sudo or touching host
-			// paths. Only ownership, launchd and Spotlight are faked; shell file
-			// operations (including symlinks/hardlinks) run against a private tree.
+			// Execute the real guest script without sudo. POSIX ownership/ACLs
+			// are modeled; on Windows so are mode bits, which NTFS cannot
+			// represent. Links/content remain actual filesystem operations.
 			require.Equal(t, []string{"-n", "--", "/bin/sh", "-c"}, cmd.Args[:4])
-			script := activationTools + strings.ReplaceAll(cmd.Args[4], "/var/log/cucina", logs)
+			// Host temporary paths can contain Windows separators or spaces;
+			// neither belongs in the guest's POSIX command syntax.
+			script := activationTools + strings.ReplaceAll(cmd.Args[4], "/var/log/cucina", "./logs")
 			run := func() error {
-				sh := exec.CommandContext(t.Context(), "/bin/sh", "-c", script)
-				sh.Env = append(os.Environ(), "TEST_HOST_OS="+runtime.GOOS)
+				sh := exec.CommandContext(t.Context(), shell, "-c", script)
+				sh.Dir = root
+				sh.Env = append(os.Environ(), "TEST_HOST_OS="+runtime.GOOS, "TEST_MODEL_MODES="+strconv.FormatBool(modelModes))
+				if runtime.GOOS == "windows" {
+					bin := filepath.Dir(shell)
+					sh.Env = append(sh.Env, "PATH="+strings.Join([]string{bin, filepath.Join(bin, "..", "usr", "bin"), os.Getenv("PATH")}, string(os.PathListSeparator)))
+				}
 				out, runErr := sh.CombinedOutput()
 				if runErr != nil {
+					var exit *exec.ExitError
+					require.ErrorAs(t, runErr, &exit, "fixture shell must actually execute; spawn errors are not security rejections")
 					t.Logf("activation: %s", out)
 				}
 				return runErr
@@ -85,24 +100,22 @@ func TestActivationProtectsDaemonLogs(t *testing.T) {
 				b, readErr := os.ReadFile(target)
 				require.NoError(t, readErr)
 				require.Equal(t, "must not change\n", string(b))
-				st, statErr := os.Stat(target)
-				require.NoError(t, statErr)
-				require.EqualValues(t, 0o600, st.Mode().Perm())
+				assertGuestMode(t, target, 0o600, modelModes)
 				return
 			}
 			require.NoError(t, err)
-			assertLogOwnership(t, logs, "0:0", 0o755)
+			assertLogOwnership(t, logs, "0:0", 0o755, modelModes)
 			for name, owner := range map[string]string{
 				"bb_worker.log": strconv.Itoa(tc.worker.UID) + ":" + strconv.Itoa(tc.worker.GID),
 				"bb_runner.log": "600:20",
 			} {
 				path := filepath.Join(logs, name)
-				assertLogOwnership(t, path, owner, 0o644)
+				assertLogOwnership(t, path, owner, 0o644, modelModes)
 				require.NoError(t, os.WriteFile(path, []byte("existing log\n"), 0o644))
 				require.NoError(t, os.WriteFile(path+".acl", []byte("builder:write\n"), 0o600))
 			}
 			require.NoError(t, run(), "activation is idempotent and must preserve logs")
-			assertLogOwnership(t, logs, "0:0", 0o755)
+			assertLogOwnership(t, logs, "0:0", 0o755, modelModes)
 			for _, name := range []string{"bb_worker.log", "bb_runner.log"} {
 				require.NoFileExists(t, filepath.Join(logs, name)+".acl", "a legacy ACL must not preserve action write access")
 				b, readErr := os.ReadFile(filepath.Join(logs, name))
@@ -113,20 +126,69 @@ func TestActivationProtectsDaemonLogs(t *testing.T) {
 	}
 }
 
-func assertLogOwnership(t *testing.T, path, owner string, mode os.FileMode) {
+func assertLogOwnership(t *testing.T, path, owner string, mode os.FileMode, modelModes bool) {
 	t.Helper()
 	b, err := os.ReadFile(path + ".owner")
 	require.NoError(t, err)
 	require.Equal(t, owner+"\n", string(b))
 	require.NoFileExists(t, path+".acl", "mode bits alone do not revoke an action-writable macOS ACL")
+	assertGuestMode(t, path, mode, modelModes)
+}
+
+func assertGuestMode(t *testing.T, path string, mode os.FileMode, modeled bool) {
+	t.Helper()
+	if modeled {
+		b, err := os.ReadFile(path + ".mode")
+		require.NoError(t, err)
+		value, err := strconv.ParseUint(strings.TrimSpace(string(b)), 8, 32)
+		require.NoError(t, err)
+		require.Equal(t, mode, os.FileMode(value))
+		return
+	}
 	st, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, mode, st.Mode().Perm())
 }
 
-// This filesystem-backed fake models uid/gid and ACL metadata: actual chown to
-// root would need privileges. File/link operations and mode changes are real;
-// Darwin also executes the real ACL removal. It does not interpret the script.
+// fixtureShell locates the host interpreter of the guest POSIX script. A
+// missing shell is a fixture error, never an accepted security rejection.
+// On Windows, Git's native MSYS shell is used; WSL bash is not a substitute.
+func fixtureShell(t *testing.T) string {
+	t.Helper()
+	if configured := os.Getenv("BAZEL_SH"); configured != "" {
+		shell, err := exec.LookPath(configured)
+		require.NoError(t, err, "configured POSIX fixture shell is unavailable")
+		if runtime.GOOS == "windows" {
+			name := strings.ToLower(filepath.ToSlash(shell))
+			wsl := strings.HasSuffix(name, "/wsl.exe") || (strings.HasSuffix(name, "/bash.exe") && (strings.Contains(name, "/system32/") || strings.Contains(name, "/sysnative/")))
+			require.False(t, wsl, "BAZEL_SH must name a native POSIX shell, not WSL")
+		}
+		return shell
+	}
+	if runtime.GOOS != "windows" {
+		shell, err := exec.LookPath("/bin/sh")
+		require.NoError(t, err)
+		return shell
+	}
+	git, err := exec.LookPath("git.exe")
+	require.NoError(t, err, "guest fixture requires BAZEL_SH or Git for Windows")
+	root := filepath.Dir(git)
+	for range 3 { // Git/cmd, Git/bin, or Git/mingw64/bin
+		candidate := filepath.Join(root, "usr", "bin", "sh.exe")
+		if st, err := os.Stat(candidate); err == nil && st.Mode().IsRegular() {
+			return candidate
+		}
+		root = filepath.Dir(root)
+	}
+	t.Fatal("guest fixture requires native Git-for-Windows sh.exe; set BAZEL_SH (WSL is not supported)")
+	return ""
+}
+
+// This filesystem-backed fake models uid/gid and ACL metadata. On Windows it
+// also records the guest's POSIX mode bits, not NTFS's coarse host modes. The
+// same mode model has a table row on POSIX hosts. Real file/link operations and
+// script control flow are unchanged; native POSIX modes are still checked on
+// Darwin/Linux, and Darwin executes real ACL removal as well.
 const activationTools = `
 mdutil() { :; }
 launchctl() { :; }
@@ -136,7 +198,8 @@ chmod() {
     rm -f "$2.acl"
     if [ "$TEST_HOST_OS" = darwin ]; then command chmod "$@"; fi
   else
-    command chmod "$@"
+    printf '%s\n' "$1" > "$2.mode"
+    if [ "$TEST_MODEL_MODES" != true ]; then command chmod "$@"; fi
   fi
 }
 install() {
@@ -153,7 +216,7 @@ install() {
   mkdir -p "$1" && chown "$o:$g" "$1" && chmod "$m" "$1"
 }
 stat() {
-  if [ "$TEST_HOST_OS" = linux ] && [ "$1" = -f ] && [ "$2" = %l ]; then
+  if { [ "$TEST_HOST_OS" = linux ] || [ "$TEST_HOST_OS" = windows ]; } && [ "$1" = -f ] && [ "$2" = %l ]; then
     command stat -c %h "$3"
   else
     command stat "$@"
