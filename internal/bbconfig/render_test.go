@@ -354,6 +354,55 @@ func TestHostL2RendersNewSchemaAndTypeChecks(t *testing.T) {
 	assert.Contains(t, cfg.GrpcServers[0].GetAuthenticationPolicy().GetTlsClientCertificate().GetValidationJmespathExpression().GetExpression(), "'/TESTSERIAL01/'")
 }
 
+// Guards: R-BUILD-6 / Windows CI 37074297279 — L2 cache paths describe the
+// target filesystem, not the renderer host; only fully qualified roots are valid.
+func TestHostL2CachePaths(t *testing.T) {
+	for _, tc := range []struct {
+		name, cache, prefix string
+	}{
+		{"POSIX", "/var/db/cucina/l2", "/var/db/cucina/l2/"},
+		{"Windows drive", `C:\cache\l2`, `C:\cache\l2\`},
+		{"Windows forward slashes", "C:/cache/l2", `C:\cache\l2\`},
+		{"Windows drive root", `C:\`, `C:\`},
+		{"UNC directory", `\\fileserver\cucina\l2`, `\\fileserver\cucina\l2\`},
+		{"UNC share root", `\\fileserver\cucina`, `\\fileserver\cucina\`},
+		{"UNC forward slashes", "//fileserver/cucina/l2", `\\fileserver\cucina\l2\`},
+		{"relative", "cache/l2", ""},
+		{"drive relative", `C:cache\l2`, ""},
+		{"bare drive", "C:", ""},
+		{"drive-root relative", `\cache\l2`, ""},
+		{"extended drive root", `\\?\C:\cache\l2`, `\\?\C:\cache\l2\`},
+		{"extended drive relative", `\\?\C:cache\l2`, ""},
+		{"device drive relative", `\\.\C:cache\l2`, ""},
+		{"NT drive relative", `\??\C:cache\l2`, ""},
+		{"incomplete UNC server", `\\fileserver`, ""},
+		{"incomplete UNC share", `\\fileserver\`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := hostL2Settings()
+			s.CacheDir = tc.cache
+			b, err := bbconfig.RenderHostL2(s)
+			if tc.prefix == "" {
+				require.ErrorContains(t, err, "CacheDir")
+				return
+			}
+			require.NoError(t, err)
+			var doc map[string]any
+			require.NoError(t, json.Unmarshal(b, &doc))
+			var paths []string
+			walk(doc, func(m map[string]any) {
+				for _, key := range []string{"path", "stateDirectoryPath"} {
+					if p, ok := m[key].(string); ok {
+						paths = append(paths, p)
+					}
+				}
+			})
+			require.ElementsMatch(t, []string{tc.prefix + "blocks", tc.prefix + "key_location_map", tc.prefix + "state"}, paths)
+			require.Equal(t, []bbconfig.Directory{{Path: tc.cache, Mode: 0o700}, {Path: tc.prefix + "state", Mode: 0o700}}, bbconfig.HostL2Directories(s))
+		})
+	}
+}
+
 func walk(v any, f func(map[string]any)) {
 	switch x := v.(type) {
 	case map[string]any:

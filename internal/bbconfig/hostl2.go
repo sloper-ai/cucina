@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	bbpath "github.com/buildbarn/bb-storage/pkg/filesystem/path"
 )
 
 // DefaultHostL2Bytes is the host L2 cache size on the Mac's SSD (R-CACHE-4).
@@ -56,7 +58,9 @@ type HostL2Settings struct {
 	DisableWANCompression bool
 
 	// CacheDir holds the cache files (blocks, key_location_map, state/) on the
-	// host SSD; it must exist (with state/) and be private to hostd.
+	// host SSD; it must exist (with state/) and be private to hostd. It uses
+	// absolute POSIX or fully qualified Windows target syntax, independently
+	// of the OS running this renderer (native Buildbarn boot verification).
 	CacheDir string
 	// CacheSizeBytes is the blocks size; 0 means DefaultHostL2Bytes.
 	CacheSizeBytes uint64
@@ -114,9 +118,9 @@ func RenderHostL2(s HostL2Settings) ([]byte, error) {
 		Compression:          !s.DisableWANCompression,
 		ValidationExpression: "length(uris) == `1` && starts_with(uris[0], 'spiffe://cucina/worker/')",
 		Blocks:               blocks,
-		KeyLocationMapPath:   path.Join(s.CacheDir, "key_location_map"),
-		BlocksPath:           path.Join(s.CacheDir, "blocks"),
-		StatePath:            path.Join(s.CacheDir, "state"),
+		KeyLocationMapPath:   s.cachePath("key_location_map"),
+		BlocksPath:           s.cachePath("blocks"),
+		StatePath:            s.cachePath("state"),
 		MaximumEncoders:      min(s.ReplicationConcurrency, maxZstdEncoders),
 		MaximumDecoders:      min(s.ReplicationConcurrency, maxZstdDecoders),
 		WANEncoderLevel:      wanEncoderLevel,
@@ -141,8 +145,47 @@ func RenderHostL2(s HostL2Settings) ([]byte, error) {
 func HostL2Directories(s HostL2Settings) []Directory {
 	return []Directory{
 		{Path: s.CacheDir, Mode: 0o700},
-		{Path: path.Join(s.CacheDir, "state"), Mode: 0o700},
+		{Path: s.cachePath("state"), Mode: 0o700},
 	}
+}
+
+// Cache roots describe the target of the rendered configuration. filepath would
+// instead interpret them according to the OS running this renderer.
+func (s HostL2Settings) posixCachePath() bool {
+	return path.IsAbs(s.CacheDir) && !strings.HasPrefix(s.CacheDir, "//")
+}
+
+func (s HostL2Settings) cachePath(name string) string {
+	if s.posixCachePath() {
+		return path.Join(s.CacheDir, name)
+	}
+	m := Machine{OS: OSWindows}
+	return m.join(s.CacheDir, name)
+}
+
+func (s HostL2Settings) absoluteCachePath() bool {
+	if s.posixCachePath() {
+		return true
+	}
+	// The pinned parser treats a drive name as rooted. Unlike a WinFSP mount,
+	// a cache directory must include the separator, never the drive's CWD.
+	p := strings.ReplaceAll(s.CacheDir, "/", `\`)
+	drivePath := p
+	for _, prefix := range []string{`\\?\`, `\??\`, `\\.\`} {
+		if strings.HasPrefix(drivePath, prefix) {
+			drivePath = strings.TrimPrefix(drivePath, prefix)
+			break
+		}
+	}
+	if len(drivePath) >= 2 && drivePath[1] == ':' && (len(drivePath) < 3 || drivePath[2] != '\\') {
+		return false
+	}
+	b, w := bbpath.EmptyBuilder.Join(bbpath.VoidScopeWalker)
+	// A trailing separator permits a UNC share root as well as its children.
+	if err := bbpath.Resolve(bbpath.WindowsFormat.NewParser(p+`\`), w); err != nil {
+		return false
+	}
+	return b.WindowsPathKind() == bbpath.WindowsPathKindAbsolute
 }
 
 func (s *HostL2Settings) validate() error {
@@ -171,7 +214,7 @@ func (s *HostL2Settings) validate() error {
 			errs = append(errs, fmt.Errorf("%s must be set", f.name))
 		}
 	}
-	if s.CacheDir != "" && !path.IsAbs(s.CacheDir) {
+	if s.CacheDir != "" && !s.absoluteCachePath() {
 		errs = append(errs, fmt.Errorf("CacheDir %q must be absolute", s.CacheDir))
 	}
 	if !strings.Contains(s.CABundlePEM, "-----BEGIN CERTIFICATE-----") {

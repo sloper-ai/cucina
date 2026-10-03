@@ -54,6 +54,7 @@ go_library(
         "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/credentials",
         "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/filesystem",
         "@com_github_buildbarn_bb_remote_execution//pkg/proto/configuration/filesystem/virtual",
+        "@com_github_buildbarn_bb_storage//pkg/filesystem/path",
         "@com_github_buildbarn_bb_storage//pkg/proto/auth",
         "@com_github_buildbarn_bb_storage//pkg/proto/configuration/blobstore",
         "@com_github_buildbarn_bb_storage//pkg/proto/configuration/blockdevice",

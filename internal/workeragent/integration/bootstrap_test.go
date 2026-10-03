@@ -60,8 +60,9 @@ type enrollBehaviour struct {
 // then issues a worker certificate for the CSR like the controller.
 type fakeEnrollment struct {
 	cucinav1.UnimplementedEnrollmentServiceServer
-	t  testing.TB
-	ca *agenttest.CA
+	t        testing.TB
+	ca       *agenttest.CA
+	settings *cucinav1.WorkerSettings
 	enrollBehaviour
 
 	mu    sync.Mutex
@@ -101,7 +102,7 @@ func (f *fakeEnrollment) EnrollWorker(_ context.Context, req *cucinav1.EnrollWor
 	if f.foreignKey {
 		csr = agenttest.NewCSR(f.t)
 	}
-	settings := agenttest.Settings()
+	settings := f.settings
 	return &cucinav1.EnrollWorkerResponse{
 		CertificatePem: f.ca.WorkerCert(f.t, csr, settings.GetPool(), doc.InstanceID, agenttest.Epoch.Add(24*time.Hour)),
 		CaPem:          f.ca.CertPEM,
@@ -147,6 +148,21 @@ type bootEnv struct {
 
 func newBootEnv(t *testing.T, enroll *fakeEnrollment, serverCA *agenttest.CA) *bootEnv {
 	t.Helper()
+	// This test writes to the real host filesystem: Windows paths must model a
+	// Windows worker, while Unix hosts can exercise the Linux image contract.
+	goos, readers := bootstrapPlatform(t)
+	settings := agenttest.Settings()
+	if goos == "windows" {
+		settings.Pool, settings.BuildDirectory = "windows-x86-64", "winfsp"
+		for _, runner := range settings.Runners {
+			for _, property := range runner.Platform {
+				if property.Name == "OSFamily" {
+					property.Value = "windows"
+				}
+			}
+		}
+	}
+	enroll.settings = settings
 	ca := enroll.ca
 	if serverCA == nil {
 		serverCA = ca
@@ -162,21 +178,21 @@ func newBootEnv(t *testing.T, enroll *fakeEnrollment, serverCA *agenttest.CA) *b
 
 	bd, err := bootdata.Encode(bootdata.BootData{
 		EnrollEndpoint: lis.Addr().String(), ServerName: enrollName, CAPEM: string(ca.CertPEM),
-		Cluster: "e2e", Pool: "linux-x86-64", Generation: "g7",
+		Cluster: "e2e", Pool: settings.Pool, Generation: "g7",
 	})
 	require.NoError(t, err)
 	md := imdsfake.New(t)
 	md.SetUserData(bd)
 	// The body of /rsa2048: base64 PKCS#7 (DER SEQUENCE), wrapped like IMDS does.
 	md.SetIdentity([]byte(identity), "MIAGCSqGSIb3DQEHAqCAMIACAQEx\nDzANBglghkgBZQMEAgEFADCABgkq\n", instanceID)
-	md.SetTags(map[string]string{"cucina:pool": "linux-x86-64", "cucina:generation": "g7", "cucina:cluster": "e2e"})
+	md.SetTags(map[string]string{"cucina:pool": settings.Pool, "cucina:generation": "g7", "cucina:cluster": "e2e"})
 
 	e := &bootEnv{
-		paths: workeragent.DefaultPaths("linux").Under(t.TempDir()),
+		paths: workeragent.DefaultPaths(goos).Under(t.TempDir()),
 		clock: agenttest.NewAutoClock(), power: &agenttest.Power{}, enroll: enroll, imds: md, logs: &bytes.Buffer{},
 	}
 	e.b = &workeragent.Bootstrap{
-		Paths: e.paths, GOOS: "linux", GOARCH: "amd64", Version: "test", VCPUs: 4,
+		Paths: e.paths, GOOS: goos, GOARCH: "amd64", Version: "test", VCPUs: 4,
 		IMDS: imds.New(md.URL),
 		DialEnroller: func(bd bootdata.BootData) (workeragent.Enroller, func() error, error) {
 			en, err := workeragent.DialEnroller(bd)
@@ -189,7 +205,7 @@ func newBootEnv(t *testing.T, enroll *fakeEnrollment, serverCA *agenttest.CA) *b
 		Host: &agenttest.Host{Clock: e.clock, Boot: agenttest.Epoch.Add(-40 * time.Second), ID: "boot-1", Memory: 16 << 30},
 		FS:   hostos.FS{}, Clock: e.clock, Power: e.power,
 		Log:       slog.New(slog.NewJSONHandler(e.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		BuildUser: &workeragent.UnixUser{UID: 1001, GID: 1001},
+		BuildUser: &workeragent.UnixUser{UID: 1001, GID: 1001}, KeyReaders: readers,
 	}
 	return e
 }
@@ -293,16 +309,16 @@ func TestBootstrapWritesWorkerFiles(t *testing.T) {
 		e.paths.DeadmanConfig: 0o644,
 	}
 	for p, want := range modes {
-		fi, err := os.Stat(p)
-		require.NoError(t, err, p)
-		require.Equal(t, want, fi.Mode().Perm(), p)
+		assertBootstrapFileAccess(t, p, want)
 	}
 
 	worker, err := os.ReadFile(e.paths.WorkerConfig())
 	require.NoError(t, err)
 	require.True(t, json.Valid(worker))
 	require.Contains(t, string(worker), instanceID, "worker id label node = instance ID")
-	require.Contains(t, string(worker), e.paths.InstanceStoreMount, "L1 on the instance-store mount")
+	mountJSON, err := json.Marshal(e.paths.InstanceStoreMount)
+	require.NoError(t, err)
+	require.Contains(t, string(worker), string(mountJSON[1:len(mountJSON)-1]), "L1 on the instance-store mount, escaped according to JSON")
 	caFile, err := os.ReadFile(e.paths.CAFile())
 	require.NoError(t, err)
 	require.Equal(t, ca.CertPEM, caFile)
@@ -313,11 +329,17 @@ func TestBootstrapWritesWorkerFiles(t *testing.T) {
 	// The image's shell dead-man timer (the backstop) gets the pool's limits.
 	deadman, err := os.ReadFile(e.paths.DeadmanConfig)
 	require.NoError(t, err)
-	require.Contains(t, string(deadman), "IDLE_LIMIT_SECONDS=1800\nCONTACT_LIMIT_SECONDS=600\nMAX_UPTIME_SECONDS=43200\n")
+	if e.paths.Style == workeragent.Windows {
+		var limits map[string]any
+		require.NoError(t, json.Unmarshal(deadman, &limits))
+		require.Equal(t, map[string]any{"enabled": true, "idle_limit_seconds": float64(1800), "contact_limit_seconds": float64(600), "max_uptime_seconds": float64(43200)}, limits)
+	} else {
+		require.Contains(t, string(deadman), "IDLE_LIMIT_SECONDS=1800\nCONTACT_LIMIT_SECONDS=600\nMAX_UPTIME_SECONDS=43200\n")
+	}
 
 	st, err := workeragent.LoadState(hostos.FS{}, e.paths.StateFile)
 	require.NoError(t, err)
-	require.Equal(t, []string{"linux-x86-64", instanceID, "g7", workeragent.PlacementInstanceStore},
+	require.Equal(t, []string{enroll.settings.Pool, instanceID, "g7", workeragent.PlacementInstanceStore},
 		[]string{st.Pool, st.Node, st.Generation, st.L1Placement})
 	require.Equal(t, agenttest.Epoch.Add(24*time.Hour), st.CertNotAfter.UTC())
 
