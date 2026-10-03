@@ -55,11 +55,11 @@ if name == "mise":
         binary = owned_tool("kind")
         os.execve(binary, [binary] + args[4:], dict(os.environ))
     python = fixture_bin / "python3"
-    prefix = ["exec", os.environ["CT"], "--", "python3", os.environ["FIXTURE_HELPER"]]
+    prefix = ["exec", "helm@3.22.0", os.environ["CT"], "--", "python3", os.environ["FIXTURE_HELPER"]]
     suffix = ["install"] if os.environ["FIXTURE_PHASE"] == "install" else ["capture", str(pathlib.Path(os.environ["RUNNER_TEMP"]) / "system-diagnostics/evidence.json"), os.environ["INSTALL_OUTCOME"]]
     if args != prefix + suffix or shutil.which("python3") != str(python) or python.resolve() != pathlib.Path(os.environ["FIXTURE_PYTHON"]).resolve():
         refuse()
-    os.execve(str(python), [str(python)] + args[4:], dict(os.environ))
+    os.execve(str(python), [str(python)] + args[5:], dict(os.environ))
 if name == "kind":
     owned_tool("kind")
     if args != ["get", "kubeconfig", "--name", "cucina"]:
@@ -188,7 +188,7 @@ class SystemInstallEvidence(unittest.TestCase):
                 env = dict(PATH=str(work / "bin") + ":/usr/bin:/bin", LANG="C", LC_ALL="C",
                            HOME=str(work / "home"), RUNNER_TEMP=str(work / "runner"),
                            GITHUB_WORKSPACE=str(ROOT), GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
-                           CT="aqua:helm/chart-testing@3.14.0", FIXTURE_STATE=str(work / "state"),
+                           CT="aqua:helm/chart-testing@3.14.0", SYSTEM_HELM="helm@3.22.0", FIXTURE_STATE=str(work / "state"),
                            CT_CODE=str(ct_code), CASE=case, FIXTURE_BIN=str(work / "bin"),
                            FIXTURE_PYTHON=sys.executable, FIXTURE_HELPER=str(ROOT / "tools/ci/system-install.py"),
                            FIXTURE_TOOL_SHA256=hashlib.sha256((work / "bin/mise").read_bytes()).hexdigest(),

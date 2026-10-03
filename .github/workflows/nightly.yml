@@ -120,6 +120,7 @@ jobs:
     env:
       KIND: kind@0.33.0
       CT: aqua:helm/chart-testing@3.14.0
+      SYSTEM_HELM: helm@3.22.0 # Exercise the supported major that exposed null defaults.
       # Kubernetes 1.36 line; digest from kind v0.33.0 release notes.
       KIND_NODE: kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
     steps:
@@ -128,7 +129,7 @@ jobs:
           persist-credentials: false
       - uses: jdx/mise-action@7a4e45a543138629540c9a1616d08632b893e492 # v5.0.1
         with:
-          install_args: bazelisk helm kubectl ${{ env.KIND }} ${{ env.CT }}
+          install_args: bazelisk helm ${{ env.SYSTEM_HELM }} kubectl ${{ env.KIND }} ${{ env.CT }}
       - name: Bazel caches (user.bazelrc)
         run: |
           c="$HOME/.cache/cucina-bazel"
@@ -177,7 +178,7 @@ jobs:
           cd "$work"
           # Prepare private recording, then exec ct: GitHub owns its process tree and status.
           # Verified --skip-clean-up retains this same install until the always kind deletion.
-          mise exec "$CT" -- python3 "$GITHUB_WORKSPACE/tools/ci/system-install.py" install
+          mise exec "$SYSTEM_HELM" "$CT" -- python3 "$GITHUB_WORKSPACE/tools/ci/system-install.py" install
       - name: capture sanitized system evidence
         id: system_capture
         if: always()
@@ -186,7 +187,7 @@ jobs:
           INSTALL_OUTCOME: ${{ steps.system_install.outcome }}
         run: |
           cd "$RUNNER_TEMP/ct"
-          mise exec "$CT" -- python3 "$GITHUB_WORKSPACE/tools/ci/system-install.py" capture "$RUNNER_TEMP/system-diagnostics/evidence.json" "$INSTALL_OUTCOME"
+          mise exec "$SYSTEM_HELM" "$CT" -- python3 "$GITHUB_WORKSPACE/tools/ci/system-install.py" capture "$RUNNER_TEMP/system-diagnostics/evidence.json" "$INSTALL_OUTCOME"
       - name: retain sanitized system evidence
         if: always() && steps.system_capture.outputs.evidence_ready == 'true'
         timeout-minutes: 2

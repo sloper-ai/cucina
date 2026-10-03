@@ -136,15 +136,29 @@ imagePullSecrets:
 
 {{/* --- Size profiles -------------------------------------------------------
 Effective settings of one component: the size profile (files/profiles.yaml)
-overridden by non-empty values under .Values.<component>.
+overridden by non-null values under .Values.<component>.
 Usage: $eff := include "cucina.effective" (list $ "frontend") | fromYaml */}}
+{{/* Helm 3 may retain null defaults that Helm 4 removes while coalescing values.
+Normalize map entries only: false, zero, strings and whole lists remain overrides.
+Empty maps retain the existing deep-merge semantics (inherit unspecified siblings). */}}
+{{- define "cucina.profileOverrides" -}}
+{{- $out := deepCopy . -}}
+{{- range $key, $value := $out -}}
+{{- if kindIs "invalid" $value -}}
+{{- $_ := unset $out $key -}}
+{{- else if kindIs "map" $value -}}
+{{- $_ := set $out $key (include "cucina.profileOverrides" $value | fromYaml) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $out -}}
+{{- end -}}
 {{- define "cucina.effective" -}}
 {{- $ctx := index . 0 -}}
 {{- $component := index . 1 -}}
 {{- $profiles := $ctx.Files.Get "files/profiles.yaml" | fromYaml -}}
 {{- $profile := index $profiles $ctx.Values.sizeProfile | default dict -}}
 {{- $base := deepCopy (index $profile $component | default dict) -}}
-{{- $user := deepCopy (index $ctx.Values $component | default dict) -}}
+{{- $user := include "cucina.profileOverrides" (index $ctx.Values $component | default dict) | fromYaml -}}
 {{- toYaml (mergeOverwrite $base $user) -}}
 {{- end -}}
 

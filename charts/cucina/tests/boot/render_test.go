@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -31,10 +32,138 @@ type bbConfig struct {
 
 var importstrRE = regexp.MustCompile(`importstr "([^"]+)"`)
 
-// renderProfile renders the chart and returns its Buildbarn configurations.
-func renderProfile(t testing.TB, valuesFiles []string, sets ...string) map[string]bbConfig {
+// renderManifest always uses the explicitly selected, pinned Helm major.
+func renderManifest(t testing.TB, helm string, valuesFiles []string, sets ...string) []byte {
 	t.Helper()
-	return configsOf(t, charttest.Template(t, valuesFiles, sets...))
+	out, err := charttest.HelmWithBinary(t, helm, charttest.TemplateArgs(t, valuesFiles, sets...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func renderedValue(t testing.TB, value any, path ...any) any {
+	t.Helper()
+	for _, key := range path {
+		switch key := key.(type) {
+		case string:
+			object, ok := value.(map[string]any)
+			if !ok {
+				t.Fatalf("rendered path %v is not an object at %q", path, key)
+			}
+			value, ok = object[key]
+			if !ok {
+				t.Fatalf("rendered path %v is missing %q", path, key)
+			}
+		case int:
+			list, ok := value.([]any)
+			if !ok || key >= len(list) {
+				t.Fatalf("rendered path %v is missing index %d", path, key)
+			}
+			value = list[key]
+		}
+	}
+	return value
+}
+
+// Guards R-CP-1/-2: the public, unlocalized chart must declare the two small-profile
+// shards consistently in Kubernetes and every frontend/scheduler backing store.
+func assertSmallTopology(t testing.TB, manifests []byte) {
+	t.Helper()
+	wantReplicas := map[string]float64{"frontend": 1, "controller": 1, "scheduler": 1, "storage": 2, "sts": 2}
+	for _, object := range charttest.Objects(t, manifests) {
+		if object.Kind != "Deployment" && object.Kind != "StatefulSet" {
+			continue
+		}
+		component := strings.TrimPrefix(object.Metadata.Name, "cucina-")
+		if want, ok := wantReplicas[component]; ok {
+			if got := object.Spec["replicas"]; got != want {
+				t.Fatalf("%s replicas: got %v, want %.0f before localization", component, got, want)
+			}
+			delete(wantReplicas, component)
+		}
+	}
+	if len(wantReplicas) != 0 {
+		t.Fatalf("missing rendered workloads: %v", charttest.SortedKeys(wantReplicas))
+	}
+	configs := configsOf(t, manifests)
+	for _, route := range []struct {
+		component string
+		path      []any
+	}{
+		{"frontend", []any{"contentAddressableStorage", "backend", "existenceCaching", "backend", "sharding", "shards"}},
+		{"frontend", []any{"actionCache", "backend", "completenessChecking", "backend", "sharding", "shards"}},
+		{"frontend", []any{"fileSystemAccessCache", "backend", "sharding", "shards"}},
+		{"scheduler", []any{"contentAddressableStorage", "sharding", "shards"}},
+	} {
+		var config map[string]any
+		if err := json.Unmarshal([]byte(importstrRE.ReplaceAllString(configs[route.component].text, `"private CA import"`)), &config); err != nil {
+			t.Fatal(err)
+		}
+		shards, ok := renderedValue(t, config, route.path...).(map[string]any)
+		if !ok || len(shards) != 2 {
+			t.Fatalf("%s %v: want two original shard entries, got %d", route.component, route.path, len(shards))
+		}
+		for i := range 2 {
+			key := fmt.Sprint(i)
+			if got := renderedValue(t, shards, key, "weight"); got != float64(1) {
+				t.Fatalf("%s shard %s weight: got %v, want 1", route.component, key, got)
+			}
+			want := fmt.Sprintf("cucina-storage-%d.cucina-storage.cucina.svc.cluster.local:8981", i)
+			if got := renderedValue(t, shards, key, "backend", "grpc", "client", "address"); got != want {
+				t.Fatalf("%s shard %s does not address its rendered StatefulSet pod", route.component, key)
+			}
+		}
+	}
+}
+
+// The effective-map row guards recursive null removal, zero/list/map values and
+// inherited resource siblings. costEnabled=false is separately a direct-.Values
+// chart nonregression, not evidence about the profile-merge helper.
+func assertProfileOverrides(t testing.TB, helm, kindValues string) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "overrides.json")
+	data := `{"controller":{"costEnabled":false},"frontend":{"replicas":null,"resources":{"requests":{"cpu":0},"limits":{"memory":"3Gi"}},"nodeSelector":{"fixture":"retained"},"tolerations":[{"key":"fixture","operator":"Exists","tolerationSeconds":0}],"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":null},"podAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":[]}}}}`
+	if err := os.WriteFile(file, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	objects := charttest.Objects(t, renderManifest(t, helm, []string{kindValues, file}))
+	seenFrontend, seenController := false, false
+	for _, object := range objects {
+		if object.Kind == "Deployment" && object.Metadata.Name == "cucina-frontend" {
+			seenFrontend = true
+			for _, check := range []struct {
+				path []any
+				want any
+			}{
+				{[]any{"template", "spec", "containers", 0, "resources", "requests", "cpu"}, float64(0)},
+				{[]any{"template", "spec", "containers", 0, "resources", "requests", "memory"}, "256Mi"},
+				{[]any{"template", "spec", "containers", 0, "resources", "limits", "cpu"}, "2"},
+				{[]any{"template", "spec", "containers", 0, "resources", "limits", "memory"}, "3Gi"},
+				{[]any{"template", "spec", "nodeSelector"}, map[string]any{"fixture": "retained"}},
+				{[]any{"template", "spec", "tolerations", 0, "tolerationSeconds"}, float64(0)},
+				{[]any{"template", "spec", "affinity", "nodeAffinity"}, map[string]any{}},
+				{[]any{"template", "spec", "affinity", "podAffinity", "requiredDuringSchedulingIgnoredDuringExecution"}, []any{}},
+			} {
+				if got := renderedValue(t, object.Spec, check.path...); !reflect.DeepEqual(got, check.want) {
+					t.Fatalf("component override %v: got %v, want %v", check.path, got, check.want)
+				}
+			}
+		}
+		if text, ok := object.Data["controller.json"]; ok {
+			seenController = true
+			var config map[string]any
+			if err := json.Unmarshal([]byte(text), &config); err != nil {
+				t.Fatal(err)
+			}
+			if got := renderedValue(t, config, "observability", "costEnabled"); got != false {
+				t.Fatalf("explicit false override: got %v", got)
+			}
+		}
+	}
+	if !seenFrontend || !seenController {
+		t.Fatal("missing public override consumers")
+	}
 }
 
 // configsOf extracts the Buildbarn configurations from rendered manifests.

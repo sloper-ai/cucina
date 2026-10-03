@@ -8,7 +8,9 @@ package charttest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/yaml"
 )
@@ -57,8 +60,8 @@ func WritableChartFile(t testing.TB, rel string) string {
 	return filepath.Join(ChartDir(t), rel)
 }
 
-// Tool returns the binary named by env (Bazel passes the pinned tools) or name on
-// PATH; without either the test is skipped outside Bazel and fails under Bazel.
+// Tool requires the pinned env path under Bazel. Native Go may discover name on
+// PATH and skips when that prerequisite is unavailable; explicit paths stay explicit.
 func Tool(t testing.TB, env, name string) string {
 	t.Helper()
 	if p := os.Getenv(env); p != "" {
@@ -78,25 +81,109 @@ func Tool(t testing.TB, env, name string) string {
 		}
 		t.Fatalf("%s=%q does not name an existing file", env, p)
 	}
+	if os.Getenv("TEST_SRCDIR") != "" {
+		t.Fatalf("%s is not set; the Bazel target must provide pinned %s", env, name)
+	}
 	p, err := exec.LookPath(name)
 	if err != nil {
-		if os.Getenv("TEST_SRCDIR") != "" {
-			t.Fatalf("%s is not set; the Bazel target must provide %s", env, name)
-		}
 		t.Skipf("%s not found: install it or set %s", name, env)
+	}
+	if name == "helm" || name == "helm3" {
+		return nativeHelmPath(t, p, name, env)
 	}
 	return p
 }
 
-// Helm runs the helm binary ($HELM or PATH) with isolated cache/config dirs.
+// pathOutput bounds version-manager process output; diagnostics are never echoed.
+type pathOutput struct {
+	data [4096]byte
+	n    int
+}
+
+func (b *pathOutput) Write(p []byte) (int, error) {
+	n := copy(b.data[b.n:], p)
+	b.n += n
+	if n != len(p) {
+		return n, io.ErrShortBuffer
+	}
+	return n, nil
+}
+
+// Resolve only native PATH-discovered mise shims before Helm receives a private
+// HOME/PATH. Explicit env paths above remain explicit, including Bazel runfiles.
+func nativeHelmPath(t testing.TB, path, name, env string) string {
+	t.Helper()
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve %s executable path: %v", name, err)
+	}
+	manager, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		t.Skipf("%s prerequisite is unavailable; install it or set %s", name, env)
+	}
+	base := strings.ToLower(filepath.Base(manager))
+	if base != "mise" && base != "mise.exe" {
+		return absolute
+	}
+	managerInfo, err := os.Stat(manager)
+	if err != nil || managerInfo.IsDir() {
+		t.Skipf("%s version manager is unavailable; set %s", name, env)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, manager, "which", name)
+	cmd.Dir = RepoRoot(t)
+	cmd.WaitDelay = time.Second
+	var out, diagnostics pathOutput
+	cmd.Stdout, cmd.Stderr = &out, &diagnostics
+	// Maintained manager discovery only: no shell/profile evaluation or install.
+	// It deliberately runs before HelmWithBinary isolates the rendering environment.
+	err = cmd.Run()
+	installed := strings.TrimSpace(string(out.data[:out.n]))
+	if err != nil || !filepath.IsAbs(installed) {
+		t.Skipf("%s shim cannot resolve an installed prerequisite; install it or set %s", name, env)
+	}
+	resolved, err := filepath.EvalSymlinks(installed)
+	if err != nil || resolved == manager {
+		t.Skipf("%s shim did not resolve an installed executable; set %s", name, env)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.Mode().IsRegular() || os.SameFile(info, managerInfo) || filepath.Base(filepath.Dir(resolved)) == "shims" || (runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
+		t.Skipf("%s installed prerequisite is unavailable; set %s", name, env)
+	}
+	return resolved
+}
+
+// Helm runs the default pinned renderer with isolated, non-cluster configuration.
 func Helm(t testing.TB, args ...string) ([]byte, error) {
 	t.Helper()
-	cmd := exec.Command(Tool(t, "HELM", "helm"), args...)
+	return HelmWithBinary(t, Tool(t, "HELM", "helm"), args...)
+}
+
+// HelmWithBinary runs an explicitly selected renderer; it never changes process-wide
+// environment or falls back to another major version.
+func HelmWithBinary(t testing.TB, binary string, args ...string) ([]byte, error) {
+	t.Helper()
+	if !filepath.IsAbs(binary) {
+		t.Fatal("Helm renderer must be an absolute executable path")
+	}
+	cmd := exec.Command(binary, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	home := t.TempDir()
-	cmd.Env = append(os.Environ(), "HELM_CACHE_HOME="+filepath.Join(home, "cache"),
-		"HELM_CONFIG_HOME="+filepath.Join(home, "config"), "HELM_DATA_HOME="+filepath.Join(home, "data"))
+	if err := os.Chmod(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Env = []string{"HOME=" + home, "USERPROFILE=" + home, "TMPDIR=" + home, "TMP=" + home, "TEMP=" + home, "BASH_ENV=", "ENV=",
+		"KUBECONFIG=" + filepath.Join(home, "no-kubeconfig"),
+		"HELM_CACHE_HOME=" + filepath.Join(home, "cache"),
+		"HELM_CONFIG_HOME=" + filepath.Join(home, "config"), "HELM_DATA_HOME=" + filepath.Join(home, "data"),
+		"HELM_PLUGINS=" + filepath.Join(home, "plugins"), "HELM_REGISTRY_CONFIG=" + filepath.Join(home, "registry.json")}
+	for _, key := range []string{"SystemRoot", "WINDIR"} {
+		if value := os.Getenv(key); value != "" {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return out, &CommandError{Args: args, Err: err, Stderr: stderr.String()}

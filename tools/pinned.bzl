@@ -46,6 +46,16 @@ _TOOLS = {
             "windows_amd64": struct(url = "https://get.helm.sh/helm-v4.3.0-windows-amd64.zip", sha256 = "304ea163cce4d9ad14e189c01846c6a34de9cfdfe48536ae54b2e8ba7884e67c", kind = "zip", strip_prefix = "windows-amd64", path = "helm.exe"),
         },
     ),
+    "helm3": struct(
+        version = "v3.22.0",
+        target = "helm",
+        platforms = {
+            "darwin_arm64": struct(url = "https://get.helm.sh/helm-v3.22.0-darwin-arm64.tar.gz", sha256 = "4c9982a6cdeb458b60258df66b55398ca5b19293f6877faffe2909ad6f23dfe0", kind = "tar.gz", strip_prefix = "darwin-arm64", path = "helm"),
+            "linux_amd64": struct(url = "https://get.helm.sh/helm-v3.22.0-linux-amd64.tar.gz", sha256 = "1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb", kind = "tar.gz", strip_prefix = "linux-amd64", path = "helm"),
+            "linux_arm64": struct(url = "https://get.helm.sh/helm-v3.22.0-linux-arm64.tar.gz", sha256 = "f14e804dfee240f55525b667488fe9adca349e63e00c9af634c0beb1421ac310", kind = "tar.gz", strip_prefix = "linux-arm64", path = "helm"),
+            "windows_amd64": struct(url = "https://get.helm.sh/helm-v3.22.0-windows-amd64.zip", sha256 = "899615865726d39f9b245e71e848c5bf4adc7ed33a8c43ede660facb48151b43", kind = "zip", strip_prefix = "windows-amd64", path = "helm.exe"),
+        },
+    ),
     "helm_unittest": struct(
         version = "v1.2.0",
         target = None,

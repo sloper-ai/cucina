@@ -12,14 +12,17 @@ cucina_go_test(
     ],
     data = [
         "//charts/cucina:chart",
+        "//release:kind-values.yaml",
         "//tools:bb_scheduler",
         "//tools:bb_storage",
         "//tools:helm",
+        "//tools:helm3",
     ],
     env = {
         "BB_SCHEDULER": "$(rlocationpath //tools:bb_scheduler)",
         "BB_STORAGE": "$(rlocationpath //tools:bb_storage)",
         "HELM": "$(rlocationpath //tools:helm)",
+        "HELM3": "$(rlocationpath //tools:helm3)",
     },
     tier = "integration",
     deps = [

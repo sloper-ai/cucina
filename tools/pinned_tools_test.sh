@@ -26,19 +26,21 @@ check() { # check <label> <expected substring> <command...>
   fi
 }
 
-check helm "v4.3.0" "${tool_helm}" version --short
-HELM_PLUGINS="$(dirname "$(dirname "${tool_helm_unittest_plugin}")")" \
-  check helm-unittest "unittest" "${tool_helm}" plugin list
-check kubeconform "v0.8.0" "${tool_kubeconform}" -v
-check buf "1.73.0" "${tool_buf}" --version
-check controller-gen "v0.21.0" "${tool_controller_gen}" --version
-check gitleaks "8.30.1" "${tool_gitleaks}" version
-check promtool "3.15.0" "${tool_promtool}" --version
-check tflint "0.64.0" "${tool_tflint}" --version
-check tofu "v1.13.1" "${tool_tofu}" version
-check etcd "etcd Version" "${tool_etcd}" --version
-check kube-apiserver "Kubernetes v1.36.2" "${tool_kube_apiserver}" --version
-check kubectl "v1.36.2" "${tool_kubectl}" version --client
+# Required Bazel arguments; declare_tool assigns these names dynamically.
+check helm "v4.3.0" "${tool_helm:?}" version --short
+check helm3 "v3.22.0" "${tool_helm3:?}" version --short
+HELM_PLUGINS="$(dirname "$(dirname "${tool_helm_unittest_plugin:?}")")" \
+  check helm-unittest "unittest" "${tool_helm:?}" plugin list
+check kubeconform "v0.8.0" "${tool_kubeconform:?}" -v
+check buf "1.73.0" "${tool_buf:?}" --version
+check controller-gen "v0.21.0" "${tool_controller_gen:?}" --version
+check gitleaks "8.30.1" "${tool_gitleaks:?}" version
+check promtool "3.15.0" "${tool_promtool:?}" --version
+check tflint "0.64.0" "${tool_tflint:?}" --version
+check tofu "v1.13.1" "${tool_tofu:?}" version
+check etcd "etcd Version" "${tool_etcd:?}" --version
+check kube-apiserver "Kubernetes v1.36.2" "${tool_kube_apiserver:?}" --version
+check kubectl "v1.36.2" "${tool_kubectl:?}" version --client
 for bb in bb_storage bb_scheduler bb_worker bb_runner; do
   var="tool_${bb}"
   check "${bb}" "Usage" "${!var}"

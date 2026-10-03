@@ -209,6 +209,7 @@ use_repo(
     "envtest",
     "gitleaks",
     "helm",
+    "helm3",
     "helm_unittest",
     "kubeconform",
     "opentofu",

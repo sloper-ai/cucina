@@ -27,6 +27,7 @@ package(default_visibility = ["//visibility:private"])
 exports_files(
     [
         "homebrew/cucinactl.rb.tmpl",
+        "kind-values.yaml",
         "workspace-status.sh",
     ],
     visibility = ["//visibility:public"],

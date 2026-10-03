@@ -4,6 +4,7 @@ package boot_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -36,12 +37,36 @@ import (
 //     failing; an undeclared platform is refused;
 //   - R-SEC-4: BuildQueueState answers the controller's certificate only.
 func TestRenderedControlPlaneServes(t *testing.T) {
+	for _, renderer := range []struct{ name, env, command string }{{"helm3", "HELM3", "helm3"}, {"helm4", "HELM", "helm"}} {
+		t.Run(renderer.name, func(t *testing.T) {
+			// Bazel supplies both exact pins. Native Go retains normal prerequisite
+			// discovery, with a distinct helm3 executable rather than another major.
+			if os.Getenv("TEST_SRCDIR") != "" && os.Getenv(renderer.env) == "" {
+				t.Fatalf("%s must name the pinned Helm renderer; no major-version fallback", renderer.env)
+			}
+			helm := charttest.Tool(t, renderer.env, renderer.command)
+			t.Parallel()
+			serveRenderedControlPlane(t, helm)
+		})
+	}
+}
+
+func serveRenderedControlPlane(t *testing.T, helm string) {
 	storageBin := bbtest.Binary(t, bbtest.EnvStorage)
 	schedulerBin := bbtest.Binary(t, bbtest.EnvScheduler)
 	const issuer = "https://sts.cucina.test"
-	cfgs := renderProfile(t, []string{filepath.Join(charttest.ChartDir(t), "ci", "values-small.yaml")},
-		"storage.shards=2", "endpoints.sts.url="+issuer,
+	kind := filepath.Join(charttest.RepoRoot(t), "release", "kind-values.yaml")
+	// R-CP-1/-2: inspect the actual system-lane input before any localization or
+	// fixture overrides. Helm 3 previously rendered null replicas and zero shards.
+	assertSmallTopology(t, renderManifest(t, helm, []string{kind}))
+	assertProfileOverrides(t, helm, kind)
+	// Keep the existing queue/auth/CAS acceptance coverage: add sample pools and
+	// small file-backed stores for localhost, but NEVER override storage.shards.
+	manifests := renderManifest(t, helm, []string{kind, filepath.Join(charttest.ChartDir(t), "samples", "pools.yaml")},
+		"endpoints.sts.url="+issuer,
 		"storage.stores.cas.size=19Gi", "storage.stores.ac.size=32Mi", "storage.stores.fsac.size=32Mi", "storage.stores.iscc.size=16Mi")
+	assertSmallTopology(t, manifests)
+	cfgs := configsOf(t, manifests)
 
 	pki := bbtest.NewPKI(t)
 	server := pki.LoopbackServer(t, "server", "spiffe://cucina/server/frontend")
