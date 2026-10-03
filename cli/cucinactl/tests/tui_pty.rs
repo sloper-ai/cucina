@@ -132,6 +132,57 @@ fn tui_session_in_a_pty() {
 fn tui_session_in_a_pty() {
     use expectrl::{Expect, Session};
 
+    // CI must report the cause of a failed PTY session, not only ExpectTimeout.
+    // Read at most 64 KiB without blocking after the original deadline, and print
+    // only escaped 2 KiB head/tail samples (no raw terminal-control sequences).
+    fn expect(p: &mut expectrl::session::OsSession, mgmt: &FakeMgmt, what: &str) {
+        if let Err(error) = p.expect(what) {
+            let alive = p.get_process().is_alive();
+            let exit = p.get_process().wait(Some(0));
+            let mut bytes = Vec::new();
+            let mut read_error = None;
+            for _ in 0..16 {
+                let mut chunk = [0u8; 4096];
+                match p.try_read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => bytes.extend_from_slice(&chunk[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => {
+                        read_error = Some(e.to_string());
+                        break;
+                    }
+                }
+            }
+            // The fixture is isolated, but do not print its bearer token even if
+            // an unexpected child error happens to include it.
+            let safe_output = String::from_utf8_lossy(&bytes)
+                .replace(mgmt.state.token.as_str(), "[redacted-test-token]");
+            let safe_bytes = safe_output.as_bytes();
+            let head = String::from_utf8_lossy(&safe_bytes[..safe_bytes.len().min(2048)]);
+            let tail =
+                String::from_utf8_lossy(&safe_bytes[safe_bytes.len().saturating_sub(2048)..]);
+            let (call_count, recent_calls) = match mgmt.state.calls.try_lock() {
+                Ok(calls) => (
+                    Some(calls.len()),
+                    calls.iter().rev().take(8).cloned().collect::<Vec<_>>(),
+                ),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    (None, vec!["<unavailable: call log locked>".into()])
+                }
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    (None, vec!["<unavailable: poisoned call log>".into()])
+                }
+            };
+            panic!(
+                "expected {what:?} in ConPTY: {error:?}; child_alive={alive:?}; \
+                 child_exit_zero_wait={exit:?}; captured_bytes={} (limit 65536); \
+                 read_error={read_error:?}; head={head:?}; tail={tail:?}; \
+                 fake_api_calls={call_count:?} recent={recent_calls:?}",
+                bytes.len()
+            );
+        }
+    }
+
     let (_rt, mgmt, dir) = fixture();
     assert_pipes_are_not_a_terminal(dir.path());
     // conpty 0.5 constructs CreateProcessW itself: Command's stdio settings are
@@ -170,15 +221,15 @@ fn tui_session_in_a_pty() {
     p.get_process_mut().resize(100, 30).expect("resize");
     p.set_expect_timeout(Some(std::time::Duration::from_secs(30)));
 
-    p.expect("Overview").expect("tab bar");
-    p.expect("linux-x86-64").expect("pool on the overview");
+    expect(&mut p, &mgmt, "Overview");
+    expect(&mut p, &mgmt, "linux-x86-64");
     p.send("2").unwrap();
-    p.expect("i-0123456789abcdef0").expect("the pool's worker");
+    expect(&mut p, &mgmt, "i-0123456789abcdef0");
     p.send("\r").unwrap();
     p.send("d").unwrap();
-    p.expect("Confirm").expect("the drain asks first");
+    expect(&mut p, &mgmt, "Confirm");
     p.send("n").unwrap();
-    p.expect("cancelled:").expect("status line");
+    expect(&mut p, &mgmt, "cancelled:");
     p.send("q").unwrap();
     // ConPTY keeps its output pipe open after the child exits: wait for the process.
     assert_eq!(p.get_process().wait(Some(30_000)).expect("exits"), 0);
