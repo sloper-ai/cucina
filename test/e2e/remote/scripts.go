@@ -184,7 +184,7 @@ func (d ps) cmdFile(dir, script string, o Opts) string {
 	full := hdr.String() + script + "\nexit $LASTEXITCODE\n"
 	q := psQuote(dir)
 	return fmt.Sprintf(`try { [Console]::Error.WriteLine('owned command-dir/begin') } catch { }
-New-Item -ItemType Directory -Force -Path %s | Out-Null
+[void][IO.Directory]::CreateDirectory(%s)
 try { [Console]::Error.WriteLine('owned command-dir/end') } catch { }
 [IO.File]::WriteAllText((Join-Path %s 'cmd.ps1'), [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
 `, q, q, psQuote(b64(full)))

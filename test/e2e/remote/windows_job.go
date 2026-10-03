@@ -86,7 +86,7 @@ const psProtectJobDirectory = `function Write-OwnedBoundary([string]$boundary) {
 function Protect-OwnedDirectory([string]$path) {
  Write-OwnedBoundary 'protect/begin'
  Write-OwnedBoundary 'mkdir/begin'
- New-Item -ItemType Directory -Force -Path $path | Out-Null
+ [void][IO.Directory]::CreateDirectory($path)
  Write-OwnedBoundary 'mkdir/end'
  Write-OwnedBoundary 'attributes/begin'
  if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'owned job directory is a reparse point' }
