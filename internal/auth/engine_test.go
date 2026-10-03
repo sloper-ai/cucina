@@ -65,6 +65,19 @@ type fixture struct {
 	engine   *auth.Engine
 	issuers  map[string]*oidctest.Issuer
 	statuses []auth.PolicyStatus
+	warnings fixtureWarnings
+}
+
+// fixtureWarnings caps the standard JSON handler's in-memory diagnostics. Exchanges
+// log synchronously; sequential rows reset/read this buffer outside their bubbles.
+type fixtureWarnings struct {
+	data [8 << 10]byte
+	n    int
+}
+
+func (w *fixtureWarnings) Write(p []byte) (int, error) {
+	w.n += copy(w.data[w.n:], p)
+	return len(p), nil
 }
 
 func (f *fixture) issuer(url string) *oidctest.Issuer {
@@ -88,7 +101,7 @@ func newFixture(t testing.TB, limits auth.CELLimits, policies ...v1alpha1.TrustP
 	}
 	e, err := auth.NewEngine(auth.EngineOptions{
 		IdentityProvider: f.idp, Clock: clock, InstanceNames: []string{"main"}, Limits: limits,
-		Log: slog.New(slog.DiscardHandler),
+		Log: slog.New(slog.NewJSONHandler(&f.warnings, &slog.HandlerOptions{Level: slog.LevelWarn})),
 	})
 	require.NoError(t, err)
 	f.engine = e
@@ -274,28 +287,40 @@ func TestExchangeTable(t *testing.T) {
 	}
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
-			if r.before != nil {
-				_, err := r.before(f)
+			f.warnings.n = 0
+			t.Cleanup(func() {
+				if t.Failed() && f.warnings.n > 0 {
+					t.Logf("auth fixture warnings (bounded to %d bytes):\n%s", len(f.warnings.data), f.warnings.data[:f.warnings.n])
+				}
+			})
+			// Authorization must not depend on host scheduling. Keep all production
+			// limits enabled; TestCELTimeoutFailsClosed exercises elapsed budgets.
+			// The shared fixture has no background work; each bubble joins before
+			// cleanup reads its warnings and before the next row reuses its state.
+			synctest.Test(t, func(t *testing.T) {
+				if r.before != nil {
+					_, err := r.before(f)
+					require.NoError(t, err)
+				}
+				p, err := r.do(f)
+				if r.wantCode != "" {
+					require.Error(t, err)
+					assert.Equal(t, r.wantCode, auth.AsError(err).Code, "%v", err)
+					assert.Nil(t, p)
+					return
+				}
 				require.NoError(t, err)
-			}
-			p, err := r.do(f)
-			if r.wantCode != "" {
-				require.Error(t, err)
-				assert.Equal(t, r.wantCode, auth.AsError(err).Code, "%v", err)
-				assert.Nil(t, p)
-				return
-			}
-			require.NoError(t, err)
-			if r.wantSub != "" {
-				assert.Equal(t, r.wantSub, p.Subject)
-			}
-			if r.want != nil {
-				assert.Equal(t, r.want, verbs(p))
-			}
-			if r.wantTTL != 0 {
-				assert.Equal(t, r.wantTTL, p.TTL)
-			}
-			assert.True(t, keys.ValidSubject(p.Subject), p.Subject)
+				if r.wantSub != "" {
+					assert.Equal(t, r.wantSub, p.Subject)
+				}
+				if r.want != nil {
+					assert.Equal(t, r.want, verbs(p))
+				}
+				if r.wantTTL != 0 {
+					assert.Equal(t, r.wantTTL, p.TTL)
+				}
+				assert.True(t, keys.ValidSubject(p.Subject), p.Subject)
+			})
 		})
 	}
 }

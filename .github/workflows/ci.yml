@@ -201,6 +201,7 @@ jobs:
             //charts/cucina/tests/boot:boot_test \
             //cli/cucinactl:credential_helper_test \
             //cli/cucinactl:tui_pty_test \
+            //internal/auth:auth_test \
             //internal/bbconfig/boottest:boottest_test \
             //internal/envtest/internal/testing/process:process_test \
             //internal/workeragent/integration:integration_test \
@@ -221,6 +222,7 @@ jobs:
               //charts/cucina/tests/boot:boot_test \
               //cli/cucinactl:credential_helper_test \
               //cli/cucinactl:tui_pty_test \
+              //internal/auth:auth_test \
               //internal/bbconfig/boottest:boottest_test \
               //internal/bbtest:bbtest_test \
               //internal/envtest/internal/testing/process:process_test \
