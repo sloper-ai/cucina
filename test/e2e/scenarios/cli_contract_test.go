@@ -311,7 +311,11 @@ func (s *revocationCAS) FindMissingBlobs(ctx context.Context, _ *repb.FindMissin
 func TestPackagingLifecycleContract(t *testing.T) {
 	for _, fault := range []string{"", "delayed guest RPC", "resize", "revoke", "enrollment unavailable"} {
 		t.Run("fault="+fault, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
+			// CI 37074297279: Go resolves the private descriptor under
+			// USERPROFILE on Windows, not HOME. Isolate both from the host.
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			c, ex := scenarioContext(t, "T14")
 			ctx, cancel := context.WithCancel(c.Context)
 			c.Context = ctx
@@ -395,7 +399,11 @@ func TestPackagingLifecycleContract(t *testing.T) {
 			})
 			ex.Handle(filepath.Join(dir, "publish-s3-temp.sh"), func(_ context.Context, cmd ports.Command) (ports.ExecResult, error) {
 				if cmd.Args[0] == "create" {
-					require.NoError(t, os.WriteFile(cmd.Args[len(cmd.Args)-1], []byte("PKG_URL=https://example.invalid/package.pkg\n"), 0o600))
+					statePath := cmd.Args[len(cmd.Args)-1]
+					rel, err := filepath.Rel(home, statePath)
+					require.NoError(t, err)
+					require.True(t, filepath.IsLocal(rel), "publisher state must stay inside the isolated fixture home")
+					require.NoError(t, os.WriteFile(statePath, []byte("PKG_URL=https://example.invalid/package.pkg\n"), 0o600))
 				}
 				return ports.ExecResult{}, nil
 			})
