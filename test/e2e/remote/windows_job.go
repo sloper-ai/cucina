@@ -80,82 +80,111 @@ const psOwnedJob = psOwnedJobRuntime + psProtectJobDirectory
 
 // Boundary names below are fixed literals, never paths, identities or payloads.
 // stderr remains available before the directory is safe for diagnostic files.
-const psProtectJobDirectory = `function Write-OwnedBoundary([string]$boundary) {
+const psOwnedBoundary = `function Write-OB([string]$boundary) {
  try { [Console]::Error.WriteLine('owned '+$boundary) } catch { }
 }
-function Protect-OwnedDirectory([string]$path) {
- Write-OwnedBoundary 'protect/begin'
- Write-OwnedBoundary 'mkdir/begin'
+`
+
+const psProtectJobDirectory = psOwnedBoundary + `function Protect-OwnedDirectory([string]$path) {
+ Write-OB 'protect/begin'
+ Write-OB 'mkdir/begin'
  [void][IO.Directory]::CreateDirectory($path)
- Write-OwnedBoundary 'mkdir/end'
- Write-OwnedBoundary 'attributes/begin'
+ Write-OB 'mkdir/end'
+ Write-OB 'clr-attributes/begin'
+ try {
+  $oda=[IO.File]::GetAttributes($path)
+  Write-OB ('clr-attributes dir='+[bool]($oda -band 16)+' reparse='+[bool]($oda -band 1024))
+ } catch { Write-OB 'clr-attributes unavailable' }
+ Write-OB 'clr-attributes/end'
+ Write-OB 'attributes/begin'
  if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'owned job directory is a reparse point' }
- Write-OwnedBoundary 'attributes/end'
- Write-OwnedBoundary 'acl-new/begin'
+ Write-OB 'attributes/end'
+ Write-OB 'acl-new/begin'
  $acl=New-Object Security.AccessControl.DirectorySecurity
- Write-OwnedBoundary 'acl-new/end'
- Write-OwnedBoundary 'acl-inheritance/begin'
+ Write-OB 'acl-new/end'
+ Write-OB 'acl-inheritance/begin'
  $acl.SetAccessRuleProtection($true,$false)
- Write-OwnedBoundary 'acl-inheritance/end'
- Write-OwnedBoundary 'identity/begin'
+ Write-OB 'acl-inheritance/end'
+ Write-OB 'identity/begin'
  $ownedDirectorySIDs=@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')
- Write-OwnedBoundary 'identity/end'
+ Write-OB 'identity/end'
  foreach($sid in $ownedDirectorySIDs) {
-  Write-OwnedBoundary 'sid/begin'
+  Write-OB 'sid/begin'
   $identity=New-Object Security.Principal.SecurityIdentifier($sid)
-  Write-OwnedBoundary 'sid/end'
-  Write-OwnedBoundary 'rule/begin'
+  Write-OB 'sid/end'
+  Write-OB 'rule/begin'
   $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')))
-  Write-OwnedBoundary 'rule/end'
+  Write-OB 'rule/end'
  }
- Write-OwnedBoundary 'acl-apply/begin'
+ Write-OB 'acl-apply/begin'
  Set-Acl -LiteralPath $path -AclObject $acl
- Write-OwnedBoundary 'acl-apply/end'
- Write-OwnedBoundary 'protect/end'
+ Write-OB 'acl-apply/end'
+ Write-OB 'protect/end'
 }
 `
 
 func windowsJobName(id string) string { return `Local\CucinaE2E-` + id }
 
-// Diagnostic records contain only fixed phase names and an integer session ID,
-// never command lines, environment values, principals or payload contents.
+// Protected stage records contain only fixed phases and an integer session ID.
+// Launcher-only runtime metadata contains versions, path-class counts and cache/
+// layout classifications, never paths, principals, environment values or payloads.
 func psStartupTrace(dir, role string) string {
 	// Emit only a fixed role marker before directory/ACL preparation. If that
 	// preparation stalls, the transport can still distinguish script entry from
 	// process/PowerShell startup. Do not create an unprotected diagnostic file.
 	entry := fmt.Sprintf("try { [Console]::Error.WriteLine(%s) } catch { }\n", psQuote("owned startup "+role+"-entry"))
+	if role == "launcher" {
+		// CLR-only observations: no command discovery, imports or environment
+		// changes. Path classes/counts and candidate existence are not authority.
+		entry += `try {
+ [Console]::Error.WriteLine('owned runtime ps='+$PSVersionTable.PSVersion+' clr='+[Environment]::Version)
+ $odm=@(0,0,0,0)
+ foreach($ode in ([Environment]::GetEnvironmentVariable('PSModulePath') -split ';')) {
+  if (!$ode) { continue }
+  if ($ode.TrimEnd([char[]]'\/') -ieq ($PSHOME+'\Modules')) { $odm[0]++ }
+  elseif ($ode -match '[\\/]WindowsPowerShell[\\/]') { $odm[1]++ }
+  elseif ($ode -match '[\\/]PowerShell[\\/]') { $odm[2]++ }
+  else { $odm[3]++ }
+ }
+ $odc=[Environment]::GetEnvironmentVariable('PSModuleAnalysisCachePath'); $odk='custom'
+ if (!$odc) { $odk='default'; $odc=[IO.Path]::Combine([Environment]::GetFolderPath('LocalApplicationData'),'Microsoft\Windows\PowerShell\ModuleAnalysisCache') }
+ [Console]::Error.WriteLine('owned module-classes='+($odm -join ',')+' cache='+$odk+','+[IO.File]::Exists($odc))
+ [Console]::Error.WriteLine('owned layout manifest='+[IO.File]::Exists($PSHOME+'\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1')+' dll='+[IO.File]::Exists($PSHOME+'\Microsoft.PowerShell.Commands.Management.dll'))
+} catch { try { [Console]::Error.WriteLine('owned runtime metadata unavailable') } catch { } }
+`
+	}
 	return "$ErrorActionPreference='Stop'\n" + entry + psProtectJobDirectory + fmt.Sprintf(`
 $J=%s
 function Report-OwnedTraceFailure {
  try { [Console]::Error.WriteLine('owned startup diagnostics unavailable') } catch { }
 }
 $script:OwnedTraceReady=$false
-Write-OwnedBoundary 'protect-call/begin'
+Write-OB 'protect-call/begin'
 try { Protect-OwnedDirectory $J; $script:OwnedTraceReady=$true } catch { Report-OwnedTraceFailure }
-Write-OwnedBoundary 'protect-call/end'
+Write-OB 'protect-call/end'
 function Write-OwnedStage([string]$phase) {
  if (-not $script:OwnedTraceReady) { return }
  $staging=$null; $previous=$null
  try {
   if ($phase -cnotin @('runtime-load','runtime-ready','open-job','assign-self','payload-start','payload-exit','cim-create','cim-created','supervisor-ready')) { throw 'invalid owned startup phase' }
-  Write-OwnedBoundary 'trace-session/begin'
+  Write-OB 'trace-session/begin'
   $record=$phase+' '+[string]([Diagnostics.Process]::GetCurrentProcess().SessionId)
-  Write-OwnedBoundary 'trace-session/end'
+  Write-OB 'trace-session/end'
   if ($record.Length -gt 96) { throw 'owned startup record exceeds its bound' }
-  Write-OwnedBoundary 'trace-path/begin'
+  Write-OB 'trace-path/begin'
   $path=Join-Path $J %s
   $staging=$path+'.tmp'; $previous=$path+'.previous'
-  Write-OwnedBoundary 'trace-path/end'
-  Write-OwnedBoundary 'trace-write/begin'
+  Write-OB 'trace-path/end'
+  Write-OB 'trace-write/begin'
   [IO.File]::WriteAllText($staging,$record)
-  Write-OwnedBoundary 'trace-write/end'
-  Write-OwnedBoundary 'trace-publish/begin'
+  Write-OB 'trace-write/end'
+  Write-OB 'trace-publish/begin'
   if ([IO.File]::Exists($path)) {
    # PS5 marshals a null backup argument as an empty path. Supply a real,
    # private same-directory backup so replacement remains atomic.
    [IO.File]::Replace($staging,$path,$previous)
   } else { [IO.File]::Move($staging,$path) }
-  Write-OwnedBoundary 'trace-publish/end'
+  Write-OB 'trace-publish/end'
  } catch { Report-OwnedTraceFailure } finally {
   foreach($file in @($staging,$previous)) {
    try { if ($file -and [IO.File]::Exists($file)) { [IO.File]::Delete($file) } } catch { Report-OwnedTraceFailure }

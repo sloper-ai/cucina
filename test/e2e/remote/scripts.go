@@ -186,7 +186,9 @@ func (d ps) cmdFile(dir, script string, o Opts) string {
 	return fmt.Sprintf(`try { [Console]::Error.WriteLine('owned command-dir/begin') } catch { }
 [void][IO.Directory]::CreateDirectory(%s)
 try { [Console]::Error.WriteLine('owned command-dir/end') } catch { }
-[IO.File]::WriteAllText((Join-Path %s 'cmd.ps1'), [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
+$ownedCmdPath=Join-Path %s 'cmd.ps1'
+try { [Console]::Error.WriteLine('owned command-path/end') } catch { }
+[IO.File]::WriteAllText($ownedCmdPath, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
 `, q, q, psQuote(b64(full)))
 }
 
@@ -200,14 +202,18 @@ func psRunCmd(dir string) string {
 	q := psQuote(dir)
 	// Start-Process -Wait includes descendants such as the persistent Bazel
 	// server. The job's context still bounds execution and owns tree cancellation.
-	return fmt.Sprintf(`$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path %s 'cmd.ps1') -RedirectStandardOutput (Join-Path %s 'stdout') -RedirectStandardError (Join-Path %s 'stderr') -NoNewWindow -PassThru
+	return fmt.Sprintf(`Write-OB 'process-start/begin'
+$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path %s 'cmd.ps1') -RedirectStandardOutput (Join-Path %s 'stdout') -RedirectStandardError (Join-Path %s 'stderr') -NoNewWindow -PassThru
+Write-OB 'process-start/end'
 $null = $p.Handle
-$p.WaitForExit()`, q, q, q)
+Write-OB 'process-wait/begin'
+$p.WaitForExit()
+Write-OB 'process-wait/end'`, q, q, q)
 }
 
 func (d ps) foreground(dir, script string, o Opts) string {
 	q := psQuote(dir)
-	return d.cmdFile(dir, script, o) + psRunCmd(dir) + fmt.Sprintf(`
+	return psOwnedBoundary + d.cmdFile(dir, script, o) + psRunCmd(dir) + fmt.Sprintf(`
 $rc = $p.ExitCode
 Set-Content -Path (Join-Path %s 'exit') -Value $rc
 $o = (Get-Item (Join-Path %s 'stdout')).Length; $e = (Get-Item (Join-Path %s 'stderr')).Length

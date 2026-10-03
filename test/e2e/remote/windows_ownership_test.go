@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,6 +190,7 @@ type powerShellEvidence struct {
 	startElapsed   time.Duration
 	stderr, prefix []byte
 	truncated      bool
+	parentEnv      [3]bool // PSModulePath, PSModuleAnalysisCachePath, PSDisableModuleAnalysisCacheCleanup
 }
 
 func (p *powerShellEvidence) Write(b []byte) (int, error) {
@@ -242,7 +244,7 @@ func (p *powerShellEvidence) snapshot() (diagnostic, stderr string) {
 	if !p.ended.IsZero() {
 		elapsed = p.ended.Sub(p.began)
 	}
-	return fmt.Sprintf("PowerShell transport %d: phase=%s; start=%s; elapsed=%s; error=%s; stderr: %s", p.sequence, p.phase, p.startElapsed, elapsed, p.failure, stderr), stderr
+	return fmt.Sprintf("PowerShell transport %d: phase=%s; start=%s; elapsed=%s; parent-env(module,cache,cleanup)=%t,%t,%t; error=%s; stderr: %s", p.sequence, p.phase, p.startElapsed, elapsed, p.parentEnv[0], p.parentEnv[1], p.parentEnv[2], p.failure, stderr), stderr
 }
 
 // psSSM executes the public transport's real PowerShell/CIM scripts locally.
@@ -259,6 +261,9 @@ func (s *psSSM) SendCommand(ctx context.Context, in *ssm.SendCommandInput, _ ...
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", strings.Join(in.Parameters["commands"], "\n"))
 	var out bytes.Buffer
 	trace := &powerShellEvidence{phase: "starting", began: time.Now()}
+	for i, key := range []string{"PSModulePath", "PSModuleAnalysisCachePath", "PSDisableModuleAnalysisCacheCleanup"} {
+		_, trace.parentEnv[i] = os.LookupEnv(key)
+	}
 	cmd.Stdout = &out
 	cmd.Stderr = trace
 	cmd.WaitDelay = time.Second
@@ -367,6 +372,116 @@ func (s *psSSM) GetCommandInvocation(_ context.Context, in *ssm.GetCommandInvoca
 		return nil, &ssmtypes.InvocationDoesNotExist{}
 	}
 	return r, nil
+}
+
+// This never runs in a qualifying flow. The native manifest must exist under
+// the actual PS5 home; neither a PS7 manifest nor ambient module lookup is a fallback.
+const failureModuleProbe = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
+$phase='engine'
+try {
+ [Console]::Error.WriteLine('owned probe version='+$PSVersionTable.PSVersion)
+ if ($PSVersionTable.PSVersion.Major -ne 5) { [Console]::Error.WriteLine('owned probe engine/unavailable'); exit 1 }
+ $cache=[Environment]::GetEnvironmentVariable('PSModuleAnalysisCachePath')
+ $root=[IO.Path]::GetDirectoryName($cache)
+ [Console]::Error.WriteLine('owned probe cache='+[IO.File]::Exists($cache))
+ $manifest=[IO.Path]::Combine($PSHOME,'Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1')
+ $dll=[IO.Path]::Combine($PSHOME,'Microsoft.PowerShell.Commands.Management.dll')
+ [Console]::Error.WriteLine('owned probe layout='+[IO.File]::Exists($manifest)+','+[IO.File]::Exists($dll))
+ if (![IO.File]::Exists($manifest)) { [Console]::Error.WriteLine('owned probe layout/unavailable'); exit 1 }
+ $phase='import'
+ [Console]::Error.WriteLine('owned probe import/begin')
+ Import-Module -Name $manifest -ErrorAction Stop -WarningAction SilentlyContinue -Verbose:$false -Debug:$false
+ [Console]::Error.WriteLine('owned probe import/end')
+ $phase='get-item'
+ [Console]::Error.WriteLine('owned probe get-item/begin')
+ $null=Get-Item -LiteralPath $root -ErrorAction Stop
+ [Console]::Error.WriteLine('owned probe get-item/end')
+} catch { [Console]::Error.WriteLine('owned probe failure='+$phase); exit 1 }
+`
+
+var failureProbeLine = regexp.MustCompile(`^owned probe (version=[0-9.]+|cache=(True|False)|layout=(True|False),(True|False)|(engine|layout)/unavailable|(import|get-item)/(begin|end)|failure=(engine|import|get-item))$`)
+
+func (s *psSSM) failureProbe(t *testing.T, root string, j remote.Job) string {
+	// t.Context is already cancelled during Cleanup. This independent diagnostic
+	// gets no more than the original startup duration, and never extends the
+	// existing outer test deadline. No deadline means no provable spare budget.
+	deadline, ok := t.Deadline()
+	if !t.Failed() {
+		return "owned probe unavailable: test-not-failed"
+	}
+	if !ok {
+		return "owned probe unavailable: outer-deadline"
+	}
+	if time.Until(deadline) < 32*time.Second {
+		return "owned probe unavailable: outer-budget"
+	}
+	s.mu.Lock()
+	joined := s.active == 0
+	s.mu.Unlock()
+	if !joined || j.ID == "" || j.Dir != filepath.Join(root, "jobs", j.ID) {
+		return "owned probe unavailable: cleanup-unjoined"
+	}
+	// Start already attempted owned cleanup. Its completion marker is only a
+	// diagnostic precondition, never authority to signal or reopen a process.
+	marker := filepath.Join(j.Dir, "stopped")
+	fi, err := os.Lstat(marker)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != int64(len("confirmed")) {
+		return "owned probe unavailable: cleanup-unconfirmed"
+	}
+	f, err := os.Open(marker)
+	if err != nil {
+		return "owned probe unavailable: cleanup-unconfirmed"
+	}
+	data, readErr := io.ReadAll(io.LimitReader(f, 10))
+	closeErr := f.Close()
+	if readErr != nil || closeErr != nil || string(data) != "confirmed" {
+		return "owned probe unavailable: cleanup-unconfirmed"
+	}
+	dir, err := os.MkdirTemp(root, "module-probe-")
+	if err != nil {
+		return "owned probe unavailable: temp-directory"
+	}
+	// Recheck after local preparation, reserving the unchanged 1s WaitDelay and
+	// another second before the existing outer deadline. Never touch account caches.
+	if time.Until(deadline) < 32*time.Second {
+		return "owned probe unavailable: outer-budget"
+	}
+	probeDeadline := time.Now().Add(30 * time.Second)
+	if latest := deadline.Add(-time.Second); latest.Before(probeDeadline) {
+		probeDeadline = latest
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), probeDeadline)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", failureModuleProbe)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !strings.EqualFold(key, "PSModuleAnalysisCachePath") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "PSModuleAnalysisCachePath="+filepath.Join(dir, "ModuleAnalysisCache"))
+	trace := &powerShellEvidence{phase: "starting", began: time.Now()}
+	cmd.Stdout, cmd.Stderr = io.Discard, trace
+	cmd.WaitDelay = time.Second
+	if err := cmd.Start(); err != nil {
+		return "owned probe unavailable: process-start"
+	}
+	err = cmd.Wait() // exactly one Wait on the retained child handle
+	result := "completed"
+	if ctx.Err() != nil {
+		result = "deadline"
+	} else if err != nil {
+		result = "failed"
+	}
+	_, stderr := trace.snapshot()
+	lines := []string{"owned probe result=" + result}
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) <= 160 && failureProbeLine.MatchString(line) {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n") // only fixed grammar, numeric versions and booleans
 }
 
 type ownedPeer struct {
@@ -488,6 +603,32 @@ func TestWindowsOwnedJobLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
+			var failedStart remote.Job
+			var startupFailed bool
+			var bystanderDone, peerDone <-chan struct{}
+			var bystanderPeer *ownedPeer
+			if mode == "cancel" {
+				// Register before peer/bystander cleanup: LIFO cleanup joins both
+				// before diagnosis. The original require below fails first and stays failed.
+				t.Cleanup(func() {
+					if !startupFailed {
+						return
+					}
+					for _, done := range []<-chan struct{}{bystanderDone, peerDone} {
+						select {
+						case <-done:
+						default:
+							t.Log("owned probe unavailable: fixture-cleanup-unjoined")
+							return
+						}
+					}
+					if bystanderPeer == nil || bystanderPeer.waitErr != nil {
+						t.Log("owned probe unavailable: fixture-cleanup-unconfirmed")
+						return
+					}
+					t.Log(api.failureProbe(t, root, failedStart))
+				})
+			}
 			if mode == "bulk" {
 				listener, err := net.Listen("tcp", "127.0.0.1:0")
 				require.NoError(t, err)
@@ -543,6 +684,7 @@ func TestWindowsOwnedJobLifecycle(t *testing.T) {
 			unrelated.Env = append(os.Environ(), "CUCINA_OWNER_ROLE=unrelated", "CUCINA_OWNER_CONTROL="+listener.Addr().String())
 			require.NoError(t, unrelated.Start())
 			unrelatedDone := make(chan struct{})
+			bystanderDone = unrelatedDone
 			go func() { _ = unrelated.Wait(); close(unrelatedDone) }()
 			peerObserved := false
 			t.Cleanup(func() {
@@ -558,7 +700,9 @@ func TestWindowsOwnedJobLifecycle(t *testing.T) {
 			}) // peer cleanup below closes control and joins first
 			bystander := acceptPeer(t, listener)
 			peerObserved = true
+			peerDone, bystanderPeer = bystander.exited, bystander
 			j, err := h.Start(ctx, "& '"+strings.ReplaceAll(exe, "'", "''")+"'", remote.Opts{Env: map[string]string{"CUCINA_OWNER_ROLE": "payload", "CUCINA_OWNER_MODE": mode, "CUCINA_OWNER_CONTROL": listener.Addr().String()}})
+			failedStart, startupFailed = j, err != nil
 			require.NoError(t, err, api.jobDiagnostics(root))
 			t.Cleanup(func() {
 				cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)

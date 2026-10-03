@@ -128,6 +128,7 @@ type powerShellEvidence struct {
 	startElapsed   time.Duration
 	stderr, prefix []byte
 	truncated      bool
+	parentEnv      [3]bool // PSModulePath, PSModuleAnalysisCachePath, PSDisableModuleAnalysisCacheCleanup
 }
 
 func (p *powerShellEvidence) Write(b []byte) (int, error) {
@@ -181,7 +182,7 @@ func (p *powerShellEvidence) snapshot() (diagnostic, stderr string) {
 	if !p.ended.IsZero() {
 		elapsed = p.ended.Sub(p.began)
 	}
-	return fmt.Sprintf("PowerShell transport %d: phase=%s; start=%s; elapsed=%s; error=%s; stderr: %s", p.sequence, p.phase, p.startElapsed, elapsed, p.failure, stderr), stderr
+	return fmt.Sprintf("PowerShell transport %d: phase=%s; start=%s; elapsed=%s; parent-env(module,cache,cleanup)=%t,%t,%t; error=%s; stderr: %s", p.sequence, p.phase, p.startElapsed, elapsed, p.parentEnv[0], p.parentEnv[1], p.parentEnv[2], p.failure, stderr), stderr
 }
 
 // localPowerShellSSM executes the real Windows scripts at the public SSM port.
@@ -199,6 +200,9 @@ func (s *localPowerShellSSM) SendCommand(ctx context.Context, in *ssm.SendComman
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", strings.Join(in.Parameters["commands"], "\n"))
 	var stdout bytes.Buffer
 	trace := &powerShellEvidence{phase: "starting", began: time.Now()}
+	for i, key := range []string{"PSModulePath", "PSModuleAnalysisCachePath", "PSDisableModuleAnalysisCacheCleanup"} {
+		_, trace.parentEnv[i] = os.LookupEnv(key)
+	}
 	cmd.Stdout, cmd.Stderr = &stdout, trace
 	cmd.WaitDelay = time.Second
 	s.mu.Lock()
