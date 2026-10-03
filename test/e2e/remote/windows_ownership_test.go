@@ -179,36 +179,113 @@ func tunnelFixture() error {
 	return errors.New("missing synthetic tunnel parameters")
 }
 
+// powerShellEvidence retains live stderr without an unbounded buffer. Keep the
+// first fixed startup marker as well as the tail if a later error is verbose.
+type powerShellEvidence struct {
+	mu             sync.Mutex
+	sequence       int
+	phase, failure string
+	began, ended   time.Time
+	startElapsed   time.Duration
+	stderr, prefix []byte
+	truncated      bool
+}
+
+func (p *powerShellEvidence) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	const limit = 2000
+	n := len(b)
+	if len(p.prefix) < 256 {
+		p.prefix = append(p.prefix, b[:min(n, 256-len(p.prefix))]...)
+	}
+	if len(p.stderr)+n > limit {
+		p.truncated = true
+	}
+	if n >= limit {
+		p.stderr = append(p.stderr[:0], b[n-limit:]...)
+	} else {
+		if drop := len(p.stderr) + n - limit; drop > 0 {
+			p.stderr = p.stderr[:copy(p.stderr, p.stderr[drop:])]
+		}
+		p.stderr = append(p.stderr, b...)
+	}
+	return n, nil
+}
+
+func (p *powerShellEvidence) update(phase string, err, contextErr error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.phase = phase
+	if phase == "waiting" {
+		p.startElapsed = time.Since(p.began)
+	} else {
+		p.ended = time.Now()
+	}
+	if err != nil {
+		p.failure = fmt.Sprintf("%v; context: %v", err, contextErr)
+		if len(p.failure) > 500 {
+			p.failure = p.failure[:500]
+		}
+	}
+}
+
+func (p *powerShellEvidence) snapshot() (diagnostic, stderr string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	stderr = string(p.stderr)
+	if p.truncated {
+		const gap = "\n[stderr truncated]\n"
+		stderr = string(p.prefix) + gap + stderr[len(p.prefix)+len(gap):]
+	}
+	elapsed := time.Since(p.began)
+	if !p.ended.IsZero() {
+		elapsed = p.ended.Sub(p.began)
+	}
+	return fmt.Sprintf("PowerShell transport %d: phase=%s; start=%s; elapsed=%s; error=%s; stderr: %s", p.sequence, p.phase, p.startElapsed, elapsed, p.failure, stderr), stderr
+}
+
 // psSSM executes the public transport's real PowerShell/CIM scripts locally.
 // It has no AWS client or credentials and retains results like the SSM port.
 type psSSM struct {
-	mu                sync.Mutex
-	results           map[string]*ssm.GetCommandInvocationOutput
-	transportFailures []string
-	active            int
+	mu         sync.Mutex
+	results    map[string]*ssm.GetCommandInvocationOutput
+	transports []*powerShellEvidence
+	calls      int
+	active     int
 }
 
 func (s *psSSM) SendCommand(ctx context.Context, in *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", strings.Join(in.Parameters["commands"], "\n"))
-	var out, errOut bytes.Buffer
+	var out bytes.Buffer
+	trace := &powerShellEvidence{phase: "starting", began: time.Now()}
 	cmd.Stdout = &out
-	cmd.Stderr = &errOut
+	cmd.Stderr = trace
 	cmd.WaitDelay = time.Second
 	s.mu.Lock()
+	s.calls++
+	trace.sequence = s.calls
+	s.transports = append(s.transports, trace)
+	if len(s.transports) > 8 {
+		s.transports = s.transports[1:]
+	}
 	s.active++
 	s.mu.Unlock()
-	err := cmd.Run()
+	// An active SendCommand is not proof that CreateProcess returned. Preserve
+	// the boundary before waiting on the exact process handle owned by cmd.
+	err := cmd.Start()
+	if err != nil {
+		trace.update("start-failed", err, ctx.Err())
+	} else {
+		trace.update("waiting", nil, nil)
+		err = cmd.Wait()
+		trace.update("completed", err, ctx.Err())
+	}
+	_, stderr := trace.snapshot()
 	s.mu.Lock()
 	s.active--
-	if err != nil {
-		text := errOut.String()
-		if len(text) > 2000 {
-			text = text[len(text)-2000:]
-		}
-		s.transportFailures = append(s.transportFailures, fmt.Sprintf("PowerShell transport: %v; stderr: %s", err, text))
-	}
 	s.mu.Unlock()
-	result := &ssm.GetCommandInvocationOutput{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: aws.String(out.String()), StandardErrorContent: aws.String(errOut.String())}
+	result := &ssm.GetCommandInvocationOutput{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: aws.String(out.String()), StandardErrorContent: aws.String(stderr)}
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {
@@ -228,21 +305,14 @@ func (s *psSSM) failures() string {
 	defer s.mu.Unlock()
 	var out strings.Builder
 	fmt.Fprintf(&out, "active PowerShell transports=%d\n", s.active)
-	for _, failure := range s.transportFailures {
-		out.WriteString(failure)
+	for _, trace := range s.transports {
+		diagnostic, _ := trace.snapshot()
+		out.WriteString(diagnostic)
 		out.WriteByte('\n')
 	}
-	for _, r := range s.results {
-		if r.Status == ssmtypes.CommandInvocationStatusFailed {
-			out.WriteString(aws.ToString(r.StandardErrorContent))
-			out.WriteByte('\n')
-		}
-	}
-	text := out.String()
-	if len(text) > 4000 {
-		text = text[len(text)-4000:]
-	}
-	return text
+	// Eight traces, each with at most 2,000 stderr and 500 error bytes. Do not
+	// tail-truncate the aggregate and discard an earlier startup boundary.
+	return out.String()
 }
 
 func (s *psSSM) jobDiagnostics(root string) string {

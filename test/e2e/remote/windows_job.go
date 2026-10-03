@@ -92,7 +92,11 @@ func windowsJobName(id string) string { return `Local\CucinaE2E-` + id }
 // Diagnostic records contain only fixed phase names and an integer session ID,
 // never command lines, environment values, principals or payload contents.
 func psStartupTrace(dir, role string) string {
-	return "$ErrorActionPreference='Stop'\n" + psProtectJobDirectory + fmt.Sprintf(`
+	// Emit only a fixed role marker before directory/ACL preparation. If that
+	// preparation stalls, the transport can still distinguish script entry from
+	// process/PowerShell startup. Do not create an unprotected diagnostic file.
+	entry := fmt.Sprintf("try { [Console]::Error.WriteLine(%s) } catch { }\n", psQuote("owned startup "+role+"-entry"))
+	return "$ErrorActionPreference='Stop'\n" + entry + psProtectJobDirectory + fmt.Sprintf(`
 $J=%s
 function Report-OwnedTraceFailure {
  try { [Console]::Error.WriteLine('owned startup diagnostics unavailable') } catch { }
