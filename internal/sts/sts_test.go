@@ -420,6 +420,37 @@ func TestTokenExchangeEndToEnd(t *testing.T) {
 	})
 }
 
+// Guards: R-AUTH-2 / docs/security.md trusted discovery — POST /token must refuse
+// mismatched discovery issuers and non-HTTPS JWKS, even with an otherwise valid JWT.
+func TestTokenExchangeRejectsUntrustedDiscovery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*testing.T, *env)
+	}{
+		{"issuer mismatch", func(_ *testing.T, e *env) {
+			e.google.SetDiscovery(e.google.URL+"/other", e.google.URL+"/jwks")
+		}},
+		{"HTTP JWKS", func(t *testing.T, e *env) {
+			e.google.SetDiscovery(e.google.URL, e.google.ServeJWKSOverHTTP(t))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use a fresh verifier so a previously cached good discovery cannot hide
+			// the malformed metadata. Claims, signature, audience and grants stay valid.
+			e := newEnv(t, 1000)
+			tc.configure(t, e)
+			token := e.google.Token(e.googleClaims())
+			r := e.exchange(token, auth.TokenTypeIDToken)
+			assert.Equal(t, http.StatusInternalServerError, r.code)
+			assert.Equal(t, "server_error", r.body["error"])
+			_, minted := r.body["access_token"]
+			assert.False(t, minted, "untrusted discovery must not mint an access token")
+			assert.NotEmpty(t, r.body["error_description"])
+			assert.NotContains(t, r.body["error_description"], token)
+		})
+	}
+}
+
 func getJSON(t *testing.T, u string, v any) {
 	t.Helper()
 	resp, err := http.Get(u)

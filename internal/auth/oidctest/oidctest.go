@@ -67,11 +67,34 @@ type Issuer struct {
 	URL string
 	mu  sync.Mutex
 	// keys[0] signs; all are published.
-	keys []*rsa.PrivateKey
+	keys            []*rsa.PrivateKey
+	discoveryIssuer string
+	jwksURI         string
 }
 
 // NewIssuer creates an issuer with one RS256 key.
-func NewIssuer(url string) *Issuer { return &Issuer{URL: url, keys: []*rsa.PrivateKey{nextKey()}} }
+func NewIssuer(url string) *Issuer {
+	return &Issuer{URL: url, keys: []*rsa.PrivateKey{nextKey()}, discoveryIssuer: url, jwksURI: url + "/jwks"}
+}
+
+// SetDiscovery changes the advertised issuer and JWKS URI without changing the
+// issuer's identity or signing keys, for testing discovery trust boundaries.
+func (i *Issuer) SetDiscovery(issuer, jwksURI string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.discoveryIssuer, i.jwksURI = issuer, jwksURI
+}
+
+// ServeJWKSOverHTTP serves the issuer's real public keys on a separate loopback
+// HTTP endpoint, closed with t.Cleanup. It returns the URL to advertise in discovery.
+func (i *Issuer) ServeJWKSOverHTTP(t testing.TB) string {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(i.JWKS())
+	}))
+	t.Cleanup(s.Close)
+	return s.URL
+}
 
 func kidOf(k *rsa.PrivateKey) string {
 	j := jose.JSONWebKey{Key: &k.PublicKey}
@@ -252,8 +275,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch rest {
 	case ".well-known/openid-configuration":
+		iss.mu.Lock()
+		issuer, jwksURI := iss.discoveryIssuer, iss.jwksURI
+		iss.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"issuer": iss.URL, "jwks_uri": iss.URL + "/jwks",
+			"issuer": issuer, "jwks_uri": jwksURI,
 			"authorization_endpoint": iss.URL + "/authorize", "token_endpoint": iss.URL + "/token",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 			"response_types_supported":              []string{"code"},
