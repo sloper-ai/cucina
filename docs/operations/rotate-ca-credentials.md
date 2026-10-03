@@ -27,7 +27,9 @@ The chart's alerts (`monitoring.prometheusRules`) fire for every role below `thr
 The CA is rotated in three phases: distribute trust in both roots before using the new signer, then retire the old root only after its leaves are gone. The phases are implemented in `internal/pki` (`RotateCA`) and described with their waiting times in
 [`docs/security.md`](../security.md#ca-rotation-two-root-bundle--runbook-inputs). A CA managed by cert-manager is rotated with cert-manager instead (introduce the new root into the bundle, then follow the same waiting, restart and verification steps).
 
-> **Planned: no operator trigger yet.** The phase functions exist, but no controller subcommand, chart hook or `cucinactl` command calls them. Until one does, this section is the specification of each phase (what it changes in the `cucina-ca` Secret, what to wait for, how to verify), not a procedure you can run end to end. Starting a rotation by hand-editing the Secret is not supported.
+> **Operator trigger:** `cucinactl ca rotate <introduce|activate|retire>` calls the audited `ManagementService.RotateCA` RPC. It requires `admin` on **every configured instance name**. Each invocation needs interactive confirmation or `--yes`; activation additionally needs `--trust-distributed`, and retirement needs `--old-leaves-retired`. These are explicit operator attestations enforced by both CLI and server, not actions the controller performs. `--yes` cannot replace them. The response acknowledges only the phase applied to the configured CA Secret, not fleet convergence. No certificate or key material is returned. Commands below are covered by focused local RPC/CLI tests; a live fleet rotation must still be verified at each step.
+>
+> A concurrent Secret update returns `ABORTED` (CLI exit 7), with no automatic phase retry. Re-read the bundle and current phase before deciding what to do next. Do not hand-edit the Secret or blindly retry a phase after a lost response.
 
 ### Before you start
 
@@ -46,10 +48,15 @@ The CA Secret holds `ca.crt` (the trust bundle), `ca.key` (the active issuing ke
 
 ### Phase 1: introduce
 
+```sh
+cucinactl ca rotate introduce --yes
+```
+
 CA2 is generated and added to the bundle (`ca.crt` = CA1 + CA2, the staged key in `next.key`); CA1 keeps signing. **Before the next phase every verifier must trust CA2.** How each one gets it:
 
 | Verifier | How it learns the new bundle | Check |
 | --- | --- | --- |
+| CLI and Bazel clients, including the operator running these phases | Distribute the two-root bundle to their configured CA files or trust stores before activation; keep CA1 during the overlap | Verify that the operator's profile and every client trust bundle contain both recorded fingerprints; otherwise new server certificates may lock them out |
 | Frontend and scheduler (Buildbarn reads the CA bundle once, at start-up; the chart's checksum annotation does not cover it) | **You restart them** after the bundle changes: the scheduler is a single replica (`Recreate`), so expect a short gap in which Bazel retries in-flight Execute streams | `kubectl -n cucina rollout restart deploy/cucina-frontend deploy/cucina-scheduler`, then `kubectl -n cucina rollout status deploy/cucina-frontend deploy/cucina-scheduler` |
 | Controller and STS replicas | Re-read the Secret every minute | wait two minutes |
 | Server certificates | The rotator copies the new bundle into each managed server Secret within about ten minutes; the leaf certificates themselves are **not** re-issued yet | `for g in frontend sts frontend-workers scheduler controller; do printf '%s ' $g; kubectl -n cucina get secret cucina-tls-$g -o jsonpath='{.data.ca\.crt}' \| base64 -d \| grep -c 'BEGIN CERTIFICATE'; done` prints 2 for each |
@@ -59,6 +66,12 @@ CA2 is generated and added to the bundle (`ca.crt` = CA1 + CA2, the staged key i
 Wait for the longest of these (about five days unless you make hosts renew earlier).
 
 ### Phase 2: activate
+
+Only after the distribution checks and waiting period above have completed:
+
+```sh
+cucinactl ca rotate activate --trust-distributed --yes
+```
 
 CA2 becomes the signer (`ca.key` = the staged key, `next.key` is removed); both roots stay trusted. The rotator re-issues every server and controller certificate within about ten minutes, and Buildbarn reloads them without a restart. Verify:
 
@@ -73,15 +86,20 @@ New worker and host certificates are now issued by CA2. Launch a worker and conf
 
 ### Phase 3: retire
 
-Only when no certificate signed by CA1 is still in use: at least the host certificate lifetime (seven days) plus margin after activation. The bundle becomes CA2 only. **Restart the Buildbarn pods again** (`kubectl -n cucina rollout restart deploy/cucina-frontend deploy/cucina-scheduler`) so that they stop trusting CA1: they read the bundle only at start. Then remove CA1 from your MDM trust profiles
+Only when no certificate signed by CA1 is still in use: at least the host certificate lifetime (seven days) plus margin after activation:
+
+```sh
+cucinactl ca rotate retire --old-leaves-retired --yes
+```
+
+The bundle becomes CA2 only. **Restart the Buildbarn pods again** (`kubectl -n cucina rollout restart deploy/cucina-frontend deploy/cucina-scheduler`) so that they stop trusting CA1: they read the bundle only at start. Then remove CA1 from your MDM trust profiles
 ([setup guide](../macos/mac-mini-setup.md), Day 2).
 
 There is no "abort" phase: stopping after introduce or after activate is safe, because both roots stay trusted until you retire.
 
 ### If the CA key is compromised
 
-A compromised CA key cannot be rotated gracefully. Run all three phases in quick succession to put a new CA in place (the restarts of the Buildbarn pods included), then re-enroll the fleet: EC2 workers re-enroll at their next launch; each Mac host needs `cucinactl hosts remove <serial>`
-and a new approval, because its old certificate can no longer authenticate a renewal. Treat it as an incident ([Revocation](revocation.md)). Like the phases themselves, this waits for the operator trigger (planned, above).
+A compromised CA key cannot be rotated gracefully. Treat it as an incident ([Revocation](revocation.md)): isolate affected workers/hosts and stop trusting the compromised identities as part of the response. Introduce CA2, distribute its trust to every verifier, then activate it explicitly. Re-enroll or replace the fleet before attesting that old leaves are no longer in use: EC2 workers re-enroll at their next launch; each affected Mac host needs `cucinactl hosts remove <serial>` and a new approval if its old certificate can no longer authenticate renewal. Retire CA1 only after that condition is true, restart Buildbarn verifiers, and remove old MDM trust. Emergency isolation may replace the normal lifetime wait, but `--yes` does not bypass either attestation, and this RPC performs no fleet restart or MDM change.
 
 ## 2. Rotate the JWT signing keys
 

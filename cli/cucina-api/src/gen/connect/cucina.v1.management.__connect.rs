@@ -210,6 +210,14 @@ pub type OwnedListRevocationsRequestView = ::buffa::view::OwnedView<
 pub type OwnedListRevocationsResponseView = ::buffa::view::OwnedView<
     crate::proto::cucina::v1::__buffa::view::ListRevocationsResponseView<'static>,
 >;
+///Shorthand for `OwnedView<RotateCaRequestView<'static>>`.
+pub type OwnedRotateCaRequestView = ::buffa::view::OwnedView<
+    crate::proto::cucina::v1::__buffa::view::RotateCARequestView<'static>,
+>;
+///Shorthand for `OwnedView<RotateCaResponseView<'static>>`.
+pub type OwnedRotateCaResponseView = ::buffa::view::OwnedView<
+    crate::proto::cucina::v1::__buffa::view::RotateCAResponseView<'static>,
+>;
 ///Shorthand for `OwnedView<GetCostRequestView<'static>>`.
 pub type OwnedGetCostRequestView = ::buffa::view::OwnedView<
     crate::proto::cucina::v1::__buffa::view::GetCostRequestView<'static>,
@@ -1114,6 +1122,40 @@ for ::buffa::view::OwnedView<
         )
     }
 }
+impl ::connectrpc::Encodable<crate::proto::cucina::v1::RotateCAResponse>
+for crate::proto::cucina::v1::__buffa::view::RotateCAResponseView<'_> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self, codec)
+    }
+}
+impl ::connectrpc::Encodable<crate::proto::cucina::v1::RotateCAResponse>
+for ::buffa::view::OwnedView<
+    crate::proto::cucina::v1::__buffa::view::RotateCAResponseView<'static>,
+> {
+    fn encode(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::buffa::bytes::Bytes, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body(self.reborrow(), codec)
+    }
+    /// An `OwnedView` still holds the buffer it was decoded from, so
+    /// its large fields can be handed to the response body by
+    /// reference count instead of copied. The bare view impl above
+    /// cannot do this: it has borrows but no buffer to name.
+    fn encode_segments(
+        &self,
+        codec: ::connectrpc::CodecFormat,
+    ) -> ::std::result::Result<::connectrpc::EncodedBody, ::connectrpc::ConnectError> {
+        ::connectrpc::__codegen::encode_view_body_segments(
+            self.reborrow(),
+            self.bytes(),
+            codec,
+        )
+    }
+}
 impl ::connectrpc::Encodable<crate::proto::cucina::v1::GetCostResponse>
 for crate::proto::cucina::v1::__buffa::view::GetCostResponseView<'_> {
     fn encode(
@@ -1373,6 +1415,12 @@ pub const MANAGEMENT_SERVICE_REVOKE_PRINCIPAL_SPEC: ::connectrpc::Spec = ::conne
 /// Static [`Spec`](::connectrpc::Spec) for the `ListRevocations` RPC, as seen by the server; the generated client passes it with [`origin`](::connectrpc::Spec::origin) `Client` (compare across sides with [`Spec::same_method`](::connectrpc::Spec::same_method)).
 pub const MANAGEMENT_SERVICE_LIST_REVOCATIONS_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
         "/cucina.v1.ManagementService/ListRevocations",
+        ::connectrpc::StreamType::Unary,
+    )
+    .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
+/// Static [`Spec`](::connectrpc::Spec) for the `RotateCA` RPC, as seen by the server; the generated client passes it with [`origin`](::connectrpc::Spec::origin) `Client` (compare across sides with [`Spec::same_method`](::connectrpc::Spec::same_method)).
+pub const MANAGEMENT_SERVICE_ROTATE_CA_SPEC: ::connectrpc::Spec = ::connectrpc::Spec::server(
+        "/cucina.v1.ManagementService/RotateCA",
         ::connectrpc::StreamType::Unary,
     )
     .with_idempotency_level(::connectrpc::IdempotencyLevel::Unknown);
@@ -2178,6 +2226,30 @@ pub trait ManagementService: Send + Sync + 'static {
         Output = ::connectrpc::ServiceResult<
             impl ::connectrpc::Encodable<
                 crate::proto::cucina::v1::ListRevocationsResponse,
+            > + Send + use<'a, Self>,
+        >,
+    > + Send;
+    /// RotateCA applies one operator-confirmed CA phase (R-OPS-5/-6). Cluster-admin
+    /// only and audited; it never restarts the fleet or distributes trust via MDM.
+    ///
+    /// `'a` lets the response body borrow from `&self` (e.g. server-resident state).
+    ///
+    /// `request` is borrowed from the request body and is valid for the
+    /// duration of the call; message fields are read directly on it
+    /// (zero-copy). The response cannot borrow from `request` — use
+    /// `.to_owned_message()` (or copy the specific fields) for anything
+    /// returned, stored, or moved into `tokio::spawn`.
+    fn rotate_ca<'a>(
+        &'a self,
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<
+            '_,
+            crate::proto::cucina::v1::RotateCARequest,
+        >,
+    ) -> impl ::std::future::Future<
+        Output = ::connectrpc::ServiceResult<
+            impl ::connectrpc::Encodable<
+                crate::proto::cucina::v1::RotateCAResponse,
             > + Send + use<'a, Self>,
         >,
     > + Send;
@@ -3198,6 +3270,35 @@ impl<S: ManagementService> ManagementServiceExt for S {
             .with_spec(MANAGEMENT_SERVICE_LIST_REVOCATIONS_SPEC)
             .route_view(
                 MANAGEMENT_SERVICE_SERVICE_NAME,
+                "RotateCA",
+                {
+                    let svc = ::std::sync::Arc::clone(&self);
+                    ::connectrpc::view_handler_fn(move |
+                        ctx,
+                        req: ::buffa::view::OwnedView<
+                            crate::proto::cucina::v1::__buffa::view::RotateCARequestView<
+                                'static,
+                            >,
+                        >,
+                        format|
+                    {
+                        let svc = ::std::sync::Arc::clone(&svc);
+                        async move {
+                            let sreq = ::connectrpc::ServiceRequest::<
+                                crate::proto::cucina::v1::RotateCARequest,
+                            >::from_parts(req.reborrow(), req.bytes());
+                            svc.rotate_ca(ctx, sreq)
+                                .await?
+                                .encode::<
+                                    crate::proto::cucina::v1::RotateCAResponse,
+                                >(format)
+                        }
+                    })
+                },
+            )
+            .with_spec(MANAGEMENT_SERVICE_ROTATE_CA_SPEC)
+            .route_view(
+                MANAGEMENT_SERVICE_SERVICE_NAME,
                 "GetCost",
                 {
                     let svc = ::std::sync::Arc::clone(&self);
@@ -3524,6 +3625,12 @@ impl<T: ManagementService> ::connectrpc::Dispatcher for ManagementServiceServer<
                 Some(
                     ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
                         .with_spec(MANAGEMENT_SERVICE_LIST_REVOCATIONS_SPEC),
+                )
+            }
+            "RotateCA" => {
+                Some(
+                    ::connectrpc::dispatcher::codegen::MethodDescriptor::unary(false)
+                        .with_spec(MANAGEMENT_SERVICE_ROTATE_CA_SPEC),
                 )
             }
             "GetCost" => {
@@ -4135,6 +4242,26 @@ impl<T: ManagementService> ::connectrpc::Dispatcher for ManagementServiceServer<
                         .encode::<
                             crate::proto::cucina::v1::ListRevocationsResponse,
                         >(format)
+                })
+            }
+            "RotateCA" => {
+                let svc = ::std::sync::Arc::clone(&self.inner);
+                Box::pin(async move {
+                    let body = ::connectrpc::dispatcher::codegen::request_proto_bytes::<
+                        crate::proto::cucina::v1::RotateCARequest,
+                    >(request.encoded()?, format)?;
+                    let req: crate::proto::cucina::v1::__buffa::view::RotateCARequestView<
+                        '_,
+                    > = ::connectrpc::dispatcher::codegen::decode_borrowed_request_view(
+                        &body,
+                        ctx.decode_options(),
+                    )?;
+                    let req = ::connectrpc::ServiceRequest::<
+                        crate::proto::cucina::v1::RotateCARequest,
+                    >::from_parts(&req, &body);
+                    svc.rotate_ca(ctx, req)
+                        .await?
+                        .encode::<crate::proto::cucina::v1::RotateCAResponse>(format)
                 })
             }
             "GetCost" => {
@@ -5784,6 +5911,47 @@ where
                 &self.transport,
                 &self.config,
                 MANAGEMENT_SERVICE_LIST_REVOCATIONS_SPEC
+                    .with_origin(::connectrpc::SpecOrigin::Client),
+                request,
+                options,
+            )
+            .await
+    }
+    /// Call the RotateCA RPC. Sends a request to /cucina.v1.ManagementService/RotateCA.
+    pub async fn rotate_ca(
+        &self,
+        request: crate::proto::cucina::v1::RotateCARequest,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::proto::cucina::v1::__buffa::view::RotateCAResponseView<'static>,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        self.rotate_ca_with_options(
+                request,
+                ::connectrpc::client::CallOptions::default(),
+            )
+            .await
+    }
+    /// Call the RotateCA RPC with explicit per-call options. Options override [`ClientConfig`](::connectrpc::client::ClientConfig) defaults.
+    pub async fn rotate_ca_with_options(
+        &self,
+        request: crate::proto::cucina::v1::RotateCARequest,
+        options: ::connectrpc::client::CallOptions,
+    ) -> Result<
+        ::connectrpc::client::UnaryResponse<
+            ::buffa::view::OwnedView<
+                crate::proto::cucina::v1::__buffa::view::RotateCAResponseView<'static>,
+            >,
+        >,
+        ::connectrpc::ConnectError,
+    > {
+        ::connectrpc::client::call_unary(
+                &self.transport,
+                &self.config,
+                MANAGEMENT_SERVICE_ROTATE_CA_SPEC
                     .with_origin(::connectrpc::SpecOrigin::Client),
                 request,
                 options,

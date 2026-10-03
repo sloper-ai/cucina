@@ -368,6 +368,12 @@ impl ManagementClient {
         pb::ListRevocationsResponse
     );
     unary!(
+        rotate_ca,
+        rotate_ca_with_options,
+        pb::RotateCARequest,
+        pb::RotateCAResponse
+    );
+    unary!(
         get_cost,
         get_cost_with_options,
         pb::GetCostRequest,

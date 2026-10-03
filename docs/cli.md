@@ -20,7 +20,7 @@ terminal) opens the interactive TUI.
 Contents: [Install](#install) · [Configuration](#configuration-and-profiles) ·
 [Login](#login) · [Credential helper](#bazel-credential-helper) ·
 [`bazelrc`](#bazelrc) · [Targets schema](#targets-schema) · [Exit codes](#exit-codes) ·
-[JSON output](#json-output-and-schemas) · [Action inspection](#action-inspection) ·
+[JSON output](#json-output-and-schemas) · [CA rotation](#ca-rotation) · [Action inspection](#action-inspection) ·
 [Library API](#library-api-tui) · [Generated code](#generated-code) ·
 [Testing hooks](#testing-hooks) · [Command reference](#command-reference)
 
@@ -128,6 +128,24 @@ CIDR ranges, `*`), then the macOS/Windows system proxy settings. The gRPC channe
 Basic `Proxy-Authorization`) and run TLS to Cucina inside it, so the proxy resolves
 Cucina's name. SOCKS proxies are not supported for gRPC. These settings cover cucinactl
 and the credential helper; Bazel's own connections to Cucina are configured in Bazel.
+
+## CA rotation
+
+`cucinactl ca rotate <introduce|activate|retire>` applies one phase to the configured
+Cucina CA Secret through `ManagementService.RotateCA`. It requires `admin` on every
+configured instance name and is audited, including denied attempts. It returns
+`result.v1` (action `rotate CA`, target = phase, operator next steps), never key material.
+
+Each phase needs terminal confirmation or `--yes`. Activation **also** requires
+`--trust-distributed`; retirement **also** requires `--old-leaves-retired`. The server
+checks these attestations independently: `--yes` cannot replace them. There are no
+implicit fleet restarts, trust-store changes or MDM updates. Follow the distribution,
+verification and waiting steps in the [CA rotation runbook](operations/rotate-ca-credentials.md#1-rotate-the-cucina-ca-two-root-bundle)
+between commands. Concurrent Secret changes return conflict/precondition exit 7; inspect
+the current phase before retrying. An external/cert-manager CA must be rotated by its owner.
+
+The command/confirmation paths are covered by local fake-backed tests; this does not
+claim that a live deployment has completed a CA rotation.
 
 ## Bazel credential helper
 
@@ -871,6 +889,28 @@ List deny-list entries
 ```text
 Usage: cucinactl keys revocations [OPTIONS]
 ```
+
+#### `cucinactl ca`
+
+Operator-driven rotation of the Cucina certificate authority
+
+```text
+Usage: cucinactl ca [OPTIONS] <COMMAND>
+```
+
+##### `cucinactl ca rotate`
+
+Apply one CA phase (cluster admin; no automatic fleet restarts or MDM changes)
+
+```text
+Usage: cucinactl ca rotate [OPTIONS] <PHASE>
+```
+
+| Argument | Description |
+| --- | --- |
+| `<PHASE>` |  [values: introduce, activate, retire] |
+| `--trust-distributed` | Attest that every verifier already trusts both roots (required for activate) |
+| `--old-leaves-retired` | Attest that no old-CA leaves remain after the waiting period (required for retire) |
 
 #### `cucinactl bazelrc`
 

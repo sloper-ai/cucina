@@ -3,20 +3,206 @@
 package mgmt_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
 	"github.com/sloper-ai/cucina/internal/config"
 	"github.com/sloper-ai/cucina/internal/keys"
 	"github.com/sloper-ai/cucina/internal/keys/keystest"
 	"github.com/sloper-ai/cucina/internal/mgmt"
+	"github.com/sloper-ai/cucina/internal/pki"
 )
+
+// caAuditLedger is an in-memory sink for the public structured audit contract.
+type caAuditLedger struct {
+	mu     sync.Mutex
+	events []mgmt.AuditEvent
+}
+
+func (a *caAuditLedger) Record(_ context.Context, e mgmt.AuditEvent) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, e)
+}
+
+func (a *caAuditLedger) snapshot() []mgmt.AuditEvent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]mgmt.AuditEvent(nil), a.events...)
+}
+
+// caConflictClient injects one optimistic-concurrency conflict. A phase that is
+// incorrectly retried would then succeed, exposing the retry through stored state.
+type caConflictClient struct {
+	client.Client
+	mu       sync.Mutex
+	conflict bool
+}
+
+func (c *caConflictClient) failNextConflict() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.conflict = true
+}
+
+func (c *caConflictClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	c.mu.Lock()
+	conflict := c.conflict
+	c.conflict = false
+	c.mu.Unlock()
+	if conflict {
+		return apierrors.NewConflict(schema.GroupResource{Resource: "secrets"}, obj.GetName(), errors.New("key-material-canary"))
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+// TestOperatorCARotation guards R-OPS-5/-6 and R-AUTH-11: the public TLS RPC
+// requires deployment-wide admin, audits every attempted phase, enforces explicit
+// operator attestations, and applies exactly the existing optimistic Secret phases.
+// Invalid phases and conflicts cannot mutate the CA or disclose key material.
+func TestOperatorCARotation(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	material, err := pki.NewCAMaterial(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), pki.DefaultCAValidity, nil)
+	require.NoError(t, err)
+	object := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "cucina", Name: "cucina-ca"}, Data: material}
+	store := &caConflictClient{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(object).Build()}
+	ledger := &caAuditLedger{}
+	f := newFixture(t, func(d *mgmt.Deps, _ *mgmt.Options) {
+		d.CA = &mgmt.CAAdapter{Client: store, Namespace: "cucina", SecretName: "cucina-ca"}
+		d.Auditor = ledger
+	})
+	rpc := serveTLS(t, f).client
+	read := func() (*pki.CA, map[string][]byte, [32]byte) {
+		t.Helper()
+		var secret corev1.Secret
+		require.NoError(t, store.Get(ctx, types.NamespacedName{Namespace: "cucina", Name: "cucina-ca"}, &secret))
+		ca, err := pki.ParseCA(secret.Data)
+		require.NoError(t, err)
+		encoded, err := json.Marshal(secret.Data)
+		require.NoError(t, err)
+		return ca, secret.Data, sha256.Sum256(encoded)
+	}
+	initial, _, _ := read()
+	originalRoot := initial.Certificate().Raw
+	const (
+		introduce = cucinav1.CARotationPhase_CA_ROTATION_PHASE_INTRODUCE
+		activate  = cucinav1.CARotationPhase_CA_ROTATION_PHASE_ACTIVATE
+		retire    = cucinav1.CARotationPhase_CA_ROTATION_PHASE_RETIRE
+	)
+	for _, tc := range []struct {
+		name, token                     string
+		phase                           cucinav1.CARotationPhase
+		trust, leaves, conflict         bool
+		code                            codes.Code
+		roots                           int
+		pending, originalSignerExpected bool
+	}{
+		{name: "anonymous", phase: introduce, code: codes.Unauthenticated},
+		{name: "execute-only reader", token: "tok-reader", phase: introduce, code: codes.PermissionDenied},
+		{name: "partial tenant admin", token: "tok-tenant", phase: introduce, code: codes.PermissionDenied},
+		{name: "unspecified phase", token: "tok-admin", code: codes.InvalidArgument},
+		{name: "unknown phase", token: "tok-admin", phase: cucinav1.CARotationPhase(99), code: codes.InvalidArgument},
+		{name: "activate without introduce", token: "tok-admin", phase: activate, trust: true, code: codes.FailedPrecondition},
+		{name: "conflict is aborted without retry", token: "tok-admin", phase: introduce, conflict: true, code: codes.Aborted},
+		{name: "introduce", token: "tok-admin", phase: introduce, roots: 2, pending: true, originalSignerExpected: true},
+		{name: "duplicate introduce", token: "tok-admin", phase: introduce, code: codes.FailedPrecondition},
+		{name: "retire before activation", token: "tok-admin", phase: retire, leaves: true, code: codes.FailedPrecondition},
+		{name: "activation needs trust attestation", token: "tok-admin", phase: activate, code: codes.FailedPrecondition},
+		{name: "activate", token: "tok-admin", phase: activate, trust: true, roots: 2},
+		{name: "retirement needs leaf attestation", token: "tok-admin", phase: retire, code: codes.FailedPrecondition},
+		{name: "retire", token: "tok-admin", phase: retire, leaves: true, roots: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, beforeData, before := read()
+			priorEvents := len(ledger.snapshot())
+			if tc.conflict {
+				store.failNextConflict()
+			}
+			resp, err := rpc.RotateCA(bearer(ctx, tc.token), &cucinav1.RotateCARequest{
+				Phase: tc.phase, TrustDistributed: tc.trust, OldLeavesRetired: tc.leaves,
+			})
+			require.Equal(t, tc.code, status.Code(err))
+			ca, data, after := read()
+			if tc.code != codes.OK {
+				require.Nil(t, resp)
+				require.Equal(t, before, after, "rejected phases must leave the stored CA unchanged")
+			} else {
+				require.Equal(t, tc.phase, resp.GetPhase())
+				require.Len(t, ca.Roots(), tc.roots)
+				require.Equal(t, tc.pending, len(data[pki.SecretNextCAKey]) > 0)
+				require.Equal(t, tc.originalSignerExpected, bytes.Equal(originalRoot, ca.Certificate().Raw))
+				body, err := protojson.Marshal(resp)
+				require.NoError(t, err)
+				var fields map[string]any
+				require.NoError(t, json.Unmarshal(body, &fields))
+				require.Len(t, fields, 1, "only the applied phase may leave the API")
+				require.Contains(t, fields, "phase")
+			}
+			events := ledger.snapshot()
+			require.Len(t, events, priorEvents+1, "each attempted phase is audited")
+			event := events[len(events)-1]
+			require.Equal(t, cucinav1.ManagementService_RotateCA_FullMethodName, event.Method)
+			require.True(t, event.Mutating)
+			require.Equal(t, tc.code.String(), event.Code)
+			var audited cucinav1.RotateCARequest
+			require.NoError(t, protojson.Unmarshal(event.Request, &audited))
+			require.Equal(t, tc.phase, audited.GetPhase())
+			require.Equal(t, tc.trust, audited.GetTrustDistributed())
+			require.Equal(t, tc.leaves, audited.GetOldLeavesRetired())
+			if tc.token != "" {
+				require.Equal(t, tokens[tc.token].Subject, event.Principal)
+			}
+			record, err := json.Marshal(event)
+			require.NoError(t, err)
+			for _, secret := range [][]byte{beforeData[pki.SecretCAKey], beforeData[pki.SecretNextCAKey], data[pki.SecretCAKey], data[pki.SecretNextCAKey]} {
+				if len(secret) > 0 && bytes.Contains(record, secret) {
+					t.Fatal("CA key material reached the audit sink")
+				}
+			}
+			if bytes.Contains(record, []byte("key-material-canary")) {
+				t.Fatal("upstream Secret error content reached the audit sink")
+			}
+		})
+	}
+
+	t.Run("unconfigured CA is unavailable", func(t *testing.T) {
+		plain := newFixture(t)
+		_, err := serveTLS(t, plain).client.RotateCA(bearer(ctx, "tok-admin"), &cucinav1.RotateCARequest{Phase: introduce})
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	})
+	t.Run("externally managed CA cannot rotate", func(t *testing.T) {
+		var secret corev1.Secret
+		require.NoError(t, store.Get(ctx, types.NamespacedName{Namespace: "cucina", Name: "cucina-ca"}, &secret))
+		delete(secret.Data, pki.SecretCAKey)
+		require.NoError(t, store.Update(ctx, &secret))
+		_, err := rpc.RotateCA(bearer(ctx, "tok-admin"), &cucinav1.RotateCARequest{Phase: introduce})
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+	})
+}
 
 // TestRealCucinaJWTsAndKeyStore guards R-AUTH-9/-10/-11 across the agent boundary:
 // over TLS, the management API verifies real Cucina JWTs minted by internal/keys

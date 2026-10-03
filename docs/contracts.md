@@ -161,6 +161,13 @@ heartbeat-to-CR path exists. These endpoints are internal, just like `/sd/worker
 `cucinactl` ↔ `ManagementService` over TLS with `Authorization: Bearer <Cucina JWT>`; mutating methods need `admin`. Audit log line per mutating call
 (JSON: time, principal, method, request summary, result). Break-glass: `cucinactl login --key <service-account key>`.
 
+`ManagementService.RotateCA` exposes the existing managed-CA phases through `cucinactl ca rotate`: `INTRODUCE`, `ACTIVATE`,
+and `RETIRE`. It is an audited deployment-wide mutation requiring admin access to every configured instance name. Activation
+requires `trust_distributed=true`; retirement requires `old_leaves_retired=true`. These are explicit operator attestations,
+not automated proof that trust distribution, restarts, MDM updates or old-leaf retirement have happened. Unspecified/unknown
+phases are rejected before mutation, optimistic Secret conflicts return `Aborted` without automatic phase retries, and responses
+contain only the applied phase, never certificate or private-key material. The rotation runbook owns the intervening operational steps.
+
 Pool timelines use `PoolEvent.type="drain-acknowledged"` only after every `AddDrain` call for that VM's pool queues succeeds;
 `subject` is the node ID and `time` is the successful action's completion time, never the failed intent's time. A partial queue
 failure (including `ErrQueueUnknown`/`ErrNotFound`) emits no acknowledgement for that VM, without suppressing successful peers;

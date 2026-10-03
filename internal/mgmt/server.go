@@ -37,6 +37,7 @@ type Deps struct {
 	Enrollment  Enrollment
 	Keys        KeyAdmin
 	Revocations RevocationAdmin
+	CA          CAAdmin
 	Cost        CostSource
 	Images      ImageSource
 	Components  ComponentSource

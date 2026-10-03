@@ -173,6 +173,8 @@ pub struct MgmtState {
     pub execute_responses: Mutex<HashMap<String, Vec<u8>>>,
     pub keys: Mutex<Vec<pb::ServiceKeyInfo>>,
     pub revocations: Mutex<Vec<pb::Revocation>>,
+    /// Last applied operator CA phase; no certificate or key material in this fake.
+    pub ca_phase: Mutex<pb::CARotationPhase>,
     pub fail: Mutex<HashMap<String, (ErrorCode, String)>>,
     /// The first N `WatchOperations` streams fail with UNAVAILABLE after one event.
     pub watch_breaks: AtomicUsize,
@@ -206,6 +208,7 @@ impl FakeMgmt {
                     ..Default::default()
                 }]),
                 revocations: Mutex::new(Vec::new()),
+                ca_phase: Mutex::new(pb::CARotationPhase::Unspecified),
                 fail: Mutex::new(HashMap::new()),
                 watch_breaks: AtomicUsize::new(0),
                 watch_calls: AtomicUsize::new(0),
@@ -802,6 +805,43 @@ impl ManagementService for FakeMgmt {
             }
         }
     );
+
+    async fn rotate_ca(
+        &self,
+        ctx: RequestContext,
+        req: ServiceRequest<'_, pb::RotateCARequest>,
+    ) -> ServiceResult<pb::RotateCAResponse> {
+        self.check(&ctx, "rotate_ca")?;
+        let req = req.to_owned_message();
+        let mut current = self.state.ca_phase.lock().unwrap();
+        let next = if req.phase == pb::CARotationPhase::Introduce
+            && matches!(
+                *current,
+                pb::CARotationPhase::Unspecified | pb::CARotationPhase::Retire
+            ) {
+            pb::CARotationPhase::Introduce
+        } else if req.phase == pb::CARotationPhase::Activate
+            && req.trust_distributed
+            && *current == pb::CARotationPhase::Introduce
+        {
+            pb::CARotationPhase::Activate
+        } else if req.phase == pb::CARotationPhase::Retire
+            && req.old_leaves_retired
+            && *current == pb::CARotationPhase::Activate
+        {
+            pb::CARotationPhase::Retire
+        } else {
+            return Err(ConnectError::new(
+                ErrorCode::FailedPrecondition,
+                "CA phase or operator attestation is invalid",
+            ));
+        };
+        *current = next;
+        Response::ok(pb::RotateCAResponse {
+            phase: next.into(),
+            ..Default::default()
+        })
+    }
 
     unary!(
         get_cost,

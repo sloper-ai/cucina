@@ -53,6 +53,7 @@ const (
 	ManagementService_RevokeServiceKey_FullMethodName     = "/cucina.v1.ManagementService/RevokeServiceKey"
 	ManagementService_RevokePrincipal_FullMethodName      = "/cucina.v1.ManagementService/RevokePrincipal"
 	ManagementService_ListRevocations_FullMethodName      = "/cucina.v1.ManagementService/ListRevocations"
+	ManagementService_RotateCA_FullMethodName             = "/cucina.v1.ManagementService/RotateCA"
 	ManagementService_GetCost_FullMethodName              = "/cucina.v1.ManagementService/GetCost"
 	ManagementService_ListImages_FullMethodName           = "/cucina.v1.ManagementService/ListImages"
 	ManagementService_CollectSupportBundle_FullMethodName = "/cucina.v1.ManagementService/CollectSupportBundle"
@@ -122,6 +123,9 @@ type ManagementServiceClient interface {
 	// RevokePrincipal adds a sid or sub to the deny-list (effective in <= 3 min, R-AUTH-9).
 	RevokePrincipal(ctx context.Context, in *RevokePrincipalRequest, opts ...grpc.CallOption) (*RevokePrincipalResponse, error)
 	ListRevocations(ctx context.Context, in *ListRevocationsRequest, opts ...grpc.CallOption) (*ListRevocationsResponse, error)
+	// RotateCA applies one operator-confirmed CA phase (R-OPS-5/-6). Cluster-admin
+	// only and audited; it never restarts the fleet or distributes trust via MDM.
+	RotateCA(ctx context.Context, in *RotateCARequest, opts ...grpc.CallOption) (*RotateCAResponse, error)
 	// --- Cost, images, diagnostics ----------------------------------------
 	GetCost(ctx context.Context, in *GetCostRequest, opts ...grpc.CallOption) (*GetCostResponse, error)
 	ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
@@ -493,6 +497,16 @@ func (c *managementServiceClient) ListRevocations(ctx context.Context, in *ListR
 	return out, nil
 }
 
+func (c *managementServiceClient) RotateCA(ctx context.Context, in *RotateCARequest, opts ...grpc.CallOption) (*RotateCAResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RotateCAResponse)
+	err := c.cc.Invoke(ctx, ManagementService_RotateCA_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *managementServiceClient) GetCost(ctx context.Context, in *GetCostRequest, opts ...grpc.CallOption) (*GetCostResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCostResponse)
@@ -596,6 +610,9 @@ type ManagementServiceServer interface {
 	// RevokePrincipal adds a sid or sub to the deny-list (effective in <= 3 min, R-AUTH-9).
 	RevokePrincipal(context.Context, *RevokePrincipalRequest) (*RevokePrincipalResponse, error)
 	ListRevocations(context.Context, *ListRevocationsRequest) (*ListRevocationsResponse, error)
+	// RotateCA applies one operator-confirmed CA phase (R-OPS-5/-6). Cluster-admin
+	// only and audited; it never restarts the fleet or distributes trust via MDM.
+	RotateCA(context.Context, *RotateCARequest) (*RotateCAResponse, error)
 	// --- Cost, images, diagnostics ----------------------------------------
 	GetCost(context.Context, *GetCostRequest) (*GetCostResponse, error)
 	ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
@@ -706,6 +723,9 @@ func (UnimplementedManagementServiceServer) RevokePrincipal(context.Context, *Re
 }
 func (UnimplementedManagementServiceServer) ListRevocations(context.Context, *ListRevocationsRequest) (*ListRevocationsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListRevocations not implemented")
+}
+func (UnimplementedManagementServiceServer) RotateCA(context.Context, *RotateCARequest) (*RotateCAResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RotateCA not implemented")
 }
 func (UnimplementedManagementServiceServer) GetCost(context.Context, *GetCostRequest) (*GetCostResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCost not implemented")
@@ -1285,6 +1305,24 @@ func _ManagementService_ListRevocations_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ManagementService_RotateCA_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RotateCARequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManagementServiceServer).RotateCA(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ManagementService_RotateCA_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManagementServiceServer).RotateCA(ctx, req.(*RotateCARequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ManagementService_GetCost_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetCostRequest)
 	if err := dec(in); err != nil {
@@ -1450,6 +1488,10 @@ var ManagementService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListRevocations",
 			Handler:    _ManagementService_ListRevocations_Handler,
+		},
+		{
+			MethodName: "RotateCA",
+			Handler:    _ManagementService_RotateCA_Handler,
 		},
 		{
 			MethodName: "GetCost",

@@ -108,6 +108,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Login(args) => runtime()?.block_on(account::login(&ctx, &args)),
         Command::Whoami => runtime()?.block_on(account::whoami(&ctx)),
         Command::Keys(cmd) => runtime()?.block_on(account::keys(&ctx, cmd)),
+        Command::Ca(cmd) => runtime()?.block_on(account::ca(&ctx, cmd)),
         Command::Status => runtime()?.block_on(fleet::status(&ctx)),
         Command::Pools(cmd) => runtime()?.block_on(fleet::pools(&ctx, cmd)),
         Command::Workers(cmd) => runtime()?.block_on(fleet::workers(&ctx, cmd)),

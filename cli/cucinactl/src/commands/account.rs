@@ -15,7 +15,7 @@ use crate::auth::oidc::{self, Browser, LoginOptions};
 use crate::auth::secrets::SecretKind;
 use crate::auth::token::{CachedToken, unverified_claims};
 use crate::auth::{ProfileCtx, sts};
-use crate::cli::{KeysCmd, LoginArgs, LogoutArgs};
+use crate::cli::{CaCmd, CaRotationPhase, KeysCmd, LoginArgs, LogoutArgs};
 use crate::config::{self, AuthMethod, Profile};
 use crate::exit::CliError;
 use crate::http::Http;
@@ -447,6 +447,49 @@ pub async fn whoami(ctx: &Ctx) -> Result<()> {
             verification_error,
         },
     )
+}
+
+/// Applies one explicitly requested CA phase; all fleet/trust distribution stays
+/// operator-controlled. The server independently enforces both attestations.
+pub async fn ca(ctx: &Ctx, cmd: CaCmd) -> Result<()> {
+    let CaCmd::Rotate {
+        phase,
+        trust_distributed,
+        old_leaves_retired,
+    } = cmd;
+    let (wire_phase, name, next) = match phase {
+        CaRotationPhase::Introduce => (
+            pb::CARotationPhase::Introduce,
+            "introduce",
+            "Both roots are published in the CA Secret; the old CA still signs. Distribute trust to every verifier and follow the CA rotation runbook before activating. No fleet restart or MDM change was performed.",
+        ),
+        CaRotationPhase::Activate => (
+            pb::CARotationPhase::Activate,
+            "activate",
+            "The new CA is selected as signer; replicas must reload it and both roots remain trusted. Verify renewed certificates and wait for every old-CA leaf to retire before removing the old root. No fleet restart or MDM change was performed.",
+        ),
+        CaRotationPhase::Retire => (
+            pb::CARotationPhase::Retire,
+            "retire",
+            "The old root was removed from the CA Secret. Complete the runbook's verifier restarts and remove old MDM trust explicitly. No fleet restart or MDM change was performed.",
+        ),
+    };
+    ctx.confirm(&format!("apply CA rotation phase {name}"))?;
+    let session = ctx.session().await?;
+    let result = session
+        .management
+        .rotate_ca(pb::RotateCARequest {
+            phase: wire_phase.into(),
+            trust_distributed,
+            old_leaves_retired,
+            ..Default::default()
+        })
+        .await?;
+    anyhow::ensure!(
+        result.phase == wire_phase,
+        "management returned a different CA rotation phase"
+    );
+    emit(ctx.global.output, &ResultView::new("rotate CA", name, next))
 }
 
 pub async fn keys(ctx: &Ctx, cmd: KeysCmd) -> Result<()> {

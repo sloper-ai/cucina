@@ -25,6 +25,59 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// CARotationPhase is one step of the operator-driven two-root CA rotation.
+type CARotationPhase int32
+
+const (
+	CARotationPhase_CA_ROTATION_PHASE_UNSPECIFIED CARotationPhase = 0
+	CARotationPhase_CA_ROTATION_PHASE_INTRODUCE   CARotationPhase = 1 // publish both roots; the old CA keeps signing
+	CARotationPhase_CA_ROTATION_PHASE_ACTIVATE    CARotationPhase = 2 // the introduced CA becomes the signer
+	CARotationPhase_CA_ROTATION_PHASE_RETIRE      CARotationPhase = 3 // remove old trust only after its leaves are gone
+)
+
+// Enum value maps for CARotationPhase.
+var (
+	CARotationPhase_name = map[int32]string{
+		0: "CA_ROTATION_PHASE_UNSPECIFIED",
+		1: "CA_ROTATION_PHASE_INTRODUCE",
+		2: "CA_ROTATION_PHASE_ACTIVATE",
+		3: "CA_ROTATION_PHASE_RETIRE",
+	}
+	CARotationPhase_value = map[string]int32{
+		"CA_ROTATION_PHASE_UNSPECIFIED": 0,
+		"CA_ROTATION_PHASE_INTRODUCE":   1,
+		"CA_ROTATION_PHASE_ACTIVATE":    2,
+		"CA_ROTATION_PHASE_RETIRE":      3,
+	}
+)
+
+func (x CARotationPhase) Enum() *CARotationPhase {
+	p := new(CARotationPhase)
+	*p = x
+	return p
+}
+
+func (x CARotationPhase) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CARotationPhase) Descriptor() protoreflect.EnumDescriptor {
+	return file_cucina_v1_management_proto_enumTypes[0].Descriptor()
+}
+
+func (CARotationPhase) Type() protoreflect.EnumType {
+	return &file_cucina_v1_management_proto_enumTypes[0]
+}
+
+func (x CARotationPhase) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CARotationPhase.Descriptor instead.
+func (CARotationPhase) EnumDescriptor() ([]byte, []int) {
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{0}
+}
+
 type OperationEvent_Kind int32
 
 const (
@@ -61,11 +114,11 @@ func (x OperationEvent_Kind) String() string {
 }
 
 func (OperationEvent_Kind) Descriptor() protoreflect.EnumDescriptor {
-	return file_cucina_v1_management_proto_enumTypes[0].Descriptor()
+	return file_cucina_v1_management_proto_enumTypes[1].Descriptor()
 }
 
 func (OperationEvent_Kind) Type() protoreflect.EnumType {
-	return &file_cucina_v1_management_proto_enumTypes[0]
+	return &file_cucina_v1_management_proto_enumTypes[1]
 }
 
 func (x OperationEvent_Kind) Number() protoreflect.EnumNumber {
@@ -4342,6 +4395,116 @@ func (x *Revocation) GetCreatedBy() string {
 	return ""
 }
 
+type RotateCARequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Phase CARotationPhase        `protobuf:"varint,1,opt,name=phase,proto3,enum=cucina.v1.CARotationPhase" json:"phase,omitempty"`
+	// Required for ACTIVATE: the operator has distributed both roots to every
+	// verifier, including Buildbarn and MDM-managed hosts. This is an attestation,
+	// not an instruction to distribute trust or restart any component.
+	TrustDistributed bool `protobuf:"varint,2,opt,name=trust_distributed,json=trustDistributed,proto3" json:"trust_distributed,omitempty"`
+	// Required for RETIRE: the operator has verified that no old-CA leaf remains
+	// in use and has observed the documented lifetime/retirement waiting period.
+	OldLeavesRetired bool `protobuf:"varint,3,opt,name=old_leaves_retired,json=oldLeavesRetired,proto3" json:"old_leaves_retired,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RotateCARequest) Reset() {
+	*x = RotateCARequest{}
+	mi := &file_cucina_v1_management_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateCARequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateCARequest) ProtoMessage() {}
+
+func (x *RotateCARequest) ProtoReflect() protoreflect.Message {
+	mi := &file_cucina_v1_management_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateCARequest.ProtoReflect.Descriptor instead.
+func (*RotateCARequest) Descriptor() ([]byte, []int) {
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *RotateCARequest) GetPhase() CARotationPhase {
+	if x != nil {
+		return x.Phase
+	}
+	return CARotationPhase_CA_ROTATION_PHASE_UNSPECIFIED
+}
+
+func (x *RotateCARequest) GetTrustDistributed() bool {
+	if x != nil {
+		return x.TrustDistributed
+	}
+	return false
+}
+
+func (x *RotateCARequest) GetOldLeavesRetired() bool {
+	if x != nil {
+		return x.OldLeavesRetired
+	}
+	return false
+}
+
+type RotateCAResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The phase applied to the CA Secret. No certificates or key material returned.
+	Phase         CARotationPhase `protobuf:"varint,1,opt,name=phase,proto3,enum=cucina.v1.CARotationPhase" json:"phase,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RotateCAResponse) Reset() {
+	*x = RotateCAResponse{}
+	mi := &file_cucina_v1_management_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RotateCAResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RotateCAResponse) ProtoMessage() {}
+
+func (x *RotateCAResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_cucina_v1_management_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RotateCAResponse.ProtoReflect.Descriptor instead.
+func (*RotateCAResponse) Descriptor() ([]byte, []int) {
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *RotateCAResponse) GetPhase() CARotationPhase {
+	if x != nil {
+		return x.Phase
+	}
+	return CARotationPhase_CA_ROTATION_PHASE_UNSPECIFIED
+}
+
 type GetCostRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Pool          string                 `protobuf:"bytes,1,opt,name=pool,proto3" json:"pool,omitempty"` // optional
@@ -4352,7 +4515,7 @@ type GetCostRequest struct {
 
 func (x *GetCostRequest) Reset() {
 	*x = GetCostRequest{}
-	mi := &file_cucina_v1_management_proto_msgTypes[68]
+	mi := &file_cucina_v1_management_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4364,7 +4527,7 @@ func (x *GetCostRequest) String() string {
 func (*GetCostRequest) ProtoMessage() {}
 
 func (x *GetCostRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_management_proto_msgTypes[68]
+	mi := &file_cucina_v1_management_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4377,7 +4540,7 @@ func (x *GetCostRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCostRequest.ProtoReflect.Descriptor instead.
 func (*GetCostRequest) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_management_proto_rawDescGZIP(), []int{68}
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *GetCostRequest) GetPool() string {
@@ -4405,7 +4568,7 @@ type GetCostResponse struct {
 
 func (x *GetCostResponse) Reset() {
 	*x = GetCostResponse{}
-	mi := &file_cucina_v1_management_proto_msgTypes[69]
+	mi := &file_cucina_v1_management_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4417,7 +4580,7 @@ func (x *GetCostResponse) String() string {
 func (*GetCostResponse) ProtoMessage() {}
 
 func (x *GetCostResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_management_proto_msgTypes[69]
+	mi := &file_cucina_v1_management_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4430,7 +4593,7 @@ func (x *GetCostResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCostResponse.ProtoReflect.Descriptor instead.
 func (*GetCostResponse) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_management_proto_rawDescGZIP(), []int{69}
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *GetCostResponse) GetCost() *CostSummary {
@@ -4468,7 +4631,7 @@ type CostLine struct {
 
 func (x *CostLine) Reset() {
 	*x = CostLine{}
-	mi := &file_cucina_v1_management_proto_msgTypes[70]
+	mi := &file_cucina_v1_management_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4480,7 +4643,7 @@ func (x *CostLine) String() string {
 func (*CostLine) ProtoMessage() {}
 
 func (x *CostLine) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_management_proto_msgTypes[70]
+	mi := &file_cucina_v1_management_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4493,7 +4656,7 @@ func (x *CostLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CostLine.ProtoReflect.Descriptor instead.
 func (*CostLine) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_management_proto_rawDescGZIP(), []int{70}
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *CostLine) GetPool() string {
@@ -4546,7 +4709,7 @@ type ListImagesRequest struct {
 
 func (x *ListImagesRequest) Reset() {
 	*x = ListImagesRequest{}
-	mi := &file_cucina_v1_management_proto_msgTypes[71]
+	mi := &file_cucina_v1_management_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4558,7 +4721,7 @@ func (x *ListImagesRequest) String() string {
 func (*ListImagesRequest) ProtoMessage() {}
 
 func (x *ListImagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_management_proto_msgTypes[71]
+	mi := &file_cucina_v1_management_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4571,7 +4734,7 @@ func (x *ListImagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListImagesRequest.ProtoReflect.Descriptor instead.
 func (*ListImagesRequest) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_management_proto_rawDescGZIP(), []int{71}
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{73}
 }
 
 type ListImagesResponse struct {
@@ -4583,7 +4746,7 @@ type ListImagesResponse struct {
 
 func (x *ListImagesResponse) Reset() {
 	*x = ListImagesResponse{}
-	mi := &file_cucina_v1_management_proto_msgTypes[72]
+	mi := &file_cucina_v1_management_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4595,7 +4758,7 @@ func (x *ListImagesResponse) String() string {
 func (*ListImagesResponse) ProtoMessage() {}
 
 func (x *ListImagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_management_proto_msgTypes[72]
+	mi := &file_cucina_v1_management_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4608,7 +4771,7 @@ func (x *ListImagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListImagesResponse.ProtoReflect.Descriptor instead.
 func (*ListImagesResponse) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_management_proto_rawDescGZIP(), []int{72}
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ListImagesResponse) GetImages() []*ImageInfo {
@@ -4635,7 +4798,7 @@ type ImageInfo struct {
 
 func (x *ImageInfo) Reset() {
 	*x = ImageInfo{}
-	mi := &file_cucina_v1_management_proto_msgTypes[73]
+	mi := &file_cucina_v1_management_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4647,7 +4810,7 @@ func (x *ImageInfo) String() string {
 func (*ImageInfo) ProtoMessage() {}
 
 func (x *ImageInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_management_proto_msgTypes[73]
+	mi := &file_cucina_v1_management_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4660,7 +4823,7 @@ func (x *ImageInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImageInfo.ProtoReflect.Descriptor instead.
 func (*ImageInfo) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_management_proto_rawDescGZIP(), []int{73}
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ImageInfo) GetPool() string {
@@ -4735,7 +4898,7 @@ type CollectSupportBundleRequest struct {
 
 func (x *CollectSupportBundleRequest) Reset() {
 	*x = CollectSupportBundleRequest{}
-	mi := &file_cucina_v1_management_proto_msgTypes[74]
+	mi := &file_cucina_v1_management_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4747,7 +4910,7 @@ func (x *CollectSupportBundleRequest) String() string {
 func (*CollectSupportBundleRequest) ProtoMessage() {}
 
 func (x *CollectSupportBundleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cucina_v1_management_proto_msgTypes[74]
+	mi := &file_cucina_v1_management_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4760,7 +4923,7 @@ func (x *CollectSupportBundleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollectSupportBundleRequest.ProtoReflect.Descriptor instead.
 func (*CollectSupportBundleRequest) Descriptor() ([]byte, []int) {
-	return file_cucina_v1_management_proto_rawDescGZIP(), []int{74}
+	return file_cucina_v1_management_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *CollectSupportBundleRequest) GetIncludeLogs() bool {
@@ -5123,7 +5286,13 @@ const file_cucina_v1_management_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x124\n" +
 	"\acreated\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\acreated\x12\x1d\n" +
 	"\n" +
-	"created_by\x18\x05 \x01(\tR\tcreatedBy\"V\n" +
+	"created_by\x18\x05 \x01(\tR\tcreatedBy\"\x9e\x01\n" +
+	"\x0fRotateCARequest\x120\n" +
+	"\x05phase\x18\x01 \x01(\x0e2\x1a.cucina.v1.CARotationPhaseR\x05phase\x12+\n" +
+	"\x11trust_distributed\x18\x02 \x01(\bR\x10trustDistributed\x12,\n" +
+	"\x12old_leaves_retired\x18\x03 \x01(\bR\x10oldLeavesRetired\"D\n" +
+	"\x10RotateCAResponse\x120\n" +
+	"\x05phase\x18\x01 \x01(\x0e2\x1a.cucina.v1.CARotationPhaseR\x05phase\"V\n" +
 	"\x0eGetCostRequest\x12\x12\n" +
 	"\x04pool\x18\x01 \x01(\tR\x04pool\x120\n" +
 	"\x05since\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\"\x8a\x01\n" +
@@ -5155,7 +5324,12 @@ const file_cucina_v1_management_proto_rawDesc = "" +
 	"\vfast_launch\x18\t \x01(\tR\n" +
 	"fastLaunch\"@\n" +
 	"\x1bCollectSupportBundleRequest\x12!\n" +
-	"\finclude_logs\x18\x01 \x01(\bR\vincludeLogs2\x97\x16\n" +
+	"\finclude_logs\x18\x01 \x01(\bR\vincludeLogs*\x93\x01\n" +
+	"\x0fCARotationPhase\x12!\n" +
+	"\x1dCA_ROTATION_PHASE_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bCA_ROTATION_PHASE_INTRODUCE\x10\x01\x12\x1e\n" +
+	"\x1aCA_ROTATION_PHASE_ACTIVATE\x10\x02\x12\x1c\n" +
+	"\x18CA_ROTATION_PHASE_RETIRE\x10\x032\xdc\x16\n" +
 	"\x11ManagementService\x12F\n" +
 	"\tGetStatus\x12\x1b.cucina.v1.GetStatusRequest\x1a\x1c.cucina.v1.GetStatusResponse\x12G\n" +
 	"\rWatchOverview\x12\x1f.cucina.v1.WatchOverviewRequest\x1a\x13.cucina.v1.Overview0\x01\x12F\n" +
@@ -5191,7 +5365,8 @@ const file_cucina_v1_management_proto_rawDesc = "" +
 	"\x0fListServiceKeys\x12!.cucina.v1.ListServiceKeysRequest\x1a\".cucina.v1.ListServiceKeysResponse\x12[\n" +
 	"\x10RevokeServiceKey\x12\".cucina.v1.RevokeServiceKeyRequest\x1a#.cucina.v1.RevokeServiceKeyResponse\x12X\n" +
 	"\x0fRevokePrincipal\x12!.cucina.v1.RevokePrincipalRequest\x1a\".cucina.v1.RevokePrincipalResponse\x12X\n" +
-	"\x0fListRevocations\x12!.cucina.v1.ListRevocationsRequest\x1a\".cucina.v1.ListRevocationsResponse\x12@\n" +
+	"\x0fListRevocations\x12!.cucina.v1.ListRevocationsRequest\x1a\".cucina.v1.ListRevocationsResponse\x12C\n" +
+	"\bRotateCA\x12\x1a.cucina.v1.RotateCARequest\x1a\x1b.cucina.v1.RotateCAResponse\x12@\n" +
 	"\aGetCost\x12\x19.cucina.v1.GetCostRequest\x1a\x1a.cucina.v1.GetCostResponse\x12I\n" +
 	"\n" +
 	"ListImages\x12\x1c.cucina.v1.ListImagesRequest\x1a\x1d.cucina.v1.ListImagesResponse\x12U\n" +
@@ -5209,251 +5384,258 @@ func file_cucina_v1_management_proto_rawDescGZIP() []byte {
 	return file_cucina_v1_management_proto_rawDescData
 }
 
-var file_cucina_v1_management_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_cucina_v1_management_proto_msgTypes = make([]protoimpl.MessageInfo, 78)
+var file_cucina_v1_management_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_cucina_v1_management_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
 var file_cucina_v1_management_proto_goTypes = []any{
-	(OperationEvent_Kind)(0),            // 0: cucina.v1.OperationEvent.Kind
-	(*GetStatusRequest)(nil),            // 1: cucina.v1.GetStatusRequest
-	(*GetStatusResponse)(nil),           // 2: cucina.v1.GetStatusResponse
-	(*ComponentStatus)(nil),             // 3: cucina.v1.ComponentStatus
-	(*WatchOverviewRequest)(nil),        // 4: cucina.v1.WatchOverviewRequest
-	(*Overview)(nil),                    // 5: cucina.v1.Overview
-	(*PoolSummary)(nil),                 // 6: cucina.v1.PoolSummary
-	(*QueueSummary)(nil),                // 7: cucina.v1.QueueSummary
-	(*HostSummary)(nil),                 // 8: cucina.v1.HostSummary
-	(*CostSummary)(nil),                 // 9: cucina.v1.CostSummary
-	(*PoolCost)(nil),                    // 10: cucina.v1.PoolCost
-	(*StartLatency)(nil),                // 11: cucina.v1.StartLatency
-	(*ListPoolsRequest)(nil),            // 12: cucina.v1.ListPoolsRequest
-	(*ListPoolsResponse)(nil),           // 13: cucina.v1.ListPoolsResponse
-	(*GetPoolRequest)(nil),              // 14: cucina.v1.GetPoolRequest
-	(*GetPoolResponse)(nil),             // 15: cucina.v1.GetPoolResponse
-	(*PoolEvent)(nil),                   // 16: cucina.v1.PoolEvent
-	(*SetPoolFloorRequest)(nil),         // 17: cucina.v1.SetPoolFloorRequest
-	(*SetPoolFloorResponse)(nil),        // 18: cucina.v1.SetPoolFloorResponse
-	(*CordonPoolRequest)(nil),           // 19: cucina.v1.CordonPoolRequest
-	(*CordonPoolResponse)(nil),          // 20: cucina.v1.CordonPoolResponse
-	(*GarbageCollectPoolRequest)(nil),   // 21: cucina.v1.GarbageCollectPoolRequest
-	(*GarbageCollectPoolResponse)(nil),  // 22: cucina.v1.GarbageCollectPoolResponse
-	(*WorkerSummary)(nil),               // 23: cucina.v1.WorkerSummary
-	(*ListWorkersRequest)(nil),          // 24: cucina.v1.ListWorkersRequest
-	(*ListWorkersResponse)(nil),         // 25: cucina.v1.ListWorkersResponse
-	(*DrainWorkerRequest)(nil),          // 26: cucina.v1.DrainWorkerRequest
-	(*DrainWorkerResponse)(nil),         // 27: cucina.v1.DrainWorkerResponse
-	(*StreamWorkerLogsRequest)(nil),     // 28: cucina.v1.StreamWorkerLogsRequest
-	(*LogChunk)(nil),                    // 29: cucina.v1.LogChunk
-	(*HostRef)(nil),                     // 30: cucina.v1.HostRef
-	(*HostActionResponse)(nil),          // 31: cucina.v1.HostActionResponse
-	(*ListHostsRequest)(nil),            // 32: cucina.v1.ListHostsRequest
-	(*ListHostsResponse)(nil),           // 33: cucina.v1.ListHostsResponse
-	(*HostDetail)(nil),                  // 34: cucina.v1.HostDetail
-	(*HostVM)(nil),                      // 35: cucina.v1.HostVM
-	(*ReimageHostRequest)(nil),          // 36: cucina.v1.ReimageHostRequest
-	(*RegisterHostSerialsRequest)(nil),  // 37: cucina.v1.RegisterHostSerialsRequest
-	(*RegisterHostSerialsResponse)(nil), // 38: cucina.v1.RegisterHostSerialsResponse
-	(*ApproveHostRequest)(nil),          // 39: cucina.v1.ApproveHostRequest
-	(*CreateEnrollTokenRequest)(nil),    // 40: cucina.v1.CreateEnrollTokenRequest
-	(*CreateEnrollTokenResponse)(nil),   // 41: cucina.v1.CreateEnrollTokenResponse
-	(*ListEnrollTokensRequest)(nil),     // 42: cucina.v1.ListEnrollTokensRequest
-	(*ListEnrollTokensResponse)(nil),    // 43: cucina.v1.ListEnrollTokensResponse
-	(*EnrollTokenInfo)(nil),             // 44: cucina.v1.EnrollTokenInfo
-	(*RevokeEnrollTokenRequest)(nil),    // 45: cucina.v1.RevokeEnrollTokenRequest
-	(*RevokeEnrollTokenResponse)(nil),   // 46: cucina.v1.RevokeEnrollTokenResponse
-	(*ListQueuesRequest)(nil),           // 47: cucina.v1.ListQueuesRequest
-	(*ListQueuesResponse)(nil),          // 48: cucina.v1.ListQueuesResponse
-	(*OperationSummary)(nil),            // 49: cucina.v1.OperationSummary
-	(*ListOperationsRequest)(nil),       // 50: cucina.v1.ListOperationsRequest
-	(*ListOperationsResponse)(nil),      // 51: cucina.v1.ListOperationsResponse
-	(*OperationEvent)(nil),              // 52: cucina.v1.OperationEvent
-	(*GetOperationRequest)(nil),         // 53: cucina.v1.GetOperationRequest
-	(*GetOperationResponse)(nil),        // 54: cucina.v1.GetOperationResponse
-	(*KillOperationsRequest)(nil),       // 55: cucina.v1.KillOperationsRequest
-	(*KillOperationsResponse)(nil),      // 56: cucina.v1.KillOperationsResponse
-	(*CreateServiceKeyRequest)(nil),     // 57: cucina.v1.CreateServiceKeyRequest
-	(*CreateServiceKeyResponse)(nil),    // 58: cucina.v1.CreateServiceKeyResponse
-	(*ListServiceKeysRequest)(nil),      // 59: cucina.v1.ListServiceKeysRequest
-	(*ListServiceKeysResponse)(nil),     // 60: cucina.v1.ListServiceKeysResponse
-	(*ServiceKeyInfo)(nil),              // 61: cucina.v1.ServiceKeyInfo
-	(*RevokeServiceKeyRequest)(nil),     // 62: cucina.v1.RevokeServiceKeyRequest
-	(*RevokeServiceKeyResponse)(nil),    // 63: cucina.v1.RevokeServiceKeyResponse
-	(*RevokePrincipalRequest)(nil),      // 64: cucina.v1.RevokePrincipalRequest
-	(*RevokePrincipalResponse)(nil),     // 65: cucina.v1.RevokePrincipalResponse
-	(*ListRevocationsRequest)(nil),      // 66: cucina.v1.ListRevocationsRequest
-	(*ListRevocationsResponse)(nil),     // 67: cucina.v1.ListRevocationsResponse
-	(*Revocation)(nil),                  // 68: cucina.v1.Revocation
-	(*GetCostRequest)(nil),              // 69: cucina.v1.GetCostRequest
-	(*GetCostResponse)(nil),             // 70: cucina.v1.GetCostResponse
-	(*CostLine)(nil),                    // 71: cucina.v1.CostLine
-	(*ListImagesRequest)(nil),           // 72: cucina.v1.ListImagesRequest
-	(*ListImagesResponse)(nil),          // 73: cucina.v1.ListImagesResponse
-	(*ImageInfo)(nil),                   // 74: cucina.v1.ImageInfo
-	(*CollectSupportBundleRequest)(nil), // 75: cucina.v1.CollectSupportBundleRequest
-	nil,                                 // 76: cucina.v1.Overview.WorkersByStateEntry
-	nil,                                 // 77: cucina.v1.HostDetail.LabelsEntry
-	nil,                                 // 78: cucina.v1.RegisterHostSerialsRequest.LabelsEntry
-	(*ProtocolVersion)(nil),             // 79: cucina.v1.ProtocolVersion
-	(*Alert)(nil),                       // 80: cucina.v1.Alert
-	(*durationpb.Duration)(nil),         // 81: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),       // 82: google.protobuf.Timestamp
-	(*QueueRef)(nil),                    // 83: cucina.v1.QueueRef
-	(*Money)(nil),                       // 84: cucina.v1.Money
-	(*Page)(nil),                        // 85: cucina.v1.Page
+	(CARotationPhase)(0),                // 0: cucina.v1.CARotationPhase
+	(OperationEvent_Kind)(0),            // 1: cucina.v1.OperationEvent.Kind
+	(*GetStatusRequest)(nil),            // 2: cucina.v1.GetStatusRequest
+	(*GetStatusResponse)(nil),           // 3: cucina.v1.GetStatusResponse
+	(*ComponentStatus)(nil),             // 4: cucina.v1.ComponentStatus
+	(*WatchOverviewRequest)(nil),        // 5: cucina.v1.WatchOverviewRequest
+	(*Overview)(nil),                    // 6: cucina.v1.Overview
+	(*PoolSummary)(nil),                 // 7: cucina.v1.PoolSummary
+	(*QueueSummary)(nil),                // 8: cucina.v1.QueueSummary
+	(*HostSummary)(nil),                 // 9: cucina.v1.HostSummary
+	(*CostSummary)(nil),                 // 10: cucina.v1.CostSummary
+	(*PoolCost)(nil),                    // 11: cucina.v1.PoolCost
+	(*StartLatency)(nil),                // 12: cucina.v1.StartLatency
+	(*ListPoolsRequest)(nil),            // 13: cucina.v1.ListPoolsRequest
+	(*ListPoolsResponse)(nil),           // 14: cucina.v1.ListPoolsResponse
+	(*GetPoolRequest)(nil),              // 15: cucina.v1.GetPoolRequest
+	(*GetPoolResponse)(nil),             // 16: cucina.v1.GetPoolResponse
+	(*PoolEvent)(nil),                   // 17: cucina.v1.PoolEvent
+	(*SetPoolFloorRequest)(nil),         // 18: cucina.v1.SetPoolFloorRequest
+	(*SetPoolFloorResponse)(nil),        // 19: cucina.v1.SetPoolFloorResponse
+	(*CordonPoolRequest)(nil),           // 20: cucina.v1.CordonPoolRequest
+	(*CordonPoolResponse)(nil),          // 21: cucina.v1.CordonPoolResponse
+	(*GarbageCollectPoolRequest)(nil),   // 22: cucina.v1.GarbageCollectPoolRequest
+	(*GarbageCollectPoolResponse)(nil),  // 23: cucina.v1.GarbageCollectPoolResponse
+	(*WorkerSummary)(nil),               // 24: cucina.v1.WorkerSummary
+	(*ListWorkersRequest)(nil),          // 25: cucina.v1.ListWorkersRequest
+	(*ListWorkersResponse)(nil),         // 26: cucina.v1.ListWorkersResponse
+	(*DrainWorkerRequest)(nil),          // 27: cucina.v1.DrainWorkerRequest
+	(*DrainWorkerResponse)(nil),         // 28: cucina.v1.DrainWorkerResponse
+	(*StreamWorkerLogsRequest)(nil),     // 29: cucina.v1.StreamWorkerLogsRequest
+	(*LogChunk)(nil),                    // 30: cucina.v1.LogChunk
+	(*HostRef)(nil),                     // 31: cucina.v1.HostRef
+	(*HostActionResponse)(nil),          // 32: cucina.v1.HostActionResponse
+	(*ListHostsRequest)(nil),            // 33: cucina.v1.ListHostsRequest
+	(*ListHostsResponse)(nil),           // 34: cucina.v1.ListHostsResponse
+	(*HostDetail)(nil),                  // 35: cucina.v1.HostDetail
+	(*HostVM)(nil),                      // 36: cucina.v1.HostVM
+	(*ReimageHostRequest)(nil),          // 37: cucina.v1.ReimageHostRequest
+	(*RegisterHostSerialsRequest)(nil),  // 38: cucina.v1.RegisterHostSerialsRequest
+	(*RegisterHostSerialsResponse)(nil), // 39: cucina.v1.RegisterHostSerialsResponse
+	(*ApproveHostRequest)(nil),          // 40: cucina.v1.ApproveHostRequest
+	(*CreateEnrollTokenRequest)(nil),    // 41: cucina.v1.CreateEnrollTokenRequest
+	(*CreateEnrollTokenResponse)(nil),   // 42: cucina.v1.CreateEnrollTokenResponse
+	(*ListEnrollTokensRequest)(nil),     // 43: cucina.v1.ListEnrollTokensRequest
+	(*ListEnrollTokensResponse)(nil),    // 44: cucina.v1.ListEnrollTokensResponse
+	(*EnrollTokenInfo)(nil),             // 45: cucina.v1.EnrollTokenInfo
+	(*RevokeEnrollTokenRequest)(nil),    // 46: cucina.v1.RevokeEnrollTokenRequest
+	(*RevokeEnrollTokenResponse)(nil),   // 47: cucina.v1.RevokeEnrollTokenResponse
+	(*ListQueuesRequest)(nil),           // 48: cucina.v1.ListQueuesRequest
+	(*ListQueuesResponse)(nil),          // 49: cucina.v1.ListQueuesResponse
+	(*OperationSummary)(nil),            // 50: cucina.v1.OperationSummary
+	(*ListOperationsRequest)(nil),       // 51: cucina.v1.ListOperationsRequest
+	(*ListOperationsResponse)(nil),      // 52: cucina.v1.ListOperationsResponse
+	(*OperationEvent)(nil),              // 53: cucina.v1.OperationEvent
+	(*GetOperationRequest)(nil),         // 54: cucina.v1.GetOperationRequest
+	(*GetOperationResponse)(nil),        // 55: cucina.v1.GetOperationResponse
+	(*KillOperationsRequest)(nil),       // 56: cucina.v1.KillOperationsRequest
+	(*KillOperationsResponse)(nil),      // 57: cucina.v1.KillOperationsResponse
+	(*CreateServiceKeyRequest)(nil),     // 58: cucina.v1.CreateServiceKeyRequest
+	(*CreateServiceKeyResponse)(nil),    // 59: cucina.v1.CreateServiceKeyResponse
+	(*ListServiceKeysRequest)(nil),      // 60: cucina.v1.ListServiceKeysRequest
+	(*ListServiceKeysResponse)(nil),     // 61: cucina.v1.ListServiceKeysResponse
+	(*ServiceKeyInfo)(nil),              // 62: cucina.v1.ServiceKeyInfo
+	(*RevokeServiceKeyRequest)(nil),     // 63: cucina.v1.RevokeServiceKeyRequest
+	(*RevokeServiceKeyResponse)(nil),    // 64: cucina.v1.RevokeServiceKeyResponse
+	(*RevokePrincipalRequest)(nil),      // 65: cucina.v1.RevokePrincipalRequest
+	(*RevokePrincipalResponse)(nil),     // 66: cucina.v1.RevokePrincipalResponse
+	(*ListRevocationsRequest)(nil),      // 67: cucina.v1.ListRevocationsRequest
+	(*ListRevocationsResponse)(nil),     // 68: cucina.v1.ListRevocationsResponse
+	(*Revocation)(nil),                  // 69: cucina.v1.Revocation
+	(*RotateCARequest)(nil),             // 70: cucina.v1.RotateCARequest
+	(*RotateCAResponse)(nil),            // 71: cucina.v1.RotateCAResponse
+	(*GetCostRequest)(nil),              // 72: cucina.v1.GetCostRequest
+	(*GetCostResponse)(nil),             // 73: cucina.v1.GetCostResponse
+	(*CostLine)(nil),                    // 74: cucina.v1.CostLine
+	(*ListImagesRequest)(nil),           // 75: cucina.v1.ListImagesRequest
+	(*ListImagesResponse)(nil),          // 76: cucina.v1.ListImagesResponse
+	(*ImageInfo)(nil),                   // 77: cucina.v1.ImageInfo
+	(*CollectSupportBundleRequest)(nil), // 78: cucina.v1.CollectSupportBundleRequest
+	nil,                                 // 79: cucina.v1.Overview.WorkersByStateEntry
+	nil,                                 // 80: cucina.v1.HostDetail.LabelsEntry
+	nil,                                 // 81: cucina.v1.RegisterHostSerialsRequest.LabelsEntry
+	(*ProtocolVersion)(nil),             // 82: cucina.v1.ProtocolVersion
+	(*Alert)(nil),                       // 83: cucina.v1.Alert
+	(*durationpb.Duration)(nil),         // 84: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),       // 85: google.protobuf.Timestamp
+	(*QueueRef)(nil),                    // 86: cucina.v1.QueueRef
+	(*Money)(nil),                       // 87: cucina.v1.Money
+	(*Page)(nil),                        // 88: cucina.v1.Page
 }
 var file_cucina_v1_management_proto_depIdxs = []int32{
-	79,  // 0: cucina.v1.GetStatusResponse.protocol:type_name -> cucina.v1.ProtocolVersion
-	3,   // 1: cucina.v1.GetStatusResponse.components:type_name -> cucina.v1.ComponentStatus
-	6,   // 2: cucina.v1.GetStatusResponse.pools:type_name -> cucina.v1.PoolSummary
-	80,  // 3: cucina.v1.GetStatusResponse.alerts:type_name -> cucina.v1.Alert
-	81,  // 4: cucina.v1.WatchOverviewRequest.interval:type_name -> google.protobuf.Duration
-	82,  // 5: cucina.v1.Overview.time:type_name -> google.protobuf.Timestamp
-	6,   // 6: cucina.v1.Overview.pools:type_name -> cucina.v1.PoolSummary
-	7,   // 7: cucina.v1.Overview.queues:type_name -> cucina.v1.QueueSummary
-	8,   // 8: cucina.v1.Overview.hosts:type_name -> cucina.v1.HostSummary
-	9,   // 9: cucina.v1.Overview.cost:type_name -> cucina.v1.CostSummary
-	80,  // 10: cucina.v1.Overview.alerts:type_name -> cucina.v1.Alert
-	76,  // 11: cucina.v1.Overview.workers_by_state:type_name -> cucina.v1.Overview.WorkersByStateEntry
-	11,  // 12: cucina.v1.Overview.recent_starts:type_name -> cucina.v1.StartLatency
-	83,  // 13: cucina.v1.QueueSummary.queue:type_name -> cucina.v1.QueueRef
-	81,  // 14: cucina.v1.QueueSummary.oldest_queued_age:type_name -> google.protobuf.Duration
-	81,  // 15: cucina.v1.QueueSummary.queue_time_p95:type_name -> google.protobuf.Duration
-	82,  // 16: cucina.v1.HostSummary.last_heartbeat:type_name -> google.protobuf.Timestamp
-	84,  // 17: cucina.v1.CostSummary.today:type_name -> cucina.v1.Money
-	84,  // 18: cucina.v1.CostSummary.month_to_date:type_name -> cucina.v1.Money
-	84,  // 19: cucina.v1.CostSummary.standing_per_month:type_name -> cucina.v1.Money
-	10,  // 20: cucina.v1.CostSummary.pools:type_name -> cucina.v1.PoolCost
-	84,  // 21: cucina.v1.PoolCost.compute:type_name -> cucina.v1.Money
-	84,  // 22: cucina.v1.PoolCost.ebs:type_name -> cucina.v1.Money
-	84,  // 23: cucina.v1.PoolCost.data_transfer:type_name -> cucina.v1.Money
-	84,  // 24: cucina.v1.PoolCost.standing:type_name -> cucina.v1.Money
-	84,  // 25: cucina.v1.PoolCost.public_ipv4:type_name -> cucina.v1.Money
-	82,  // 26: cucina.v1.StartLatency.launched:type_name -> google.protobuf.Timestamp
-	81,  // 27: cucina.v1.StartLatency.to_running:type_name -> google.protobuf.Duration
-	81,  // 28: cucina.v1.StartLatency.to_registered:type_name -> google.protobuf.Duration
-	81,  // 29: cucina.v1.StartLatency.to_first_action:type_name -> google.protobuf.Duration
-	6,   // 30: cucina.v1.ListPoolsResponse.pools:type_name -> cucina.v1.PoolSummary
-	6,   // 31: cucina.v1.GetPoolResponse.summary:type_name -> cucina.v1.PoolSummary
-	23,  // 32: cucina.v1.GetPoolResponse.workers:type_name -> cucina.v1.WorkerSummary
-	16,  // 33: cucina.v1.GetPoolResponse.events:type_name -> cucina.v1.PoolEvent
-	11,  // 34: cucina.v1.GetPoolResponse.starts:type_name -> cucina.v1.StartLatency
-	82,  // 35: cucina.v1.PoolEvent.time:type_name -> google.protobuf.Timestamp
-	81,  // 36: cucina.v1.SetPoolFloorRequest.expires_in:type_name -> google.protobuf.Duration
-	82,  // 37: cucina.v1.SetPoolFloorResponse.expires_at:type_name -> google.protobuf.Timestamp
-	82,  // 38: cucina.v1.WorkerSummary.launched:type_name -> google.protobuf.Timestamp
-	81,  // 39: cucina.v1.WorkerSummary.idle_for:type_name -> google.protobuf.Duration
-	23,  // 40: cucina.v1.ListWorkersResponse.workers:type_name -> cucina.v1.WorkerSummary
-	34,  // 41: cucina.v1.ListHostsResponse.hosts:type_name -> cucina.v1.HostDetail
-	8,   // 42: cucina.v1.HostDetail.summary:type_name -> cucina.v1.HostSummary
-	35,  // 43: cucina.v1.HostDetail.vms:type_name -> cucina.v1.HostVM
-	77,  // 44: cucina.v1.HostDetail.labels:type_name -> cucina.v1.HostDetail.LabelsEntry
-	82,  // 45: cucina.v1.HostDetail.cert_expiry:type_name -> google.protobuf.Timestamp
-	30,  // 46: cucina.v1.ReimageHostRequest.host:type_name -> cucina.v1.HostRef
-	78,  // 47: cucina.v1.RegisterHostSerialsRequest.labels:type_name -> cucina.v1.RegisterHostSerialsRequest.LabelsEntry
-	81,  // 48: cucina.v1.CreateEnrollTokenRequest.ttl:type_name -> google.protobuf.Duration
-	82,  // 49: cucina.v1.CreateEnrollTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	44,  // 50: cucina.v1.ListEnrollTokensResponse.tokens:type_name -> cucina.v1.EnrollTokenInfo
-	82,  // 51: cucina.v1.EnrollTokenInfo.created:type_name -> google.protobuf.Timestamp
-	82,  // 52: cucina.v1.EnrollTokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	7,   // 53: cucina.v1.ListQueuesResponse.queues:type_name -> cucina.v1.QueueSummary
-	83,  // 54: cucina.v1.OperationSummary.queue:type_name -> cucina.v1.QueueRef
-	82,  // 55: cucina.v1.OperationSummary.queued_at:type_name -> google.protobuf.Timestamp
-	81,  // 56: cucina.v1.OperationSummary.expected_duration:type_name -> google.protobuf.Duration
-	82,  // 57: cucina.v1.OperationSummary.timeout:type_name -> google.protobuf.Timestamp
-	83,  // 58: cucina.v1.ListOperationsRequest.queue:type_name -> cucina.v1.QueueRef
-	85,  // 59: cucina.v1.ListOperationsRequest.page:type_name -> cucina.v1.Page
-	49,  // 60: cucina.v1.ListOperationsResponse.operations:type_name -> cucina.v1.OperationSummary
-	0,   // 61: cucina.v1.OperationEvent.kind:type_name -> cucina.v1.OperationEvent.Kind
-	49,  // 62: cucina.v1.OperationEvent.operation:type_name -> cucina.v1.OperationSummary
-	49,  // 63: cucina.v1.GetOperationResponse.operation:type_name -> cucina.v1.OperationSummary
-	83,  // 64: cucina.v1.KillOperationsRequest.queue_without_workers:type_name -> cucina.v1.QueueRef
-	81,  // 65: cucina.v1.CreateServiceKeyRequest.ttl:type_name -> google.protobuf.Duration
-	61,  // 66: cucina.v1.ListServiceKeysResponse.keys:type_name -> cucina.v1.ServiceKeyInfo
-	82,  // 67: cucina.v1.ServiceKeyInfo.created:type_name -> google.protobuf.Timestamp
-	82,  // 68: cucina.v1.ServiceKeyInfo.expires_at:type_name -> google.protobuf.Timestamp
-	82,  // 69: cucina.v1.ServiceKeyInfo.last_used:type_name -> google.protobuf.Timestamp
-	82,  // 70: cucina.v1.RevokePrincipalResponse.effective_by:type_name -> google.protobuf.Timestamp
-	68,  // 71: cucina.v1.ListRevocationsResponse.revocations:type_name -> cucina.v1.Revocation
-	82,  // 72: cucina.v1.Revocation.created:type_name -> google.protobuf.Timestamp
-	82,  // 73: cucina.v1.GetCostRequest.since:type_name -> google.protobuf.Timestamp
-	9,   // 74: cucina.v1.GetCostResponse.cost:type_name -> cucina.v1.CostSummary
-	71,  // 75: cucina.v1.GetCostResponse.lines:type_name -> cucina.v1.CostLine
-	84,  // 76: cucina.v1.CostLine.amount:type_name -> cucina.v1.Money
-	74,  // 77: cucina.v1.ListImagesResponse.images:type_name -> cucina.v1.ImageInfo
-	82,  // 78: cucina.v1.ImageInfo.created:type_name -> google.protobuf.Timestamp
-	1,   // 79: cucina.v1.ManagementService.GetStatus:input_type -> cucina.v1.GetStatusRequest
-	4,   // 80: cucina.v1.ManagementService.WatchOverview:input_type -> cucina.v1.WatchOverviewRequest
-	12,  // 81: cucina.v1.ManagementService.ListPools:input_type -> cucina.v1.ListPoolsRequest
-	14,  // 82: cucina.v1.ManagementService.GetPool:input_type -> cucina.v1.GetPoolRequest
-	17,  // 83: cucina.v1.ManagementService.SetPoolFloor:input_type -> cucina.v1.SetPoolFloorRequest
-	19,  // 84: cucina.v1.ManagementService.CordonPool:input_type -> cucina.v1.CordonPoolRequest
-	21,  // 85: cucina.v1.ManagementService.GarbageCollectPool:input_type -> cucina.v1.GarbageCollectPoolRequest
-	24,  // 86: cucina.v1.ManagementService.ListWorkers:input_type -> cucina.v1.ListWorkersRequest
-	26,  // 87: cucina.v1.ManagementService.DrainWorker:input_type -> cucina.v1.DrainWorkerRequest
-	26,  // 88: cucina.v1.ManagementService.UndrainWorker:input_type -> cucina.v1.DrainWorkerRequest
-	28,  // 89: cucina.v1.ManagementService.StreamWorkerLogs:input_type -> cucina.v1.StreamWorkerLogsRequest
-	32,  // 90: cucina.v1.ManagementService.ListHosts:input_type -> cucina.v1.ListHostsRequest
-	30,  // 91: cucina.v1.ManagementService.DrainHost:input_type -> cucina.v1.HostRef
-	30,  // 92: cucina.v1.ManagementService.UncordonHost:input_type -> cucina.v1.HostRef
-	36,  // 93: cucina.v1.ManagementService.ReimageHost:input_type -> cucina.v1.ReimageHostRequest
-	30,  // 94: cucina.v1.ManagementService.HostDiagnostics:input_type -> cucina.v1.HostRef
-	37,  // 95: cucina.v1.ManagementService.RegisterHostSerials:input_type -> cucina.v1.RegisterHostSerialsRequest
-	39,  // 96: cucina.v1.ManagementService.ApproveHost:input_type -> cucina.v1.ApproveHostRequest
-	30,  // 97: cucina.v1.ManagementService.RemoveHost:input_type -> cucina.v1.HostRef
-	40,  // 98: cucina.v1.ManagementService.CreateEnrollToken:input_type -> cucina.v1.CreateEnrollTokenRequest
-	42,  // 99: cucina.v1.ManagementService.ListEnrollTokens:input_type -> cucina.v1.ListEnrollTokensRequest
-	45,  // 100: cucina.v1.ManagementService.RevokeEnrollToken:input_type -> cucina.v1.RevokeEnrollTokenRequest
-	47,  // 101: cucina.v1.ManagementService.ListQueues:input_type -> cucina.v1.ListQueuesRequest
-	50,  // 102: cucina.v1.ManagementService.ListOperations:input_type -> cucina.v1.ListOperationsRequest
-	50,  // 103: cucina.v1.ManagementService.WatchOperations:input_type -> cucina.v1.ListOperationsRequest
-	53,  // 104: cucina.v1.ManagementService.GetOperation:input_type -> cucina.v1.GetOperationRequest
-	55,  // 105: cucina.v1.ManagementService.KillOperations:input_type -> cucina.v1.KillOperationsRequest
-	57,  // 106: cucina.v1.ManagementService.CreateServiceKey:input_type -> cucina.v1.CreateServiceKeyRequest
-	59,  // 107: cucina.v1.ManagementService.ListServiceKeys:input_type -> cucina.v1.ListServiceKeysRequest
-	62,  // 108: cucina.v1.ManagementService.RevokeServiceKey:input_type -> cucina.v1.RevokeServiceKeyRequest
-	64,  // 109: cucina.v1.ManagementService.RevokePrincipal:input_type -> cucina.v1.RevokePrincipalRequest
-	66,  // 110: cucina.v1.ManagementService.ListRevocations:input_type -> cucina.v1.ListRevocationsRequest
-	69,  // 111: cucina.v1.ManagementService.GetCost:input_type -> cucina.v1.GetCostRequest
-	72,  // 112: cucina.v1.ManagementService.ListImages:input_type -> cucina.v1.ListImagesRequest
-	75,  // 113: cucina.v1.ManagementService.CollectSupportBundle:input_type -> cucina.v1.CollectSupportBundleRequest
-	2,   // 114: cucina.v1.ManagementService.GetStatus:output_type -> cucina.v1.GetStatusResponse
-	5,   // 115: cucina.v1.ManagementService.WatchOverview:output_type -> cucina.v1.Overview
-	13,  // 116: cucina.v1.ManagementService.ListPools:output_type -> cucina.v1.ListPoolsResponse
-	15,  // 117: cucina.v1.ManagementService.GetPool:output_type -> cucina.v1.GetPoolResponse
-	18,  // 118: cucina.v1.ManagementService.SetPoolFloor:output_type -> cucina.v1.SetPoolFloorResponse
-	20,  // 119: cucina.v1.ManagementService.CordonPool:output_type -> cucina.v1.CordonPoolResponse
-	22,  // 120: cucina.v1.ManagementService.GarbageCollectPool:output_type -> cucina.v1.GarbageCollectPoolResponse
-	25,  // 121: cucina.v1.ManagementService.ListWorkers:output_type -> cucina.v1.ListWorkersResponse
-	27,  // 122: cucina.v1.ManagementService.DrainWorker:output_type -> cucina.v1.DrainWorkerResponse
-	27,  // 123: cucina.v1.ManagementService.UndrainWorker:output_type -> cucina.v1.DrainWorkerResponse
-	29,  // 124: cucina.v1.ManagementService.StreamWorkerLogs:output_type -> cucina.v1.LogChunk
-	33,  // 125: cucina.v1.ManagementService.ListHosts:output_type -> cucina.v1.ListHostsResponse
-	31,  // 126: cucina.v1.ManagementService.DrainHost:output_type -> cucina.v1.HostActionResponse
-	31,  // 127: cucina.v1.ManagementService.UncordonHost:output_type -> cucina.v1.HostActionResponse
-	31,  // 128: cucina.v1.ManagementService.ReimageHost:output_type -> cucina.v1.HostActionResponse
-	29,  // 129: cucina.v1.ManagementService.HostDiagnostics:output_type -> cucina.v1.LogChunk
-	38,  // 130: cucina.v1.ManagementService.RegisterHostSerials:output_type -> cucina.v1.RegisterHostSerialsResponse
-	31,  // 131: cucina.v1.ManagementService.ApproveHost:output_type -> cucina.v1.HostActionResponse
-	31,  // 132: cucina.v1.ManagementService.RemoveHost:output_type -> cucina.v1.HostActionResponse
-	41,  // 133: cucina.v1.ManagementService.CreateEnrollToken:output_type -> cucina.v1.CreateEnrollTokenResponse
-	43,  // 134: cucina.v1.ManagementService.ListEnrollTokens:output_type -> cucina.v1.ListEnrollTokensResponse
-	46,  // 135: cucina.v1.ManagementService.RevokeEnrollToken:output_type -> cucina.v1.RevokeEnrollTokenResponse
-	48,  // 136: cucina.v1.ManagementService.ListQueues:output_type -> cucina.v1.ListQueuesResponse
-	51,  // 137: cucina.v1.ManagementService.ListOperations:output_type -> cucina.v1.ListOperationsResponse
-	52,  // 138: cucina.v1.ManagementService.WatchOperations:output_type -> cucina.v1.OperationEvent
-	54,  // 139: cucina.v1.ManagementService.GetOperation:output_type -> cucina.v1.GetOperationResponse
-	56,  // 140: cucina.v1.ManagementService.KillOperations:output_type -> cucina.v1.KillOperationsResponse
-	58,  // 141: cucina.v1.ManagementService.CreateServiceKey:output_type -> cucina.v1.CreateServiceKeyResponse
-	60,  // 142: cucina.v1.ManagementService.ListServiceKeys:output_type -> cucina.v1.ListServiceKeysResponse
-	63,  // 143: cucina.v1.ManagementService.RevokeServiceKey:output_type -> cucina.v1.RevokeServiceKeyResponse
-	65,  // 144: cucina.v1.ManagementService.RevokePrincipal:output_type -> cucina.v1.RevokePrincipalResponse
-	67,  // 145: cucina.v1.ManagementService.ListRevocations:output_type -> cucina.v1.ListRevocationsResponse
-	70,  // 146: cucina.v1.ManagementService.GetCost:output_type -> cucina.v1.GetCostResponse
-	73,  // 147: cucina.v1.ManagementService.ListImages:output_type -> cucina.v1.ListImagesResponse
-	29,  // 148: cucina.v1.ManagementService.CollectSupportBundle:output_type -> cucina.v1.LogChunk
-	114, // [114:149] is the sub-list for method output_type
-	79,  // [79:114] is the sub-list for method input_type
-	79,  // [79:79] is the sub-list for extension type_name
-	79,  // [79:79] is the sub-list for extension extendee
-	0,   // [0:79] is the sub-list for field type_name
+	82,  // 0: cucina.v1.GetStatusResponse.protocol:type_name -> cucina.v1.ProtocolVersion
+	4,   // 1: cucina.v1.GetStatusResponse.components:type_name -> cucina.v1.ComponentStatus
+	7,   // 2: cucina.v1.GetStatusResponse.pools:type_name -> cucina.v1.PoolSummary
+	83,  // 3: cucina.v1.GetStatusResponse.alerts:type_name -> cucina.v1.Alert
+	84,  // 4: cucina.v1.WatchOverviewRequest.interval:type_name -> google.protobuf.Duration
+	85,  // 5: cucina.v1.Overview.time:type_name -> google.protobuf.Timestamp
+	7,   // 6: cucina.v1.Overview.pools:type_name -> cucina.v1.PoolSummary
+	8,   // 7: cucina.v1.Overview.queues:type_name -> cucina.v1.QueueSummary
+	9,   // 8: cucina.v1.Overview.hosts:type_name -> cucina.v1.HostSummary
+	10,  // 9: cucina.v1.Overview.cost:type_name -> cucina.v1.CostSummary
+	83,  // 10: cucina.v1.Overview.alerts:type_name -> cucina.v1.Alert
+	79,  // 11: cucina.v1.Overview.workers_by_state:type_name -> cucina.v1.Overview.WorkersByStateEntry
+	12,  // 12: cucina.v1.Overview.recent_starts:type_name -> cucina.v1.StartLatency
+	86,  // 13: cucina.v1.QueueSummary.queue:type_name -> cucina.v1.QueueRef
+	84,  // 14: cucina.v1.QueueSummary.oldest_queued_age:type_name -> google.protobuf.Duration
+	84,  // 15: cucina.v1.QueueSummary.queue_time_p95:type_name -> google.protobuf.Duration
+	85,  // 16: cucina.v1.HostSummary.last_heartbeat:type_name -> google.protobuf.Timestamp
+	87,  // 17: cucina.v1.CostSummary.today:type_name -> cucina.v1.Money
+	87,  // 18: cucina.v1.CostSummary.month_to_date:type_name -> cucina.v1.Money
+	87,  // 19: cucina.v1.CostSummary.standing_per_month:type_name -> cucina.v1.Money
+	11,  // 20: cucina.v1.CostSummary.pools:type_name -> cucina.v1.PoolCost
+	87,  // 21: cucina.v1.PoolCost.compute:type_name -> cucina.v1.Money
+	87,  // 22: cucina.v1.PoolCost.ebs:type_name -> cucina.v1.Money
+	87,  // 23: cucina.v1.PoolCost.data_transfer:type_name -> cucina.v1.Money
+	87,  // 24: cucina.v1.PoolCost.standing:type_name -> cucina.v1.Money
+	87,  // 25: cucina.v1.PoolCost.public_ipv4:type_name -> cucina.v1.Money
+	85,  // 26: cucina.v1.StartLatency.launched:type_name -> google.protobuf.Timestamp
+	84,  // 27: cucina.v1.StartLatency.to_running:type_name -> google.protobuf.Duration
+	84,  // 28: cucina.v1.StartLatency.to_registered:type_name -> google.protobuf.Duration
+	84,  // 29: cucina.v1.StartLatency.to_first_action:type_name -> google.protobuf.Duration
+	7,   // 30: cucina.v1.ListPoolsResponse.pools:type_name -> cucina.v1.PoolSummary
+	7,   // 31: cucina.v1.GetPoolResponse.summary:type_name -> cucina.v1.PoolSummary
+	24,  // 32: cucina.v1.GetPoolResponse.workers:type_name -> cucina.v1.WorkerSummary
+	17,  // 33: cucina.v1.GetPoolResponse.events:type_name -> cucina.v1.PoolEvent
+	12,  // 34: cucina.v1.GetPoolResponse.starts:type_name -> cucina.v1.StartLatency
+	85,  // 35: cucina.v1.PoolEvent.time:type_name -> google.protobuf.Timestamp
+	84,  // 36: cucina.v1.SetPoolFloorRequest.expires_in:type_name -> google.protobuf.Duration
+	85,  // 37: cucina.v1.SetPoolFloorResponse.expires_at:type_name -> google.protobuf.Timestamp
+	85,  // 38: cucina.v1.WorkerSummary.launched:type_name -> google.protobuf.Timestamp
+	84,  // 39: cucina.v1.WorkerSummary.idle_for:type_name -> google.protobuf.Duration
+	24,  // 40: cucina.v1.ListWorkersResponse.workers:type_name -> cucina.v1.WorkerSummary
+	35,  // 41: cucina.v1.ListHostsResponse.hosts:type_name -> cucina.v1.HostDetail
+	9,   // 42: cucina.v1.HostDetail.summary:type_name -> cucina.v1.HostSummary
+	36,  // 43: cucina.v1.HostDetail.vms:type_name -> cucina.v1.HostVM
+	80,  // 44: cucina.v1.HostDetail.labels:type_name -> cucina.v1.HostDetail.LabelsEntry
+	85,  // 45: cucina.v1.HostDetail.cert_expiry:type_name -> google.protobuf.Timestamp
+	31,  // 46: cucina.v1.ReimageHostRequest.host:type_name -> cucina.v1.HostRef
+	81,  // 47: cucina.v1.RegisterHostSerialsRequest.labels:type_name -> cucina.v1.RegisterHostSerialsRequest.LabelsEntry
+	84,  // 48: cucina.v1.CreateEnrollTokenRequest.ttl:type_name -> google.protobuf.Duration
+	85,  // 49: cucina.v1.CreateEnrollTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	45,  // 50: cucina.v1.ListEnrollTokensResponse.tokens:type_name -> cucina.v1.EnrollTokenInfo
+	85,  // 51: cucina.v1.EnrollTokenInfo.created:type_name -> google.protobuf.Timestamp
+	85,  // 52: cucina.v1.EnrollTokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	8,   // 53: cucina.v1.ListQueuesResponse.queues:type_name -> cucina.v1.QueueSummary
+	86,  // 54: cucina.v1.OperationSummary.queue:type_name -> cucina.v1.QueueRef
+	85,  // 55: cucina.v1.OperationSummary.queued_at:type_name -> google.protobuf.Timestamp
+	84,  // 56: cucina.v1.OperationSummary.expected_duration:type_name -> google.protobuf.Duration
+	85,  // 57: cucina.v1.OperationSummary.timeout:type_name -> google.protobuf.Timestamp
+	86,  // 58: cucina.v1.ListOperationsRequest.queue:type_name -> cucina.v1.QueueRef
+	88,  // 59: cucina.v1.ListOperationsRequest.page:type_name -> cucina.v1.Page
+	50,  // 60: cucina.v1.ListOperationsResponse.operations:type_name -> cucina.v1.OperationSummary
+	1,   // 61: cucina.v1.OperationEvent.kind:type_name -> cucina.v1.OperationEvent.Kind
+	50,  // 62: cucina.v1.OperationEvent.operation:type_name -> cucina.v1.OperationSummary
+	50,  // 63: cucina.v1.GetOperationResponse.operation:type_name -> cucina.v1.OperationSummary
+	86,  // 64: cucina.v1.KillOperationsRequest.queue_without_workers:type_name -> cucina.v1.QueueRef
+	84,  // 65: cucina.v1.CreateServiceKeyRequest.ttl:type_name -> google.protobuf.Duration
+	62,  // 66: cucina.v1.ListServiceKeysResponse.keys:type_name -> cucina.v1.ServiceKeyInfo
+	85,  // 67: cucina.v1.ServiceKeyInfo.created:type_name -> google.protobuf.Timestamp
+	85,  // 68: cucina.v1.ServiceKeyInfo.expires_at:type_name -> google.protobuf.Timestamp
+	85,  // 69: cucina.v1.ServiceKeyInfo.last_used:type_name -> google.protobuf.Timestamp
+	85,  // 70: cucina.v1.RevokePrincipalResponse.effective_by:type_name -> google.protobuf.Timestamp
+	69,  // 71: cucina.v1.ListRevocationsResponse.revocations:type_name -> cucina.v1.Revocation
+	85,  // 72: cucina.v1.Revocation.created:type_name -> google.protobuf.Timestamp
+	0,   // 73: cucina.v1.RotateCARequest.phase:type_name -> cucina.v1.CARotationPhase
+	0,   // 74: cucina.v1.RotateCAResponse.phase:type_name -> cucina.v1.CARotationPhase
+	85,  // 75: cucina.v1.GetCostRequest.since:type_name -> google.protobuf.Timestamp
+	10,  // 76: cucina.v1.GetCostResponse.cost:type_name -> cucina.v1.CostSummary
+	74,  // 77: cucina.v1.GetCostResponse.lines:type_name -> cucina.v1.CostLine
+	87,  // 78: cucina.v1.CostLine.amount:type_name -> cucina.v1.Money
+	77,  // 79: cucina.v1.ListImagesResponse.images:type_name -> cucina.v1.ImageInfo
+	85,  // 80: cucina.v1.ImageInfo.created:type_name -> google.protobuf.Timestamp
+	2,   // 81: cucina.v1.ManagementService.GetStatus:input_type -> cucina.v1.GetStatusRequest
+	5,   // 82: cucina.v1.ManagementService.WatchOverview:input_type -> cucina.v1.WatchOverviewRequest
+	13,  // 83: cucina.v1.ManagementService.ListPools:input_type -> cucina.v1.ListPoolsRequest
+	15,  // 84: cucina.v1.ManagementService.GetPool:input_type -> cucina.v1.GetPoolRequest
+	18,  // 85: cucina.v1.ManagementService.SetPoolFloor:input_type -> cucina.v1.SetPoolFloorRequest
+	20,  // 86: cucina.v1.ManagementService.CordonPool:input_type -> cucina.v1.CordonPoolRequest
+	22,  // 87: cucina.v1.ManagementService.GarbageCollectPool:input_type -> cucina.v1.GarbageCollectPoolRequest
+	25,  // 88: cucina.v1.ManagementService.ListWorkers:input_type -> cucina.v1.ListWorkersRequest
+	27,  // 89: cucina.v1.ManagementService.DrainWorker:input_type -> cucina.v1.DrainWorkerRequest
+	27,  // 90: cucina.v1.ManagementService.UndrainWorker:input_type -> cucina.v1.DrainWorkerRequest
+	29,  // 91: cucina.v1.ManagementService.StreamWorkerLogs:input_type -> cucina.v1.StreamWorkerLogsRequest
+	33,  // 92: cucina.v1.ManagementService.ListHosts:input_type -> cucina.v1.ListHostsRequest
+	31,  // 93: cucina.v1.ManagementService.DrainHost:input_type -> cucina.v1.HostRef
+	31,  // 94: cucina.v1.ManagementService.UncordonHost:input_type -> cucina.v1.HostRef
+	37,  // 95: cucina.v1.ManagementService.ReimageHost:input_type -> cucina.v1.ReimageHostRequest
+	31,  // 96: cucina.v1.ManagementService.HostDiagnostics:input_type -> cucina.v1.HostRef
+	38,  // 97: cucina.v1.ManagementService.RegisterHostSerials:input_type -> cucina.v1.RegisterHostSerialsRequest
+	40,  // 98: cucina.v1.ManagementService.ApproveHost:input_type -> cucina.v1.ApproveHostRequest
+	31,  // 99: cucina.v1.ManagementService.RemoveHost:input_type -> cucina.v1.HostRef
+	41,  // 100: cucina.v1.ManagementService.CreateEnrollToken:input_type -> cucina.v1.CreateEnrollTokenRequest
+	43,  // 101: cucina.v1.ManagementService.ListEnrollTokens:input_type -> cucina.v1.ListEnrollTokensRequest
+	46,  // 102: cucina.v1.ManagementService.RevokeEnrollToken:input_type -> cucina.v1.RevokeEnrollTokenRequest
+	48,  // 103: cucina.v1.ManagementService.ListQueues:input_type -> cucina.v1.ListQueuesRequest
+	51,  // 104: cucina.v1.ManagementService.ListOperations:input_type -> cucina.v1.ListOperationsRequest
+	51,  // 105: cucina.v1.ManagementService.WatchOperations:input_type -> cucina.v1.ListOperationsRequest
+	54,  // 106: cucina.v1.ManagementService.GetOperation:input_type -> cucina.v1.GetOperationRequest
+	56,  // 107: cucina.v1.ManagementService.KillOperations:input_type -> cucina.v1.KillOperationsRequest
+	58,  // 108: cucina.v1.ManagementService.CreateServiceKey:input_type -> cucina.v1.CreateServiceKeyRequest
+	60,  // 109: cucina.v1.ManagementService.ListServiceKeys:input_type -> cucina.v1.ListServiceKeysRequest
+	63,  // 110: cucina.v1.ManagementService.RevokeServiceKey:input_type -> cucina.v1.RevokeServiceKeyRequest
+	65,  // 111: cucina.v1.ManagementService.RevokePrincipal:input_type -> cucina.v1.RevokePrincipalRequest
+	67,  // 112: cucina.v1.ManagementService.ListRevocations:input_type -> cucina.v1.ListRevocationsRequest
+	70,  // 113: cucina.v1.ManagementService.RotateCA:input_type -> cucina.v1.RotateCARequest
+	72,  // 114: cucina.v1.ManagementService.GetCost:input_type -> cucina.v1.GetCostRequest
+	75,  // 115: cucina.v1.ManagementService.ListImages:input_type -> cucina.v1.ListImagesRequest
+	78,  // 116: cucina.v1.ManagementService.CollectSupportBundle:input_type -> cucina.v1.CollectSupportBundleRequest
+	3,   // 117: cucina.v1.ManagementService.GetStatus:output_type -> cucina.v1.GetStatusResponse
+	6,   // 118: cucina.v1.ManagementService.WatchOverview:output_type -> cucina.v1.Overview
+	14,  // 119: cucina.v1.ManagementService.ListPools:output_type -> cucina.v1.ListPoolsResponse
+	16,  // 120: cucina.v1.ManagementService.GetPool:output_type -> cucina.v1.GetPoolResponse
+	19,  // 121: cucina.v1.ManagementService.SetPoolFloor:output_type -> cucina.v1.SetPoolFloorResponse
+	21,  // 122: cucina.v1.ManagementService.CordonPool:output_type -> cucina.v1.CordonPoolResponse
+	23,  // 123: cucina.v1.ManagementService.GarbageCollectPool:output_type -> cucina.v1.GarbageCollectPoolResponse
+	26,  // 124: cucina.v1.ManagementService.ListWorkers:output_type -> cucina.v1.ListWorkersResponse
+	28,  // 125: cucina.v1.ManagementService.DrainWorker:output_type -> cucina.v1.DrainWorkerResponse
+	28,  // 126: cucina.v1.ManagementService.UndrainWorker:output_type -> cucina.v1.DrainWorkerResponse
+	30,  // 127: cucina.v1.ManagementService.StreamWorkerLogs:output_type -> cucina.v1.LogChunk
+	34,  // 128: cucina.v1.ManagementService.ListHosts:output_type -> cucina.v1.ListHostsResponse
+	32,  // 129: cucina.v1.ManagementService.DrainHost:output_type -> cucina.v1.HostActionResponse
+	32,  // 130: cucina.v1.ManagementService.UncordonHost:output_type -> cucina.v1.HostActionResponse
+	32,  // 131: cucina.v1.ManagementService.ReimageHost:output_type -> cucina.v1.HostActionResponse
+	30,  // 132: cucina.v1.ManagementService.HostDiagnostics:output_type -> cucina.v1.LogChunk
+	39,  // 133: cucina.v1.ManagementService.RegisterHostSerials:output_type -> cucina.v1.RegisterHostSerialsResponse
+	32,  // 134: cucina.v1.ManagementService.ApproveHost:output_type -> cucina.v1.HostActionResponse
+	32,  // 135: cucina.v1.ManagementService.RemoveHost:output_type -> cucina.v1.HostActionResponse
+	42,  // 136: cucina.v1.ManagementService.CreateEnrollToken:output_type -> cucina.v1.CreateEnrollTokenResponse
+	44,  // 137: cucina.v1.ManagementService.ListEnrollTokens:output_type -> cucina.v1.ListEnrollTokensResponse
+	47,  // 138: cucina.v1.ManagementService.RevokeEnrollToken:output_type -> cucina.v1.RevokeEnrollTokenResponse
+	49,  // 139: cucina.v1.ManagementService.ListQueues:output_type -> cucina.v1.ListQueuesResponse
+	52,  // 140: cucina.v1.ManagementService.ListOperations:output_type -> cucina.v1.ListOperationsResponse
+	53,  // 141: cucina.v1.ManagementService.WatchOperations:output_type -> cucina.v1.OperationEvent
+	55,  // 142: cucina.v1.ManagementService.GetOperation:output_type -> cucina.v1.GetOperationResponse
+	57,  // 143: cucina.v1.ManagementService.KillOperations:output_type -> cucina.v1.KillOperationsResponse
+	59,  // 144: cucina.v1.ManagementService.CreateServiceKey:output_type -> cucina.v1.CreateServiceKeyResponse
+	61,  // 145: cucina.v1.ManagementService.ListServiceKeys:output_type -> cucina.v1.ListServiceKeysResponse
+	64,  // 146: cucina.v1.ManagementService.RevokeServiceKey:output_type -> cucina.v1.RevokeServiceKeyResponse
+	66,  // 147: cucina.v1.ManagementService.RevokePrincipal:output_type -> cucina.v1.RevokePrincipalResponse
+	68,  // 148: cucina.v1.ManagementService.ListRevocations:output_type -> cucina.v1.ListRevocationsResponse
+	71,  // 149: cucina.v1.ManagementService.RotateCA:output_type -> cucina.v1.RotateCAResponse
+	73,  // 150: cucina.v1.ManagementService.GetCost:output_type -> cucina.v1.GetCostResponse
+	76,  // 151: cucina.v1.ManagementService.ListImages:output_type -> cucina.v1.ListImagesResponse
+	30,  // 152: cucina.v1.ManagementService.CollectSupportBundle:output_type -> cucina.v1.LogChunk
+	117, // [117:153] is the sub-list for method output_type
+	81,  // [81:117] is the sub-list for method input_type
+	81,  // [81:81] is the sub-list for extension type_name
+	81,  // [81:81] is the sub-list for extension extendee
+	0,   // [0:81] is the sub-list for field type_name
 }
 
 func init() { file_cucina_v1_management_proto_init() }
@@ -5471,8 +5653,8 @@ func file_cucina_v1_management_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cucina_v1_management_proto_rawDesc), len(file_cucina_v1_management_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   78,
+			NumEnums:      2,
+			NumMessages:   80,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

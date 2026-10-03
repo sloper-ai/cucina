@@ -97,6 +97,7 @@ var methodAccess = map[string]Access{
 	cucinav1.ManagementService_RevokeServiceKey_FullMethodName: Mutate,
 	cucinav1.ManagementService_RevokePrincipal_FullMethodName:  Mutate,
 	cucinav1.ManagementService_ListRevocations_FullMethodName:  AdminRead,
+	cucinav1.ManagementService_RotateCA_FullMethodName:         Mutate,
 
 	cucinav1.ManagementService_GetCost_FullMethodName:              Read,
 	cucinav1.ManagementService_ListImages_FullMethodName:           Read,

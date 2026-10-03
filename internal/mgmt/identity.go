@@ -10,7 +10,11 @@ import (
 	"time"
 	"unicode"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	cucinav1 "github.com/sloper-ai/cucina/api/proto/cucina/v1"
+	"github.com/sloper-ai/cucina/internal/pki"
 )
 
 const (
@@ -154,6 +158,37 @@ func (s *Server) ListRevocations(ctx context.Context, _ *cucinav1.ListRevocation
 		})
 	}
 	return out, nil
+}
+
+// RotateCA applies exactly one explicitly requested CA phase (R-OPS-5/-6).
+// Trust distribution and leaf retirement are operator attestations, never inferred
+// from elapsed time or from a general confirmation flag. The guarded RPC requires
+// admin on every configured instance name and audits both success and denial.
+func (s *Server) RotateCA(ctx context.Context, req *cucinav1.RotateCARequest) (*cucinav1.RotateCAResponse, error) {
+	var phase pki.RotationPhase
+	switch req.GetPhase() {
+	case cucinav1.CARotationPhase_CA_ROTATION_PHASE_INTRODUCE:
+		phase = pki.RotationIntroduce
+	case cucinav1.CARotationPhase_CA_ROTATION_PHASE_ACTIVATE:
+		if !req.GetTrustDistributed() {
+			return nil, status.Error(codes.FailedPrecondition, "activation requires explicit confirmation that every verifier trusts both CA roots (trust_distributed)")
+		}
+		phase = pki.RotationActivate
+	case cucinav1.CARotationPhase_CA_ROTATION_PHASE_RETIRE:
+		if !req.GetOldLeavesRetired() {
+			return nil, status.Error(codes.FailedPrecondition, "retirement requires explicit confirmation that no old-CA leaves remain in use after the waiting period (old_leaves_retired)")
+		}
+		phase = pki.RotationRetire
+	default:
+		return nil, invalid("phase must be INTRODUCE, ACTIVATE or RETIRE")
+	}
+	if s.deps.CA == nil {
+		return nil, notConfigured("CA rotation")
+	}
+	if err := s.deps.CA.RotateCA(ctx, phase); err != nil {
+		return nil, fail("rotating CA", err)
+	}
+	return &cucinav1.RotateCAResponse{Phase: req.GetPhase()}, nil
 }
 
 // ---------------------------------------------------------------- cost and images

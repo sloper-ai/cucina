@@ -75,6 +75,9 @@ service ManagementService {
   // RevokePrincipal adds a sid or sub to the deny-list (effective in <= 3 min, R-AUTH-9).
   rpc RevokePrincipal(RevokePrincipalRequest) returns (RevokePrincipalResponse);
   rpc ListRevocations(ListRevocationsRequest) returns (ListRevocationsResponse);
+  // RotateCA applies one operator-confirmed CA phase (R-OPS-5/-6). Cluster-admin
+  // only and audited; it never restarts the fleet or distributes trust via MDM.
+  rpc RotateCA(RotateCARequest) returns (RotateCAResponse);
 
   // --- Cost, images, diagnostics ----------------------------------------
   rpc GetCost(GetCostRequest) returns (GetCostResponse);
@@ -503,6 +506,29 @@ message Revocation {
   string reason = 3;
   google.protobuf.Timestamp created = 4;
   string created_by = 5;
+}
+
+// CARotationPhase is one step of the operator-driven two-root CA rotation.
+enum CARotationPhase {
+  CA_ROTATION_PHASE_UNSPECIFIED = 0;
+  CA_ROTATION_PHASE_INTRODUCE = 1; // publish both roots; the old CA keeps signing
+  CA_ROTATION_PHASE_ACTIVATE = 2; // the introduced CA becomes the signer
+  CA_ROTATION_PHASE_RETIRE = 3; // remove old trust only after its leaves are gone
+}
+
+message RotateCARequest {
+  CARotationPhase phase = 1;
+  // Required for ACTIVATE: the operator has distributed both roots to every
+  // verifier, including Buildbarn and MDM-managed hosts. This is an attestation,
+  // not an instruction to distribute trust or restart any component.
+  bool trust_distributed = 2;
+  // Required for RETIRE: the operator has verified that no old-CA leaf remains
+  // in use and has observed the documented lifetime/retirement waiting period.
+  bool old_leaves_retired = 3;
+}
+message RotateCAResponse {
+  // The phase applied to the CA Secret. No certificates or key material returned.
+  CARotationPhase phase = 1;
 }
 
 // ------------------------------------------------------- Cost, images, diag

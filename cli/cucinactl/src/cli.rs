@@ -97,6 +97,9 @@ pub enum Command {
     /// Service-account keys and principal revocation.
     #[command(subcommand)]
     Keys(KeysCmd),
+    /// Operator-driven rotation of the Cucina certificate authority.
+    #[command(subcommand)]
+    Ca(CaCmd),
     /// Print ready-to-use .bazelrc lines for this deployment (UC9).
     Bazelrc(BazelrcArgs),
     /// Bazel credential helper (also reachable as `cucina-credential-helper`).
@@ -463,6 +466,32 @@ pub enum KeysCmd {
     },
     /// List deny-list entries.
     Revocations,
+}
+
+/// One phase of the operator-driven two-root CA rotation (R-OPS-5/-6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CaRotationPhase {
+    /// Publish a new root while the current CA keeps signing.
+    Introduce,
+    /// Switch signers only after every verifier trusts both roots.
+    Activate,
+    /// Remove the old root only after all old-CA leaves have retired.
+    Retire,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CaCmd {
+    /// Apply one CA phase (cluster admin; no automatic fleet restarts or MDM changes).
+    Rotate {
+        #[arg(value_enum)]
+        phase: CaRotationPhase,
+        /// Attest that every verifier already trusts both roots (required for activate).
+        #[arg(long, required_if_eq("phase", "activate"))]
+        trust_distributed: bool,
+        /// Attest that no old-CA leaves remain after the waiting period (required for retire).
+        #[arg(long, required_if_eq("phase", "retire"))]
+        old_leaves_retired: bool,
+    },
 }
 
 /// `bazelrc` arguments.

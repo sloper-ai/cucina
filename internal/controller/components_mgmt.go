@@ -64,6 +64,15 @@ func newMgmt(ctx context.Context, d *Deps) (any, error) {
 		Keys:          &mgmt.KeysAdapter{Store: km},
 		Revocations:   &mgmt.KeysAdapter{Store: km},
 	}
+	if cfg.PKI.CASecret != "" {
+		// CA phase transitions must read the latest Secret resourceVersion, not an
+		// informer snapshot. The adapter returns conflicts without a phase retry.
+		direct, err := client.New(d.RESTConfig, client.Options{Scheme: d.Scheme})
+		if err != nil {
+			return nil, fmt.Errorf("CA rotation client: %w", err)
+		}
+		deps.CA = &mgmt.CAAdapter{Client: direct, Namespace: cfg.Namespace, SecretName: cfg.PKI.CASecret}
+	}
 	if d.Compute != nil {
 		deps.Orphans = d.Compute
 	}

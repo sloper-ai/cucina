@@ -150,6 +150,8 @@ pub mod __buffa {
         reg.register_json_any(super::__LIST_REVOCATIONS_REQUEST_JSON_ANY);
         reg.register_json_any(super::__LIST_REVOCATIONS_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__REVOCATION_JSON_ANY);
+        reg.register_json_any(super::__ROTATE_CA_REQUEST_JSON_ANY);
+        reg.register_json_any(super::__ROTATE_CA_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__GET_COST_REQUEST_JSON_ANY);
         reg.register_json_any(super::__GET_COST_RESPONSE_JSON_ANY);
         reg.register_json_any(super::__COST_LINE_JSON_ANY);
@@ -599,6 +601,14 @@ pub use self::__buffa::view::ListRevocationsResponseOwnedView;
 pub use self::__buffa::view::RevocationView;
 #[doc(inline)]
 pub use self::__buffa::view::RevocationOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RotateCARequestView;
+#[doc(inline)]
+pub use self::__buffa::view::RotateCARequestOwnedView;
+#[doc(inline)]
+pub use self::__buffa::view::RotateCAResponseView;
+#[doc(inline)]
+pub use self::__buffa::view::RotateCAResponseOwnedView;
 #[doc(inline)]
 pub use self::__buffa::view::GetCostRequestView;
 #[doc(inline)]

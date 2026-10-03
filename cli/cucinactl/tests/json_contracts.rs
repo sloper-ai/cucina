@@ -141,6 +141,133 @@ fn run_json(dir: &Path, args: &[&str]) -> Vec<Value> {
     }
 }
 
+/// Guards R-OPS-5/-6: the public command requires confirmation and phase-specific
+/// attestations, forwards one phase to management, and prints only result.v1.
+/// --yes cannot substitute for distributing trust or retiring the old leaves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ca_rotation_requires_confirmed_operator_steps() {
+    use connectrpc::ErrorCode;
+    use cucina_api::proto::cucina::v1::CARotationPhase as Phase;
+
+    let jwt = fake_jwt(&serde_json::json!({
+        "iss": "http://127.0.0.1:9", "aud": "buildbarn", "sub": "test:admin",
+        "exp": now() + 900, "cucina": {"admin": ["main"]}
+    }));
+    let mgmt = FakeMgmt::new(&jwt);
+    let management = mgmt.serve().await;
+    let dir = TempDir::new();
+    let profile = support::profile(
+        "http://127.0.0.1:9",
+        &management,
+        "http://127.0.0.1:9",
+        AuthMethod::ServiceKey,
+    );
+    write_profile(dir.path(), "test", &profile);
+    write_token(
+        dir.path(),
+        "test",
+        &jwt,
+        now() + 900,
+        AuthMethod::ServiceKey,
+    );
+
+    for (args, exit, want_phase, deny) in [
+        (
+            vec!["ca", "rotate", "introduce"],
+            2,
+            Phase::Unspecified,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "unknown", "--yes"],
+            2,
+            Phase::Unspecified,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "introduce", "--yes"],
+            0,
+            Phase::Introduce,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "activate", "--yes"],
+            2,
+            Phase::Introduce,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "activate", "--trust-distributed"],
+            2,
+            Phase::Introduce,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "activate", "--trust-distributed", "--yes"],
+            0,
+            Phase::Activate,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "retire", "--yes"],
+            2,
+            Phase::Activate,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "retire", "--old-leaves-retired"],
+            2,
+            Phase::Activate,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "retire", "--old-leaves-retired", "--yes"],
+            0,
+            Phase::Retire,
+            false,
+        ),
+        (
+            vec!["ca", "rotate", "introduce", "--yes"],
+            4,
+            Phase::Retire,
+            true,
+        ),
+    ] {
+        if deny {
+            mgmt.fail_next(
+                "rotate_ca",
+                ErrorCode::PermissionDenied,
+                "cluster admin required",
+            );
+        }
+        let path = dir.path().to_path_buf();
+        let owned_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let output = tokio::task::spawn_blocking(move || {
+            cmd(&path)
+                .args(["--output", "json"])
+                .args(owned_args)
+                .output()
+                .unwrap()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(exit),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(*mgmt.state.ca_phase.lock().unwrap(), want_phase, "{args:?}");
+        if exit == 0 {
+            let result: Value = serde_json::from_slice(&output.stdout).expect("CA result JSON");
+            schema::assert_valid("result.v1", &result);
+            assert_eq!(result["action"], "rotate CA");
+            assert_eq!(result["target"], args[2]);
+            assert_eq!(result["ok"], true);
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_json_output_matches_its_schema() {
     let jwt = fake_jwt(&serde_json::json!({
