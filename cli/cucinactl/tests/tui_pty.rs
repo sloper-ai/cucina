@@ -40,6 +40,20 @@ fn fixture() -> (tokio::runtime::Runtime, FakeMgmt, TempDir) {
     (rt, mgmt, dir)
 }
 
+/// Guards: R-CLI-4 — a real terminal remains mandatory. The ConPTY launch below
+/// must not be made to pass by treating ordinary redirected streams as a TTY.
+fn assert_pipes_are_not_a_terminal(dir: &std::path::Path) {
+    let out = support::cmd(dir)
+        .args(["--output", "json", "tui"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run TUI with redirected streams");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&out.stderr).expect("error.v1");
+    assert_eq!(error["error"]["code"], "usage");
+}
+
 /// The fake saw no drain and the worker is not drained.
 fn assert_not_drained(mgmt: &FakeMgmt) {
     let calls = mgmt.state.calls.lock().unwrap().clone();
@@ -83,6 +97,7 @@ fn tui_session_in_a_pty() {
     }
 
     let (_rt, mgmt, dir) = fixture();
+    assert_pipes_are_not_a_terminal(dir.path());
     // A new PTY has no size: set one before the TUI starts.
     let mut cmd = support::command_at(std::path::Path::new("/bin/sh"), dir.path());
     cmd.arg("-c")
@@ -118,9 +133,39 @@ fn tui_session_in_a_pty() {
     use expectrl::{Expect, Session};
 
     let (_rt, mgmt, dir) = fixture();
-    let mut cmd = support::cmd(dir.path());
-    cmd.arg("tui");
-    let mut p = Session::spawn(cmd).expect("spawn cucinactl tui");
+    assert_pipes_are_not_a_terminal(dir.path());
+    // conpty 0.5 constructs CreateProcessW itself: Command's stdio settings are
+    // not applied and only explicitly set environment entries are forwarded.
+    // Bootstrap inside the real pseudoconsole, then open its console devices for
+    // the TUI rather than inheriting Bazel's redirected standard handles.
+    let mut cmd = support::command_at(std::path::Path::new("cmd.exe"), dir.path());
+    for name in [
+        "SystemRoot",
+        "SystemDrive",
+        "WINDIR",
+        "ComSpec",
+        "PATH",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            cmd.env(name, value);
+        }
+    }
+    cmd.env(
+        "CUCINA_PTY_EXE",
+        std::path::absolute(support::bin()).expect("absolute cucinactl path"),
+    );
+    // conpty concatenates Command arguments verbatim, so use cmd's documented
+    // /S /C outer quotes. The executable path is expanded once inside quotes.
+    cmd.args([
+        "/d",
+        "/s",
+        "/c",
+        r#"""%CUCINA_PTY_EXE%" tui <CONIN$ >CONOUT$ 2>&1""#,
+    ]);
+    let mut p = Session::spawn(cmd).expect("spawn cucinactl tui in ConPTY");
     // ConPTY without a parent console starts tiny: give the TUI room.
     p.get_process_mut().resize(100, 30).expect("resize");
     p.set_expect_timeout(Some(std::time::Duration::from_secs(30)));

@@ -144,7 +144,22 @@ async fn private_ca_is_trusted_for_discovery_sts_and_management() {
     let token = read_token(dir.path(), "tls").expect("token cached");
     assert_eq!(token.subject.as_deref(), Some("sa:ci-bot"));
     let config = stdout_json(&run(dir.path(), &["config", "view"], &[]).await);
-    assert_eq!(config["profiles"][0]["ca_file"], ca_arg.as_str());
+    let stored_ca = Path::new(
+        config["profiles"][0]["ca_file"]
+            .as_str()
+            .expect("stored CA path"),
+    );
+    // The profile promises an absolute path to the same file, not a particular
+    // spelling: Windows absolute() normalizes mixed slash/backslash inputs.
+    assert!(
+        stored_ca.is_absolute(),
+        "profile CA path must remain absolute"
+    );
+    assert_eq!(
+        std::fs::canonicalize(stored_ca).expect("resolve stored CA"),
+        std::fs::canonicalize(&ca_path).expect("resolve supplied CA"),
+        "login must retain the supplied CA file"
+    );
 
     // The management API with the profile's CA (no flag, no environment).
     write_token(
