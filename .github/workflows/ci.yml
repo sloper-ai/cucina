@@ -199,6 +199,7 @@ jobs:
         run: |
           bazelisk test --config=ci --test_output=errors -- \
             //charts/cucina/tests/boot:boot_test \
+            //cli/cucinactl:credential_helper_test \
             //cli/cucinactl:tui_pty_test \
             //internal/bbconfig/boottest:boottest_test \
             //internal/envtest/internal/testing/process:process_test \
@@ -218,6 +219,7 @@ jobs:
             repetitions=()
             for target in \
               //charts/cucina/tests/boot:boot_test \
+              //cli/cucinactl:credential_helper_test \
               //cli/cucinactl:tui_pty_test \
               //internal/bbconfig/boottest:boottest_test \
               //internal/bbtest:bbtest_test \
