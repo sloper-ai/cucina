@@ -190,13 +190,35 @@ jobs:
           Write-Host "Bazel storage: $env:CUCINA_CI_BAZEL_ROOT"
           Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' |
             Select-Object DeviceID, Size, FreeSpace | Format-Table -AutoSize
+      - name: native portability checks (Windows)
+        id: windows-portability
+        if: runner.os == 'Windows'
+        # Fail at the affected native boundaries before building unrelated release
+        # artifacts. Passing this subset never replaces the full canonical gates.
+        run: |
+          bazelisk test --config=ci --test_output=errors -- \
+            //charts/cucina/tests/boot:boot_test \
+            //cli/cucinactl:tui_pty_test \
+            //internal/bbconfig/boottest:boottest_test \
+            //internal/envtest/internal/testing/process:process_test \
+            //internal/workeragent/integration:integration_test \
+            //test/e2e/bazelrun:windows_wait_test \
+            //test/e2e/remote:windows_ownership_test \
+            //tools/envtest:envtest_test
       - name: bazel build
         run: bazelisk build --config=ci -- //...
       - name: bazel test
         id: tests
-        run: bazelisk test --config=ci -- //...
+        # Windows repeats the complete suite uncached: an earlier isolated pass
+        # must not hide a failure under normal suite concurrency.
+        run: |
+          if [ "${RUNNER_OS}" = Windows ]; then
+            bazelisk test --config=ci --nocache_test_results -- //...
+          else
+            bazelisk test --config=ci -- //...
+          fi
       - name: chart boot timeout diagnostics (Windows)
-        if: failure() && runner.os == 'Windows' && steps.tests.outcome == 'failure'
+        if: failure() && runner.os == 'Windows' && (steps.tests.outcome == 'failure' || steps.windows-portability.outcome == 'failure')
         # Dump Go stacks before the unchanged 60-second Bazel deadline. This
         # diagnostic never replaces the full suite or clears its failed result.
         run: |
