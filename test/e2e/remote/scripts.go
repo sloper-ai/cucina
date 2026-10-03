@@ -170,6 +170,24 @@ func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + 
 
 func (ps) join(dir, name string) string { return strings.TrimSuffix(dir, `\`) + `\` + name }
 
+// Bind wrapper dependencies to the running Windows PowerShell's inbox manifests,
+// not PSModulePath discovery. Import-Module is Core; the existence check must not
+// itself autoload Management. Keep this inside each script's original context.
+// Management owns path/process/file cmdlets; Utility owns Add-Type, New-Object,
+// Start-Sleep and Get-FileHash; Security owns Set-Acl; CimCmdlets owns CIM launch.
+func psNativeModules(modules ...string) string {
+	quoted := make([]string, len(modules))
+	for i, module := range modules {
+		quoted[i] = psQuote(module)
+	}
+	return fmt.Sprintf(`foreach ($ownedModule in @(%s)) {
+	$ownedManifest=$PSHOME+'\Modules\'+$ownedModule+'\'+$ownedModule+'.psd1'
+	if (-not [IO.File]::Exists($ownedManifest)) { throw ('required inbox PowerShell module manifest unavailable: '+$ownedModule) }
+	Import-Module -Name $ownedManifest -ErrorAction Stop
+}
+`, strings.Join(quoted, ","))
+}
+
 func (d ps) cmdFile(dir, script string, o Opts) string {
 	var hdr strings.Builder
 	hdr.WriteString("$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n")
@@ -177,6 +195,7 @@ func (d ps) cmdFile(dir, script string, o Opts) string {
 		fmt.Fprintf(&hdr, "$env:%s = %s\n", k, psQuote(o.Env[k]))
 	}
 	if o.Dir != "" {
+		hdr.WriteString(psNativeModules("Microsoft.PowerShell.Management"))
 		fmt.Fprintf(&hdr, "New-Item -ItemType Directory -Force -Path %s | Out-Null\nSet-Location %s\n", psQuote(o.Dir), psQuote(o.Dir))
 	}
 	// A native command's exit code becomes the script's; cmdlet failures
@@ -213,7 +232,7 @@ Write-OB 'process-wait/end'`, q, q, q)
 
 func (d ps) foreground(dir, script string, o Opts) string {
 	q := psQuote(dir)
-	return psOwnedBoundary + d.cmdFile(dir, script, o) + psRunCmd(dir) + fmt.Sprintf(`
+	return psNativeModules("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility") + psOwnedBoundary + d.cmdFile(dir, script, o) + psRunCmd(dir) + fmt.Sprintf(`
 $rc = $p.ExitCode
 Set-Content -Path (Join-Path %s 'exit') -Value $rc
 $o = (Get-Item (Join-Path %s 'stdout')).Length; $e = (Get-Item (Join-Path %s 'stderr')).Length
@@ -230,7 +249,7 @@ func (d ps) start(dir, id, script string, o Opts) string {
 func (ps) status(dir string) string { return psOwnedJobStatus(dir) }
 
 func (ps) read(file string, off int64, max int) string {
-	return fmt.Sprintf(`$fs = [IO.File]::Open(%s, 'Open', 'Read', 'ReadWrite'); try { [void]$fs.Seek(%d, 'Begin'); $b = New-Object byte[] %d; $n = $fs.Read($b, 0, %d); [Convert]::ToBase64String($b, 0, $n) } finally { $fs.Close() }
+	return psNativeModules("Microsoft.PowerShell.Utility") + fmt.Sprintf(`$fs = [IO.File]::Open(%s, 'Open', 'Read', 'ReadWrite'); try { [void]$fs.Seek(%d, 'Begin'); $b = New-Object byte[] %d; $n = $fs.Read($b, 0, %d); [Convert]::ToBase64String($b, 0, $n) } finally { $fs.Close() }
 `, psQuote(file), off, max, max)
 }
 
@@ -240,19 +259,24 @@ func (ps) appendB64(file, data string, first bool) string {
 		mode = "Create"
 	}
 	p := psQuote(file + ".part")
-	return fmt.Sprintf(`New-Item -ItemType Directory -Force -Path (Split-Path -Parent %s) | Out-Null
+	return psNativeModules("Microsoft.PowerShell.Management") + fmt.Sprintf(`New-Item -ItemType Directory -Force -Path (Split-Path -Parent %s) | Out-Null
 $b = [Convert]::FromBase64String(%s); $fs = [IO.File]::Open(%s, '%s', 'Write'); try { $fs.Write($b, 0, $b.Length) } finally { $fs.Close() }
 `, p, psQuote(data), p, mode)
 }
 
-func (d ps) commit(file string) string {
-	return fmt.Sprintf("Move-Item -Force %s %s\n%s", psQuote(file+".part"), psQuote(file), d.sha256(file))
+func (ps) commit(file string) string {
+	return psNativeModules("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility") + fmt.Sprintf("Move-Item -Force %s %s\n%s", psQuote(file+".part"), psQuote(file), psFileHash(file))
 }
 
-func (ps) sha256(file string) string {
+func psFileHash(file string) string {
 	return fmt.Sprintf("(Get-FileHash -Algorithm SHA256 -LiteralPath %s).Hash.ToLower()\n", psQuote(file))
 }
 
+func (ps) sha256(file string) string {
+	// Get-FileHash's PS5 script function calls Management's Resolve-Path.
+	return psNativeModules("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility") + psFileHash(file)
+}
+
 func (ps) size(file string) string {
-	return fmt.Sprintf("(Get-Item -LiteralPath %s).Length\n", psQuote(file))
+	return psNativeModules("Microsoft.PowerShell.Management") + fmt.Sprintf("(Get-Item -LiteralPath %s).Length\n", psQuote(file))
 }

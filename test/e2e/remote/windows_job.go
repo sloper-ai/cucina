@@ -126,34 +126,16 @@ const psProtectJobDirectory = psOwnedBoundary + `function Protect-OwnedDirectory
 func windowsJobName(id string) string { return `Local\CucinaE2E-` + id }
 
 // Protected stage records contain only fixed phases and an integer session ID.
-// Launcher-only runtime metadata contains versions, path-class counts and cache/
-// layout classifications, never paths, principals, environment values or payloads.
 func psStartupTrace(dir, role string) string {
 	// Emit only a fixed role marker before directory/ACL preparation. If that
 	// preparation stalls, the transport can still distinguish script entry from
 	// process/PowerShell startup. Do not create an unprotected diagnostic file.
 	entry := fmt.Sprintf("try { [Console]::Error.WriteLine(%s) } catch { }\n", psQuote("owned startup "+role+"-entry"))
+	modules := []string{"Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security"}
 	if role == "launcher" {
-		// CLR-only observations: no command discovery, imports or environment
-		// changes. Path classes/counts and candidate existence are not authority.
-		entry += `try {
- [Console]::Error.WriteLine('owned runtime ps='+$PSVersionTable.PSVersion+' clr='+[Environment]::Version)
- $odm=@(0,0,0,0)
- foreach($ode in ([Environment]::GetEnvironmentVariable('PSModulePath') -split ';')) {
-  if (!$ode) { continue }
-  if ($ode.TrimEnd([char[]]'\/') -ieq ($PSHOME+'\Modules')) { $odm[0]++ }
-  elseif ($ode -match '[\\/]WindowsPowerShell[\\/]') { $odm[1]++ }
-  elseif ($ode -match '[\\/]PowerShell[\\/]') { $odm[2]++ }
-  else { $odm[3]++ }
- }
- $odc=[Environment]::GetEnvironmentVariable('PSModuleAnalysisCachePath'); $odk='custom'
- if (!$odc) { $odk='default'; $odc=[IO.Path]::Combine([Environment]::GetFolderPath('LocalApplicationData'),'Microsoft\Windows\PowerShell\ModuleAnalysisCache') }
- [Console]::Error.WriteLine('owned module-classes='+($odm -join ',')+' cache='+$odk+','+[IO.File]::Exists($odc))
- [Console]::Error.WriteLine('owned layout manifest='+[IO.File]::Exists($PSHOME+'\Modules\Microsoft.PowerShell.Management\Microsoft.PowerShell.Management.psd1')+' dll='+[IO.File]::Exists($PSHOME+'\Microsoft.PowerShell.Commands.Management.dll'))
-} catch { try { [Console]::Error.WriteLine('owned runtime metadata unavailable') } catch { } }
-`
+		modules = append(modules, "CimCmdlets")
 	}
-	return "$ErrorActionPreference='Stop'\n" + entry + psProtectJobDirectory + fmt.Sprintf(`
+	return "$ErrorActionPreference='Stop'\n" + entry + psNativeModules(modules...) + psProtectJobDirectory + fmt.Sprintf(`
 $J=%s
 function Report-OwnedTraceFailure {
  try { [Console]::Error.WriteLine('owned startup diagnostics unavailable') } catch { }
@@ -273,7 +255,7 @@ try {
 }
 
 func psOwnedJobStatus(dir string) string {
-	return "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+	return "$ErrorActionPreference='Stop'\n" + psNativeModules("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility") + psOwnedJob + fmt.Sprintf(`
 $J=%s
 $name='Local\CucinaE2E-'+(Split-Path -Leaf $J)
 function Len($n) { $f=Join-Path $J $n; if (Test-Path -LiteralPath $f) { (Get-Item -LiteralPath $f).Length } else { 0 } }
@@ -296,7 +278,7 @@ try {
 }
 
 func psStopOwnedJob(j Job) string {
-	return "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+	return "$ErrorActionPreference='Stop'\n" + psNativeModules("Microsoft.PowerShell.Management", "Microsoft.PowerShell.Utility", "Microsoft.PowerShell.Security") + psOwnedJob + fmt.Sprintf(`
 $J=%s; $name=%s
 Protect-OwnedDirectory $J
 $gate=New-OwnedGate $name
