@@ -11,6 +11,9 @@ mock_provider "aws" {
   mock_resource "aws_eip" {
     defaults = { public_ip = "198.51.100.10", id = "eipalloc-0123456789abcdef0" }
   }
+  mock_resource "aws_launch_template" {
+    defaults = { id = "lt-0123456789abcdef0", latest_version = 7 }
+  }
 }
 
 # Stub of the base layer's outputs (what up.sh base produces); no real ids.
@@ -222,15 +225,40 @@ run "tags_on_every_resource" {
         aws_instance.k3s.tags, aws_instance.k3s.volume_tags,
         aws_instance.linux_client.tags, aws_instance.linux_client.volume_tags,
         aws_instance.windows_client[0].tags, aws_instance.windows_client[0].volume_tags,
+        aws_launch_template.client_network_tags.tags,
+        one(aws_launch_template.client_network_tags.tag_specifications).tags,
       ] : try(t["cucina:env"] == "e2e" && t["cucina:run"] == "e2e-test" && t["cucina:expires"] == "2030-01-01T00:00:00Z", false)
     ])
     error_message = "every resource (including the volumes created with the instances) carries the three mandatory tags"
   }
   assert {
     condition = alltrue([
-      for t in [aws_instance.k3s.tags, aws_instance.linux_client.tags, aws_instance.windows_client[0].tags] : t["cucina:protected"] == "true"
+      for t in [
+        aws_instance.k3s.tags, aws_instance.linux_client.tags, aws_instance.windows_client[0].tags,
+        aws_launch_template.client_network_tags.tags,
+        one(aws_launch_template.client_network_tags.tag_specifications).tags,
+      ] : t["cucina:protected"] == "true"
     ])
-    error_message = "infrastructure nodes carry cucina:protected=true so the controller policy can never touch them"
+    error_message = "infrastructure nodes, the client ENI template and its ENIs carry cucina:protected=true so the controller policy can never touch them"
+  }
+
+  # Guards: PROMPT.md §12 — tag the clients' implicit primary ENIs at launch, not just instances and volumes.
+  assert {
+    condition     = one(aws_launch_template.client_network_tags.tag_specifications).resource_type == "network-interface"
+    error_message = "the client template must add only network-interface tags, leaving instance and volume tags on the instances"
+  }
+  assert {
+    condition = alltrue([
+      for client in [aws_instance.linux_client, aws_instance.windows_client[0]] :
+      try(
+        length(client.launch_template) == 1 &&
+        one(client.launch_template).id == aws_launch_template.client_network_tags.id &&
+        one(client.launch_template).version == tostring(aws_launch_template.client_network_tags.latest_version) &&
+        can(regex("^[1-9][0-9]*$", one(client.launch_template).version)),
+        false,
+      )
+    ])
+    error_message = "both clients must use the ENI-tagging launch template with its explicit numeric latest version"
   }
 }
 

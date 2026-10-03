@@ -164,6 +164,22 @@ resource "aws_instance" "k3s" {
   }
 }
 
+# --- client ENI tags ---------------------------------------------------------------------
+
+# aws_instance tags/volume_tags do not tag implicit ENIs. Keep this env-only template tag-only;
+# the base Fast Launch prep template must not tag ENIs (its service role cannot). ADR 0203.
+resource "aws_launch_template" "client_network_tags" {
+  name        = "${local.name}-client-network-tags"
+  description = "Ownership tags for e2e client network interfaces"
+
+  tag_specifications {
+    resource_type = "network-interface"
+    tags          = merge(local.tags, local.infra_tags)
+  }
+
+  tags = merge(local.tags, local.infra_tags)
+}
+
 # --- linux-client ------------------------------------------------------------------------
 
 resource "aws_instance" "linux_client" {
@@ -177,6 +193,11 @@ resource "aws_instance" "linux_client" {
   monitoring                           = false
   user_data                            = local.linux_client_user_data
   user_data_replace_on_change          = true
+
+  launch_template {
+    id      = aws_launch_template.client_network_tags.id
+    version = tostring(aws_launch_template.client_network_tags.latest_version)
+  }
 
   metadata_options {
     http_endpoint               = "enabled"
@@ -196,7 +217,8 @@ resource "aws_instance" "linux_client" {
   volume_tags = merge(local.tags, local.infra_tags, { Name = "${local.name}-linux-client", "cucina:e2e-role" = "linux-client" })
 
   lifecycle {
-    ignore_changes = [ami]
+    # ENI tags are create-only: attaching/updating the template must not replace a campaign client.
+    ignore_changes = [ami, launch_template]
   }
 }
 
@@ -219,6 +241,11 @@ resource "aws_instance" "windows_client" {
   user_data                            = local.windows_client_user_data
   user_data_replace_on_change          = true
 
+  launch_template {
+    id      = aws_launch_template.client_network_tags.id
+    version = tostring(aws_launch_template.client_network_tags.latest_version)
+  }
+
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required" # IMDSv2 only
@@ -237,6 +264,7 @@ resource "aws_instance" "windows_client" {
   volume_tags = merge(local.tags, local.infra_tags, { Name = "${local.name}-windows-client", "cucina:e2e-role" = "windows-client" })
 
   lifecycle {
-    ignore_changes = [ami]
+    # ENI tags are create-only: attaching/updating the template must not replace a campaign client.
+    ignore_changes = [ami, launch_template]
   }
 }
