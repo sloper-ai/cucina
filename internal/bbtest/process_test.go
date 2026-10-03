@@ -5,15 +5,70 @@ package bbtest
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/sloper-ai/cucina/internal/fakes"
 )
+
+// Guards: the 03b0997 boottest port collision — allocations remain exclusive
+// across independent fixture processes before TCP bind and across a restart.
+func TestFreeAddrLease(t *testing.T) {
+	const helperEnv = "CUCINA_BBTEST_ADDR_HELPER"
+	newAllocator := func() AddrAllocator { return AddrAllocator{Rand: fakes.NewRand(1)} }
+	if result := os.Getenv(helperEnv); result != "" {
+		addr := newAllocator().FreeAddr(t)
+		require.NoError(t, os.WriteFile(result, []byte(addr), 0o600))
+		return
+	}
+
+	executable, err := os.Executable()
+	require.NoError(t, err)
+	otherProcess := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		result := filepath.Join(dir, "address")
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, executable, "-test.run=^TestFreeAddrLease$")
+		// Independent test sandboxes/output bases need not share a temp directory.
+		// The helper must not overwrite the parent Bazel XML result, either.
+		cmd.Env = append(os.Environ(), helperEnv+"="+result, "XML_OUTPUT_FILE=",
+			"TMPDIR="+dir, "TMP="+dir, "TEMP="+dir, "TEST_TMPDIR="+dir)
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		data, err := os.ReadFile(result)
+		require.NoError(t, err)
+		return string(data)
+	}
+
+	owned := newAllocator().FreeAddr(t)
+	for _, phase := range []string{"before TCP bind", "after TCP stop"} {
+		t.Run(phase, func(t *testing.T) {
+			if phase == "after TCP stop" {
+				listener, err := net.Listen("tcp4", owned)
+				require.NoError(t, err, "the lease must allow the real child to bind TCP")
+				require.NoError(t, listener.Close())
+			}
+			// The same seed forces the conflicting candidate without relying on
+			// random collisions, concurrent scheduling or sleeps.
+			if got := newAllocator().FreeAddr(t); got == owned {
+				t.Errorf("independent allocator reused live fixture address %s", owned)
+			}
+			if got := otherProcess(t); got == owned {
+				t.Errorf("independent process reused live fixture address %s", owned)
+			}
+		})
+	}
+}
 
 // Guards the reviewed KillContext exit/reap race: a signal error does not
 // decide whether our owned child finished. The bounded Cmd.Wait publication

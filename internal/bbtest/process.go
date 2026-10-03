@@ -26,6 +26,8 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/sloper-ai/cucina/internal/ports"
 )
 
 // ReadyTimeout bounds every readiness wait.
@@ -297,20 +299,56 @@ func Dial(target string, tlsConfig *tls.Config, opts ...grpc.DialOption) (*grpc.
 	}, opts...)...)
 }
 
-// FreeAddr returns a loopback address with a currently free TCP port for a
-// child to listen on. Ports come from [20000, 32768), below the ephemeral
-// ranges of Linux, macOS and Windows, so outgoing connections (whose local
-// ports the kernel takes from those ranges) cannot grab them before the
-// child binds.
+// FreeAddr leases a loopback address for a child's TCP listener until test
+// cleanup, including any child restarts. Allocate before Start/Boot so their
+// cleanup stops and reaps the children before releasing the lease.
+//
+// An exclusive UDP socket coordinates all bbtest allocators in the same network
+// namespace, even in separate processes/output bases with different temp dirs.
+// TCP remains available to the child. Ports come from [20000, 32768), below the
+// default ephemeral ranges of Linux, macOS and Windows. This is a cooperative
+// lease, not atomic TCP handoff: an unrelated TCP binder (or a host with a custom
+// ephemeral range) can still race the child after the TCP availability probe.
+// The pinned Buildbarn binaries do not support inheriting a bound listener.
 func FreeAddr(t testing.TB) string {
 	t.Helper()
+	return (AddrAllocator{}).FreeAddr(t)
+}
+
+// AddrAllocator selects child listener addresses. Rand optionally makes the
+// candidate sequence reproducible; the zero value uses the default random source.
+// It is only a fixture allocator, not a production listener handoff API.
+type AddrAllocator struct {
+	Rand ports.Rand
+}
+
+// FreeAddr is FreeAddr with this allocator's candidate source.
+func (a AddrAllocator) FreeAddr(t testing.TB) string {
+	t.Helper()
+	next := mathrand.Int64N
+	if a.Rand != nil {
+		next = a.Rand.Int63n
+	}
 	for range 100 {
-		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(20000+mathrand.IntN(32768-20000)))
-		l, err := net.Listen("tcp", addr)
+		addr := net.JoinHostPort("127.0.0.1", strconv.FormatInt(20000+next(32768-20000), 10))
+		lease, err := net.ListenPacket("udp4", addr)
 		if err != nil {
 			continue
 		}
-		_ = l.Close()
+		l, err := net.Listen("tcp4", addr)
+		if err != nil {
+			_ = lease.Close()
+			continue
+		}
+		if err := l.Close(); err != nil {
+			_ = lease.Close()
+			t.Fatalf("close TCP availability probe: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := lease.Close(); err != nil {
+				t.Errorf("release loopback address %s: %v", addr, err)
+			}
+		})
 		return addr
 	}
 	t.Fatal("no free loopback port in [20000, 32768)")
