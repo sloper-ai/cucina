@@ -8,12 +8,13 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -26,8 +27,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	repb "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
@@ -38,6 +39,7 @@ import (
 	"github.com/sloper-ai/cucina/internal/canary"
 	"github.com/sloper-ai/cucina/internal/ports"
 	"github.com/sloper-ai/cucina/test/e2e/collect/execlog"
+	"github.com/sloper-ai/cucina/test/e2e/collect/portscan"
 	"github.com/sloper-ai/cucina/test/e2e/harness"
 	"github.com/sloper-ai/cucina/test/e2e/infra"
 	"github.com/sloper-ai/cucina/test/e2e/remote"
@@ -1188,108 +1190,239 @@ func runT10h(c *harness.Context) error {
 	return nil
 }
 
-// T10i: scan every TCP port of the public endpoint from the allowed source
-// (the dev Mac) and require a TLS handshake on each open one.
-func runT10i(c *harness.Context) error {
+// T10i proves TLS-speaking exposure, not certificate trust or peer identity.
+// The 24-minute scanner and four-minute TLS phase fit the existing 30-minute
+// scenario; an earlier parent cancellation is incomplete evidence, never PASS.
+func runT10i(c *harness.Context) (runErr error) {
 	host := c.Env.Endpoints.PublicHost
 	if host == "" {
 		return harness.Skip("no endpoints.publicHost")
 	}
-	var open []int
-	var how string
-	if nm, err := exec.LookPath("nmap"); err == nil {
-		how = "nmap -Pn -sT -p-"
-		out, err := exec.CommandContext(c, nm, "-Pn", "-sT", "-p-", "--min-rate", "2000", "-oX", "-", host).Output()
-		if err != nil {
-			return fmt.Errorf("nmap: %w", err)
-		}
-		open = parseNmapXML(out)
-	} else {
-		how = "Go TCP connect scan of 1-65535"
-		open = connectScan(c, host, 1, 65535, 400)
-	}
-	if err := c.Err(); err != nil {
+	if _, err := portscan.Target(host); err != nil {
 		return err
 	}
-	if len(open) == 0 {
-		return harness.Fail("port scan found no reachable TLS endpoint; empty measurement cannot prove exposure")
+	// The positive control is the exact configured public REAPI endpoint, not
+	// an arbitrary open port or a DNS name that might expand the scan's scope.
+	u, err := url.Parse(c.Env.Endpoints.RemoteExecution)
+	if err != nil || (u.Scheme != "grpcs" && u.Scheme != "https") || u.Hostname() != host || u.User != nil {
+		return errors.New("T10i needs a TLS REAPI endpoint bound to the same numeric public IPv4")
 	}
-	c.Record("openPorts", open)
-	var bad []string
-	for _, p := range open {
-		addr := net.JoinHostPort(host, fmt.Sprint(p))
-		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", addr, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // only checking that the port speaks TLS
-		ok := err == nil
-		if conn != nil {
-			_ = conn.Close()
-		}
-		if err != nil && strings.Contains(err.Error(), "certificate required") {
-			ok = true // mTLS endpoint: TLS, client certificate required
-		}
-		c.Check(harness.CheckResult{Name: fmt.Sprintf("port %d speaks TLS", p), Kind: "scan", Pass: ok, Value: fmt.Sprint(err)})
-		if !ok {
-			bad = append(bad, fmt.Sprint(p))
+	controlPort := 443
+	if u.Port() != "" {
+		controlPort, err = strconv.Atoi(u.Port())
+	}
+	if err != nil || controlPort < 1 || controlPort > portscan.Ports {
+		return errors.New("T10i invalid positive-control port")
+	}
+
+	descriptor, err := harness.DescriptorPath(c.Env.Name)
+	if err != nil {
+		return errors.New("T10i private evidence location unavailable")
+	}
+	parent := filepath.Dir(descriptor)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return errors.New("T10i cannot create private evidence parent")
+	}
+	if st, err := os.Stat(parent); err != nil || st.Mode().Perm()&0o077 != 0 {
+		return errors.New("T10i evidence parent must be private")
+	}
+	privateDir, err := os.MkdirTemp(parent, "t10i-")
+	if err != nil {
+		return errors.New("T10i cannot create private evidence directory")
+	}
+	// Never delete this directory on cancellation/error. Raw addresses, argv,
+	// XML, scanner diagnostics and TLS errors stay on the encrypted private disk.
+	fileNames := []string{"argv.json", "version.log", "version.stderr", "scan.xml", "progress.log", "stderr.log", "execution.json", "tls.json"}
+	for _, name := range fileNames {
+		if err := os.WriteFile(filepath.Join(privateDir, name), nil, 0o600); err != nil {
+			return errors.New("T10i cannot prepare private capture files")
 		}
 	}
-	c.Note("scan: %s found %d open ports: %v", how, len(open), open)
-	if len(bad) > 0 {
-		return harness.Fail("non-TLS open ports: %s", strings.Join(bad, ", "))
+	type rawFile struct {
+		Name   string `json:"name"`
+		SHA256 string `json:"sha256"`
+		Bytes  int64  `json:"bytes"`
 	}
+	summary := struct {
+		SchemaVersion    int                 `json:"schemaVersion"`
+		EvidenceID       string              `json:"evidenceId"`
+		Stage            string              `json:"stage"`
+		Reason           string              `json:"reason,omitempty"`
+		Complete         bool                `json:"complete"`
+		IdentityVerified bool                `json:"identityVerified"`
+		Scan             portscan.Report     `json:"scan"`
+		Control          portscan.TLSProof   `json:"control"`
+		TLS              []portscan.TLSProof `json:"tls"`
+		RawFiles         []rawFile           `json:"rawFiles"`
+	}{SchemaVersion: 1, EvidenceID: filepath.Base(privateDir), Stage: "setup"}
+	execution := struct {
+		Started  time.Time `json:"started"`
+		Finished time.Time `json:"finished"`
+		ScanExit int       `json:"scanExit"`
+		RawError string    `json:"rawError,omitempty"`
+	}{Started: c.Now(), ScanExit: -1}
+	type privateTLS struct {
+		Proof portscan.TLSProof `json:"proof"`
+		Error string            `json:"error,omitempty"`
+	}
+	var tlsRaw []privateTLS
+	writeJSON := func(name string, value any) error {
+		b, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(privateDir, name), append(b, '\n'), 0o600)
+	}
+	fail := func(reason string, raw error) error {
+		summary.Reason = reason
+		if raw != nil {
+			execution.RawError = raw.Error()
+		}
+		return fmt.Errorf("T10i %s; private capture retained", reason)
+	}
+	defer func() {
+		execution.Finished = c.Now()
+		captureErr := errors.Join(writeJSON("execution.json", execution), writeJSON("tls.json", tlsRaw))
+		for _, name := range fileNames {
+			f, err := os.Open(filepath.Join(privateDir, name))
+			if err != nil {
+				captureErr = errors.Join(captureErr, err)
+				continue
+			}
+			h := sha256.New()
+			n, readErr := io.Copy(h, f)
+			captureErr = errors.Join(captureErr, readErr, f.Close())
+			summary.RawFiles = append(summary.RawFiles, rawFile{Name: name, SHA256: hex.EncodeToString(h.Sum(nil)), Bytes: n})
+		}
+		if captureErr != nil {
+			summary.Complete, summary.Reason = false, "capture_persistence_failed"
+			runErr = errors.Join(runErr, errors.New("T10i private evidence persistence failed"))
+		}
+		// Only this allow-listed summary enters bulk artifacts/results, on both
+		// success and failure. No private path, target, raw error or argv escapes.
+		b, err := json.MarshalIndent(summary, "", "  ")
+		if err == nil {
+			err = os.WriteFile(filepath.Join(c.Dir(), "portscan-summary.json"), append(b, '\n'), 0o600)
+		}
+		if err == nil {
+			err = c.Artifact("portscan-summary", "portscan-summary.json")
+		}
+		if err != nil {
+			runErr = errors.Join(runErr, errors.New("T10i sanitized summary persistence failed"))
+		}
+		c.Record("portScan", summary)
+	}()
+
+	args := []string{"-n", "-Pn", "-sT", "-p", "1-65535", "--min-rate", "2000", "--max-retries", "10", "--host-timeout", "24m", "--stats-every", "10s", "-vv", "--reason", "-oX", filepath.Join(privateDir, "scan.xml"), host}
+	nm, lookupErr := exec.LookPath("nmap")
+	if err := writeJSON("argv.json", map[string]any{"scanner": nm, "lookup": "nmap", "versionArgv": []string{"--version"}, "scanArgv": args}); err != nil {
+		return fail("argv_capture_failed", err)
+	}
+	if lookupErr != nil {
+		return fail("nmap_required_no_fallback", lookupErr)
+	}
+	runCommand := func(ctx context.Context, argv []string, stdout, stderr string) (int, error) {
+		out, err := os.OpenFile(filepath.Join(privateDir, stdout), os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return -1, err
+		}
+		errout, err := os.OpenFile(filepath.Join(privateDir, stderr), os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			return -1, errors.Join(err, out.Close())
+		}
+		cmd := exec.CommandContext(ctx, nm, argv...)
+		cmd.Stdout, cmd.Stderr = out, errout
+		cmd.WaitDelay = 5 * time.Second
+		err = cmd.Run()
+		code := -1
+		if cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
+		}
+		return code, errors.Join(err, out.Close(), errout.Close())
+	}
+	readBounded := func(name string, limit int64) ([]byte, error) {
+		f, err := os.Open(filepath.Join(privateDir, name))
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = f.Close() }()
+		b, err := io.ReadAll(io.LimitReader(f, limit+1))
+		if len(b) > int(limit) {
+			return nil, errors.New("private capture exceeds parser limit")
+		}
+		return b, err
+	}
+	summary.Stage = "version"
+	versionCtx, versionCancel := context.WithTimeout(c, 10*time.Second)
+	_, err = runCommand(versionCtx, []string{"--version"}, "version.log", "version.stderr")
+	versionCancel()
+	if err != nil {
+		return fail("scanner_version_failed", err)
+	}
+	version, err := readBounded("version.log", 1<<20)
+	if err != nil || len(version) == 0 {
+		return fail("scanner_version_missing", err)
+	}
+
+	summary.Stage = "positive-control"
+	control, err := portscan.ProbeTLS(c, host, controlPort, u.Hostname())
+	summary.Control = control
+	tlsRaw = append(tlsRaw, privateTLS{Proof: control, Error: errString(err)})
+	c.Check(harness.CheckResult{Name: "known public endpoint speaks TLS", Kind: "scan", Pass: err == nil && control.SpeaksTLS, Detail: "TLS protocol only; peer identity is not verified"})
+	if err != nil || !control.SpeaksTLS {
+		return fail("positive_control_failed", err)
+	}
+
+	summary.Stage = "scan"
+	scanCtx, scanCancel := context.WithTimeout(c, 24*time.Minute)
+	execution.ScanExit, err = runCommand(scanCtx, args, "progress.log", "stderr.log")
+	if scanCtx.Err() != nil {
+		err = errors.Join(err, scanCtx.Err())
+	}
+	scanCancel()
+	if err != nil {
+		return fail("scanner_failed_or_cancelled", err)
+	}
+	xmlBytes, err := readBounded("scan.xml", portscan.MaxXMLBytes)
+	if err != nil {
+		return fail("scan_xml_unavailable", err)
+	}
+	stderr, err := readBounded("stderr.log", 1<<20)
+	if err != nil {
+		return fail("scanner_diagnostics_unavailable", err)
+	}
+	summary.Stage = "coverage"
+	summary.Scan, err = portscan.Read(portscan.Evidence{Target: host, PositivePort: controlPort, XML: xmlBytes, ExitCode: execution.ScanExit, Stderr: stderr})
+	if err != nil {
+		return fail("scan_coverage_incomplete", err)
+	}
+	c.Check(harness.CheckResult{Name: "one host all 65535 TCP ports accounted", Kind: "scan", Pass: true, Value: strconv.Itoa(summary.Scan.PortsScanned)})
+
+	summary.Stage = "tls"
+	tlsCtx, tlsCancel := context.WithTimeout(c, 4*time.Minute)
+	defer tlsCancel()
+	allTLS := true
+	for _, p := range summary.Scan.OpenPorts {
+		if tlsCtx.Err() != nil {
+			return fail("tls_phase_cancelled_or_expired", tlsCtx.Err())
+		}
+		proof, err := portscan.ProbeTLS(tlsCtx, host, p, u.Hostname())
+		summary.TLS = append(summary.TLS, proof)
+		tlsRaw = append(tlsRaw, privateTLS{Proof: proof, Error: errString(err)})
+		ok := err == nil && proof.SpeaksTLS
+		c.Check(harness.CheckResult{Name: fmt.Sprintf("port %d speaks TLS", p), Kind: "scan", Pass: ok, Detail: "TLS protocol only; peer identity is not verified"})
+		allTLS = allTLS && ok
+	}
+	if err := tlsCtx.Err(); err != nil {
+		return fail("tls_phase_cancelled_or_expired", err)
+	}
+	if !allTLS {
+		return fail("open_ports_lack_tls_evidence", nil)
+	}
+	summary.Complete, summary.Stage = true, "complete"
+	c.Record("openPorts", summary.Scan.OpenPorts)
+	c.Note("complete single-host TCP 1-65535 scan; every open port speaks TLS (not a peer-identity assertion)")
 	return nil
-}
-
-func parseNmapXML(b []byte) []int {
-	var run struct {
-		Hosts []struct {
-			Ports []struct {
-				PortID int `xml:"portid,attr"`
-				State  struct {
-					State string `xml:"state,attr"`
-				} `xml:"state"`
-			} `xml:"ports>port"`
-		} `xml:"host"`
-	}
-	_ = xml.Unmarshal(b, &run)
-	var open []int
-	for _, h := range run.Hosts {
-		for _, p := range h.Ports {
-			if p.State.State == "open" {
-				open = append(open, p.PortID)
-			}
-		}
-	}
-	sort.Ints(open)
-	return open
-}
-
-func connectScan(ctx context.Context, host string, from, to, workers int) []int {
-	ports := make(chan int)
-	var mu sync.Mutex
-	var open []int
-	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			d := net.Dialer{Timeout: 2 * time.Second}
-			for p := range ports {
-				conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprint(p)))
-				if err == nil {
-					_ = conn.Close()
-					mu.Lock()
-					open = append(open, p)
-					mu.Unlock()
-				}
-			}
-		}()
-	}
-	for p := from; p <= to && ctx.Err() == nil; p++ {
-		ports <- p
-	}
-	close(ports)
-	wg.Wait()
-	sort.Ints(open)
-	return open
 }
 
 func hostOf(raw string) string {

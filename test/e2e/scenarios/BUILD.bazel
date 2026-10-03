@@ -39,6 +39,7 @@ go_library(
         "//test/e2e/collect/bep",
         "//test/e2e/collect/execlog",
         "//test/e2e/collect/grpcuploads",
+        "//test/e2e/collect/portscan",
         "//test/e2e/collect/prom",
         "//test/e2e/collect/scalein",
         "//test/e2e/collect/spend",
