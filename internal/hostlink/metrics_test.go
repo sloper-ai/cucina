@@ -563,7 +563,7 @@ func TestCertificateExpiryRelayTracksLiveIdentities(t *testing.T) {
 		<-stopping
 		<-time.After(30 * time.Second)
 		synctest.Wait()
-		require.Equal(t, float64(2), hostExpectedCertificates(t, e), "unknown true-stopping identity remains expected")
+		require.InDelta(t, float64(2), hostExpectedCertificates(t, e), 0, "unknown true-stopping identity remains expected")
 		require.NotContains(t, roles(), "worker")
 		close(stopRelease)
 		advanceUntil(t, "coverage restored when unknown VM stops", time.Minute, func() bool { _, ok := roles()["worker"]; return ok })

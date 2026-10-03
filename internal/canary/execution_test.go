@@ -111,7 +111,7 @@ func TestExecutionScheduleCadence(t *testing.T) {
 			{Pool: "windows", Instance: "ci", Platform: map[string]string{"OSFamily": "windows", "ISA": "x86-64"}},
 		}, targets)
 		for _, pool := range []string{"linux", "windows", "mac"} {
-			require.Equal(t, 1.0, sample(t, reg, canary.MetricUp, pool))
+			require.InDelta(t, 1.0, sample(t, reg, canary.MetricUp, pool), 0)
 		}
 		// New process, same release: restore truthful results into a fresh registry,
 		// but suppress another paid run and do not re-count the historical attempts.
@@ -121,8 +121,8 @@ func TestExecutionScheduleCadence(t *testing.T) {
 		<-time.After(23 * time.Hour)
 		require.NoError(t, restarted.Tick(t.Context()))
 		require.Len(t, targets, 3)
-		require.Equal(t, 1.0, sample(t, reg, canary.MetricUp, "linux"))
-		require.Equal(t, float64(clock.Now().Add(-23*time.Hour).Unix()), sample(t, reg, canary.MetricLastSuccess, "linux"))
+		require.InDelta(t, 1.0, sample(t, reg, canary.MetricUp, "linux"), 0)
+		require.InDelta(t, float64(clock.Now().Add(-23*time.Hour).Unix()), sample(t, reg, canary.MetricLastSuccess, "linux"), 0)
 		families, err := reg.Gather()
 		require.NoError(t, err)
 		for _, family := range families {
@@ -231,8 +231,8 @@ func TestExecutionScheduleUnavailable(t *testing.T) {
 				}
 				_ = s.Tick(t.Context())
 				require.Zero(t, sample(t, reg, canary.MetricUp, "z"))
-				require.Equal(t, lastSuccess, sample(t, reg, canary.MetricLastSuccess, "z"), "history is not current-health evidence")
-				require.Equal(t, 1.0, sample(t, reg, canary.MetricUp, ""), "cache-canary health must not be masked")
+				require.InDelta(t, lastSuccess, sample(t, reg, canary.MetricLastSuccess, "z"), 0, "history is not current-health evidence")
+				require.InDelta(t, 1.0, sample(t, reg, canary.MetricUp, ""), 0, "cache-canary health must not be masked")
 			})
 		})
 	}

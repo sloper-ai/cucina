@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -177,7 +176,7 @@ func TestSupervisorCertificateMetrics(t *testing.T) {
 		promhttp.HandlerFor(sv.s.Metrics.Registry, promhttp.HandlerOpts{}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 		require.Equal(t, http.StatusOK, recorder.Code)
 		require.Contains(t, recorder.Body.String(), `cucina_cert_expiry_seconds{role="worker"} `+tc.value+"\n")
-		require.False(t, strings.Contains(recorder.Body.String(), `role="host"`), "a worker agent cannot claim a host identity")
+		require.NotContains(t, recorder.Body.String(), `role="host"`, "a worker agent cannot claim a host identity")
 	}
 	state, err := workeragent.LoadState(sv.fs, sv.paths.StateFile)
 	require.NoError(t, err)
