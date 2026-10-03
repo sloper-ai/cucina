@@ -66,8 +66,10 @@ pub struct Behavior {
     pub wrong_nonce: bool,
     /// Lifetime of minted Cucina JWTs (seconds; default 900).
     pub sts_ttl: Option<i64>,
-    /// The STS refuses every exchange with this RFC 6749 error.
+    /// The STS refuses otherwise-valid exchanges with this RFC 6749 error.
     pub sts_error: Option<(u16, String)>,
+    /// Discovery returns this HTTP status while the token endpoint stays available.
+    pub discovery_error: Option<u16>,
 }
 
 /// One pending authorization code.
@@ -88,7 +90,7 @@ pub struct AuthState {
     gha_tokens: Mutex<HashSet<String>>,
     /// Query of the last /idp/authorize request.
     pub last_authorize: Mutex<Option<HashMap<String, String>>>,
-    /// subject_token_type of every STS exchange, in order.
+    /// subject_token_type of every validated STS exchange, in order.
     pub exchanges: Mutex<Vec<String>>,
     /// `audience` parameters seen by /gha.
     pub gha_audiences: Mutex<Vec<String>>,
@@ -178,7 +180,10 @@ fn oauth_error(status: u16, error: &str, description: &str) -> Response {
         .into_response()
 }
 
-async fn discovery(State(s): State<Arc<AuthState>>) -> Json<Value> {
+async fn discovery(State(s): State<Arc<AuthState>>) -> Response {
+    if let Some(status) = s.behavior.lock().unwrap().discovery_error {
+        return StatusCode::from_u16(status).unwrap().into_response();
+    }
     Json(json!({
         "version": 1,
         "issuer": s.base,
@@ -198,6 +203,7 @@ async fn discovery(State(s): State<Arc<AuthState>>) -> Json<Value> {
             "redirect_ports": [],
         }],
     }))
+    .into_response()
 }
 
 async fn idp_discovery(State(s): State<Arc<AuthState>>) -> Json<Value> {
@@ -344,10 +350,6 @@ async fn sts_token(
 ) -> Response {
     let get = |k: &str| f.get(k).cloned().unwrap_or_default();
     let behavior = s.behavior.lock().unwrap().clone();
-    if let Some((status, error)) = behavior.sts_error {
-        s.exchanges.lock().unwrap().push(get("subject_token_type"));
-        return oauth_error(status, &error, "refused by test");
-    }
     if get("grant_type") != "urn:ietf:params:oauth:grant-type:token-exchange" {
         return oauth_error(400, "invalid_request", "grant_type");
     }
@@ -377,7 +379,11 @@ async fn sts_token(
         }
         _ => return oauth_error(400, "invalid_request", "subject_token_type"),
     };
+    // Record only validated exchanges, without retaining the supplied credential.
     s.exchanges.lock().unwrap().push(token_type);
+    if let Some((status, error)) = behavior.sts_error {
+        return oauth_error(status, &error, "refused by test");
+    }
     let now = cucinactl::util::now_unix();
     let ttl = behavior.sts_ttl.unwrap_or(900);
     let jwt = s.sts_key.sign(&json!({

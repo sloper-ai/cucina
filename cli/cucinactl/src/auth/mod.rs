@@ -105,8 +105,17 @@ pub async fn ensure_token(
     min_secs: i64,
     fallback_secs: i64,
 ) -> Result<CachedToken> {
+    ensure_token_with_clock(ctx, min_secs, fallback_secs, crate::util::now_unix).await
+}
+
+pub(crate) async fn ensure_token_with_clock(
+    ctx: &ProfileCtx,
+    min_secs: i64,
+    fallback_secs: i64,
+    clock: fn() -> i64,
+) -> Result<CachedToken> {
     let cache = ctx.cache();
-    let now = crate::util::now_unix();
+    let now = clock();
     if let Some(t) = cache.read()
         && t.valid_for(now, min_secs)
     {
@@ -114,14 +123,14 @@ pub async fn ensure_token(
     }
     let lock_cache = cache.clone();
     let _lock = tokio::task::spawn_blocking(move || lock_cache.lock()).await??;
-    let now = crate::util::now_unix();
+    let now = clock();
     let current = cache.read();
     if let Some(t) = &current
         && t.valid_for(now, min_secs)
     {
         return Ok(t.clone());
     }
-    match renew(ctx).await {
+    match renew_with_clock(ctx, clock).await {
         Ok(fresh) => {
             cache.write(&fresh)?;
             Ok(fresh)
@@ -138,9 +147,13 @@ pub async fn ensure_token(
 
 /// Renews the session per the profile's method (never prompts).
 pub async fn renew(ctx: &ProfileCtx) -> Result<CachedToken> {
+    renew_with_clock(ctx, crate::util::now_unix).await
+}
+
+async fn renew_with_clock(ctx: &ProfileCtx, clock: fn() -> i64) -> Result<CachedToken> {
     let http = ctx.http(RENEW_HTTP_TIMEOUT)?;
     let secrets = ctx.secrets()?;
-    let now = crate::util::now_unix();
+    let now = clock();
     let not_logged_in = || {
         CliError::auth_required(format!(
             "not logged in to {} (profile {:?}); run `cucinactl login {}`",

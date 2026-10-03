@@ -99,6 +99,7 @@ const SCRUB: &[&str] = &[
     // Trust and proxies come from the test, never from the developer's shell.
     "CUCINA_CA_FILE",
     "SSL_CERT_FILE",
+    "CUCINA_ALLOW_INSECURE_HTTP",
     "HTTPS_PROXY",
     "https_proxy",
     "HTTP_PROXY",
@@ -124,6 +125,33 @@ pub fn command_at(program: &Path, config_dir: &Path) -> Command {
         .env("CUCINA_CREDENTIAL_STORE", "file")
         .env("NO_COLOR", "1");
     c
+}
+
+/// Explicitly bypass system proxies for owned loopback fakes. The pinned
+/// hyper-util matcher handles numeric IPs separately from the `*` domain rule.
+pub const LOOPBACK_NO_PROXY: &str = "127.0.0.1,::1,localhost";
+
+/// Verifies [`command_at`]'s isolation plus the explicit loopback proxy bypass,
+/// before a library-test child creates fixtures or clients. Never print values.
+pub fn assert_sanitized_environment() {
+    for name in SCRUB {
+        if *name == "NO_PROXY" || (cfg!(windows) && name.eq_ignore_ascii_case("NO_PROXY")) {
+            assert!(
+                std::env::var_os(name).as_deref() == Some(std::ffi::OsStr::new(LOOPBACK_NO_PROXY)),
+                "test child requires the owned loopback proxy bypass"
+            );
+        } else {
+            assert!(
+                std::env::var_os(name).is_none(),
+                "test child inherited {name}"
+            );
+        }
+    }
+    assert!(
+        std::env::var_os("CUCINA_CREDENTIAL_STORE").as_deref()
+            == Some(std::ffi::OsStr::new("file")),
+        "test child requires the file credential store"
+    );
 }
 
 /// An (unsigned for local purposes) JWT with the given claims.
@@ -206,10 +234,13 @@ pub fn write_secret(
     let paths = Paths {
         dir: dir.to_path_buf(),
     };
-    cucinactl::auth::secrets::Secrets::new(&paths, CredentialStore::File)
-        .expect("secrets")
-        .set(profile, kind, value)
-        .expect("write secret");
+    let secrets =
+        cucinactl::auth::secrets::Secrets::new(&paths, CredentialStore::File).expect("secrets");
+    assert!(
+        secrets.store() == CredentialStore::File,
+        "test fixture refuses to write to a non-file credential store"
+    );
+    secrets.set(profile, kind, value).expect("write secret");
 }
 
 /// Parses stdout as JSON.

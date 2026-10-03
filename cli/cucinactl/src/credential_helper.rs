@@ -122,27 +122,41 @@ pub fn get(input: &str) -> Result<String> {
         Some(name) => Some(config.select(Some(&name))?),
         None => config.profile_for_host(&host),
     };
-    let (name, profile) = selected
-        .filter(|(_, p)| p.remote_host().as_deref() == Some(host.as_str()))
-        .ok_or_else(|| {
-            CliError::auth_required(format!(
-                "no matching cucinactl profile for {host}; run `cucinactl login https://{host}`"
-            ))
-        })?;
+    let (name, profile) = selected.ok_or_else(|| {
+        CliError::auth_required(format!(
+            "no matching cucinactl profile for {host}; run `cucinactl login https://{host}`"
+        ))
+    })?;
     let ctx = ProfileCtx::new(&paths, &name, &profile);
+    get_for_profile(&request.uri, &ctx, crate::util::now_unix)
+}
+
+/// Handles a credential request for a selected stored profile, enforcing host
+/// scope and the helper's renewal/advertised-expiry margins. `clock` returns Unix
+/// seconds and is sampled again after waiting for the profile's renewal lock.
+pub fn get_for_profile(uri: &str, ctx: &ProfileCtx, clock: fn() -> i64) -> Result<String> {
+    let host = config::host_of(uri)
+        .ok_or_else(|| CliError::usage(format!("request URI {uri:?} has no host")))?;
+    if ctx.profile.remote_host().as_deref() != Some(host.as_str()) {
+        return Err(CliError::auth_required(format!(
+            "no matching cucinactl profile for {host}; run `cucinactl login https://{host}`"
+        ))
+        .into());
+    }
 
     // Fast path: no runtime, no network, no keychain.
-    let now = crate::util::now_unix();
+    let now = clock();
     if let Some(token) = ctx.cache().read()
         && token.valid_for(now, RENEW_BEFORE_SECS)
     {
         return Ok(render(&token));
     }
     let token = runtime()?
-        .block_on(auth::ensure_token(
-            &ctx,
+        .block_on(auth::ensure_token_with_clock(
+            ctx,
             RENEW_BEFORE_SECS,
             HELPER_EXPIRY_MARGIN_SECS + 30,
+            clock,
         ))
         .map_err(|e| {
             if exit_code_for(&e) == ExitCode::AuthRequired {
