@@ -2,13 +2,26 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 # T14 observations, run as root INSIDE the throwaway test VM by scripts/t14-vm.sh (or by hand). Prints one
 # PASS/FAIL/INFO line per observation and exits non-zero if any FAIL. Never prints secrets.
-# usage: t14-guest-checks.sh after-install VERSION | after-reboot | no-login | mark | after-upgrade VERSION |
-#        after-uninstall
+# usage: t14-guest-checks.sh [--invocation ID] after-install VERSION | after-reboot | no-login | mark |
+#        after-upgrade VERSION | after-uninstall
+# Every keychain probe has private, immutable write/cleanup evidence; a failed write is not classified as "locked".
 set -u
+umask 077
 # Safety guard: no observations that mutate users/keychains may run on a physical Mac or an unmarked VM.
 [ "$(/usr/bin/id -u)" = 0 ] || exit 2
 case $(/usr/sbin/sysctl -n hw.model) in VirtualMac*) ;; *) printf 'FAIL  physical host refused\n'; exit 2 ;; esac
 [ "$(/usr/bin/stat -f '%u:%Lp' /var/db/cucina-t14-throwaway 2>/dev/null)" = 0:600 ] || exit 2
+if [ "${1:-}" = --invocation ]; then
+	[ $# -ge 3 ] || exit 2
+	invocation=$2
+	shift 2
+else
+	invocation=manual-$(/usr/bin/uuidgen | tr '[:upper:]' '[:lower:]')
+fi
+case $invocation in '' | *[!a-z0-9-]*) exit 2 ;; esac
+[ "${#invocation}" -le 100 ] || exit 2
+CAPTURE=$(CDPATH='' cd -- "$(dirname -- "$0")/../scripts" && pwd -P)/capture-command.pl
+EVIDENCE_ROOT=/var/root/.config/cucina/t14/probes
 
 LABEL=ai.sloper.cucina.hostd
 PKG_ID=ai.sloper.cucina.host
@@ -25,13 +38,31 @@ expect() { # DESCRIPTION GOT WANT
 }
 daemon_state() { launchctl print "system/$LABEL" 2>/dev/null | awk -F' = ' '/^\tstate = / { print $2; exit }'; }
 console() { stat -f %Su /dev/console 2>/dev/null; }
-# keychain_probe: can the cucina user write to its login keychain without UI (what Virtualization.framework needs)?
+# The assertion is still one noninteractive write with the same 15-second deadline. Record cleanup independently:
+# it must never replace the primary result, overwrite an earlier probe, or emit the deleted item's attributes.
 keychain_probe() {
-	uid=$(id -u cucina 2>/dev/null) || return 1
-	launchctl asuser "$uid" sudo -H -u cucina /usr/bin/perl -e 'alarm 15; exec @ARGV or die "exec failed"' -- /usr/bin/security add-generic-password -U -a t14 -s cucina-t14-probe -w probe \
-		>/dev/null 2>&1 || return 1
-	launchctl asuser "$uid" sudo -H -u cucina /usr/bin/perl -e 'alarm 15; exec @ARGV or die "exec failed"' -- /usr/bin/security delete-generic-password -a t14 -s cucina-t14-probe >/dev/null 2>&1
-	return 0
+	uid=$(/usr/bin/id -u cucina) || return "$?"
+	mkdir -p "$EVIDENCE_ROOT" || return "$?"
+	chmod 0700 "$EVIDENCE_ROOT" || return "$?"
+	probe_dir=$EVIDENCE_ROOT/$invocation
+	mkdir -m 0700 "$probe_dir" || return "$?" # refuse reuse; keep first-boot failure evidence
+	probe_account=t14-$(/usr/bin/uuidgen | tr '[:upper:]' '[:lower:]')
+	probe_service=cucina-t14-probe-$invocation
+	/usr/bin/perl "$CAPTURE" --out "$probe_dir/write" --id "$invocation-write" \
+		--meta "phase=$phase" --meta requested_user=cucina --meta "requested_uid=$uid" \
+		--meta "probe_account=$probe_account" --meta "probe_service=$probe_service" -- \
+		launchctl asuser "$uid" sudo -H -u cucina /usr/bin/perl -e 'alarm 15; exec @ARGV or die "exec failed"' -- \
+		/usr/bin/security add-generic-password -U -a "$probe_account" -s "$probe_service" -w probe
+	write_status=$?
+	# One bounded cleanup attempt, including a write that failed after possibly creating its unique fixture.
+	/usr/bin/perl "$CAPTURE" --out "$probe_dir/cleanup" --id "$invocation-cleanup" \
+		--meta "phase=$phase" --meta requested_user=cucina --meta "requested_uid=$uid" \
+		--meta "probe_account=$probe_account" --meta "probe_service=$probe_service" -- \
+		launchctl asuser "$uid" sudo -H -u cucina /usr/bin/perl -e 'alarm 15; exec @ARGV or die "exec failed"' -- \
+		/usr/bin/security delete-generic-password -a "$probe_account" -s "$probe_service"
+	cleanup_status=$?
+	info "keychain probe $invocation: write exit=$write_status, cleanup exit=$cleanup_status; private evidence=$probe_dir"
+	return "$write_status"
 }
 
 phase=${1:-}
@@ -67,7 +98,12 @@ after-install)
 after-reboot)
 	expect "console user after restart (auto-login)" "$(console)" cucina
 	expect "daemon state" "$(daemon_state)" running
-	if keychain_probe; then pass "cucina login keychain unlocked (no UI needed)"; else fail "cucina login keychain locked"; fi
+	if keychain_probe; then
+		pass "cucina login keychain writable noninteractively"
+	else
+		probe_status=$?
+		fail "cucina login-keychain usability probe failed (exit=$probe_status; see private evidence, cause unclassified)"
+	fi
 	expect "FileVault" "$(fdesetup status | head -1)" "FileVault is Off."
 	;;
 no-login)

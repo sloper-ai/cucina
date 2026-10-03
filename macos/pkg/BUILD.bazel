@@ -10,6 +10,7 @@ _SOURCES = glob([
     "install-scripts/*",
     "payload/*",
     "resources/*",
+    "scripts/*.pl",
     "scripts/*.sh",
 ]) + ["pins.env"]
 

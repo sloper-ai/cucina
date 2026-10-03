@@ -8,7 +8,9 @@
 # usage: t14-vm.sh run --hostd PATH [--vm cucina-pkgtest-N] [--image REF] [--controller-url URL]
 #        [--ca-cert FILE] [--token-file FILE] [--notices FILE] [--keep] [--work DIR_UNDER_CONFIG_CUCINA]
 #        t14-vm.sh down [--vm cucina-pkgtest-N]
-# --keep preserves the VM on success OR failure for diagnosis. Otherwise an EXIT trap deletes our clone.
+# --keep preserves the VM on success OR failure for diagnosis. Normally EXIT deletes our clone. Incomplete probe
+# retrieval is an exception: abort, stop/retain only our clone and private recovery key, and write recovery.json.
+# The coordinator must recover the evidence or record irrecoverable loss, then remove the owned clone; never abandon it.
 set -eu
 umask 077
 
@@ -42,7 +44,9 @@ case $vm in cucina-pkgtest-*) ;; *) cucina_die "--vm must start with cucina-pkgt
 case $cmd in run | down) ;; *) cucina_die "unknown command: $cmd" ;; esac
 [ -n "${TART_HOME:-}" ] || cucina_die "TART_HOME is not set (source .work/env.sh)"
 cucina_need tart ssh scp ssh-keygen tar jq
-ip='' created=0 failed=0
+ip='' created=0 failed=0 step_sequence=0
+evidence_pending=0 pending_step_id='' pending_phase_status='' pending_phase_dir=''
+pending_reason='' recovery_stop_status='' recovery_vm_state=unknown
 
 ssh_vm() { ssh -i "$key" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$work/known_hosts" -o LogLevel=ERROR \
 	-o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o BatchMode=yes "admin@$ip" "$@"; }
@@ -75,15 +79,59 @@ tart list --format json | jq -e --arg n "$image" 'any(.[]; .Name == $n)' >/dev/n
 running=$(tart list --format json | jq '[.[] | select(.State == "running")] | length')
 [ "$running" -lt 2 ] || cucina_die "two macOS VMs are already running"
 [ ! -e "$work/ssh-key" ] || cucina_die "workspace has an existing SSH identity; use a new --work"
+[ ! -e "$work/results.txt" ] || cucina_die "workspace already holds a run's evidence; use a new --work"
 mkdir -p "$HOME/.config/cucina" "$work"
 chmod 0700 "$HOME/.config/cucina" "$work"
 key=$work/ssh-key
+write_recovery_manifest() {
+	if /usr/bin/perl -MJSON::PP -e '
+		my ($vm,$id,$phase_exit,$dir,$key,$known_hosts,$reason,$stop_exit,$state)=@ARGV;
+		my $record={schema=>1,status=>"cleanup-incomplete",owned_by_run=>JSON::PP::true,vm=>$vm,
+			pending_invocation=>$id,phase_exit_code=>length($phase_exit) ? 0+$phase_exit : undef,
+			phase_evidence_dir=>$dir,guest_evidence_dir=>"/var/root/.config/cucina/t14/probes/$id",
+			ssh_key=>$key,known_hosts=>$known_hosts,reason=>$reason,
+			stop_exit_code=>length($stop_exit) ? 0+$stop_exit : undef,vm_state=>$state,
+			stop_verified=>$state eq "stopped" ? JSON::PP::true : JSON::PP::false,
+			required_next_step=>"Coordinator must recover evidence or record irrecoverable loss, then remove only this owned clone; retention is not indefinite cleanup permission."};
+		print JSON::PP->new->canonical->pretty->ascii->encode($record) or die "cannot write recovery manifest\n";
+		close STDOUT or die "cannot close recovery manifest\n";
+	' "$vm" "$pending_step_id" "$pending_phase_status" "$pending_phase_dir" "$key" "$work/known_hosts" \
+		"$pending_reason" "$recovery_stop_status" "$recovery_vm_state" >"$work/recovery.json.tmp"; then
+		mv "$work/recovery.json.tmp" "$work/recovery.json"
+	else return 1; fi
+}
+retain_pending_evidence() {
+	# A persistence error must not prevent the stop attempt. Never delete a clone whose original probe artifacts
+	# have not been retrieved; keep its private key/known-hosts and evidence so the coordinator can recover them.
+	keep=1
+	printf 'cleanup-incomplete\n' >"$work/cleanup-status" || cucina_warn "could not persist cleanup-incomplete status"
+	write_recovery_manifest || cucina_warn "could not persist initial recovery manifest"
+	if recovery_stop_output=$(tart stop "$vm" --timeout 60 2>&1); then recovery_stop_status=0; else recovery_stop_status=$?; fi
+	printf '%s\n' "$recovery_stop_output" | /usr/bin/perl -e 'read STDIN,my $s,4096; print $s' \
+		>"$work/recovery-stop.log" || cucina_warn "could not retain stop diagnostics"
+	if recovery_fleet=$(tart list --format json 2>/dev/null); then
+		recovery_vm_state=$(printf '%s' "$recovery_fleet" | jq -r --arg n "$vm" '[.[] | select(.Name == $n) | .State][0] // "absent"') || recovery_vm_state=unknown
+	fi
+	write_recovery_manifest || cucina_warn "could not persist final recovery manifest"
+	# These are duplicate staging copies, not recovery evidence. The private SSH identity is deliberately retained.
+	rm -rf "$work/kit" "$work/kit.tgz"
+	if [ "$recovery_vm_state" = stopped ]; then
+		cucina_warn "cleanup-incomplete: stopped and retained owned VM $vm for evidence recovery ($work/recovery.json)"
+	else
+		cucina_warn "cleanup-incomplete: STOP NOT VERIFIED for owned VM $vm (state=$recovery_vm_state, stop exit=$recovery_stop_status); coordinator intervention required ($work/recovery.json)"
+	fi
+}
 cleanup() {
-	code=$?
+	cleanup_code=$?
 	trap - EXIT INT TERM
-	if [ "$created" = 1 ] && [ "$keep" = 0 ]; then down || code=1; fi
-	if [ "$keep" = 0 ]; then rm -rf "$work/kit" "$work/kit.tgz"; rm -f "$key" "$key.pub"; fi
-	exit "$code"
+	if [ "$created" = 1 ] && [ "$evidence_pending" = 1 ]; then
+		retain_pending_evidence
+		[ "$cleanup_code" != 0 ] || cleanup_code=1
+	else
+		if [ "$created" = 1 ] && [ "$keep" = 0 ]; then down || cleanup_code=1; fi
+		if [ "$keep" = 0 ]; then rm -rf "$work/kit" "$work/kit.tgz"; rm -f "$key" "$key.pub"; fi
+	fi
+	exit "$cleanup_code"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -182,16 +230,81 @@ sign_in_vm() {
 		scripts/build-pkg.sh --uninstall --version 0.1.1 --installer-identity "Cucina T14 Installer" \
 			--keychain "$KEYCHAIN" --out "$w/out/cucina-host-uninstall-0-1-1.pkg" >"$w/sign-uninstall.log" 2>&1'
 }
+new_step() {
+	step_sequence=$((step_sequence + 1))
+	step_id=$(printf '%02d-%s' "$step_sequence" "$1")
+	step_dir=$work/steps/$step_id
+	mkdir -p "$work/steps"
+	mkdir -m 0700 "$step_dir" || cucina_die "refusing to replace step evidence $step_id"
+}
+# guest [--private] LABEL PHASE [ARGS] — labels distinguish first boot from repaired login and each uninstall.
+# --private preserves marker-step logs/status without adding their pre-existing checks to the aggregate count.
 guest() {
-	if sudo_vm sh "$GUEST/macos/pkg/test/t14-guest-checks.sh" "$@" >"$work/phase-$1.log" 2>&1; then :; else failed=1; fi
-	grep -E '^(PASS|FAIL|INFO) ' "$work/phase-$1.log" | tee -a "$work/results.txt" || true
-	if ! grep -q '^PASS' "$work/phase-$1.log"; then failed=1; printf 'FAIL  guest phase %s did not produce evidence\n' "$1" | tee -a "$work/results.txt"; fi
+	private_step=0
+	if [ "$1" = --private ]; then private_step=1; shift; fi
+	new_step "$1"
+	shift
+	guest_phase=$1
+	if [ "$guest_phase" = after-reboot ]; then
+		evidence_pending=1
+		pending_step_id=$step_id
+		pending_phase_dir=$step_dir
+		pending_phase_status=''
+		pending_reason=probe-evidence-pending
+	fi
+	if sudo_vm sh "$GUEST/macos/pkg/test/t14-guest-checks.sh" --invocation "$step_id" "$@" >"$step_dir/phase.log" 2>&1; then
+		phase_status=0
+	else
+		phase_status=$?
+		failed=1
+	fi
+	[ "$guest_phase" != after-reboot ] || pending_phase_status=$phase_status
+	printf '%s\n' "$phase_status" >"$step_dir/exit-code"
+	printf '%s\n' "$guest_phase" >"$step_dir/phase"
+	if [ "$private_step" = 1 ]; then
+		[ "$phase_status" = 0 ] || cucina_die "guest step $step_id failed (exit=$phase_status); private evidence retained"
+		return 0
+	fi
+	grep -E '^(PASS|FAIL|INFO) ' "$step_dir/phase.log" | tee -a "$work/results.txt" || true
+	if ! grep -q '^PASS' "$step_dir/phase.log"; then
+		failed=1
+		printf 'FAIL  guest step %s did not produce evidence (exit=%s)\n' "$step_id" "$phase_status" | tee -a "$work/results.txt"
+	elif [ "$phase_status" != 0 ] && ! grep -q '^FAIL' "$step_dir/phase.log"; then
+		printf 'FAIL  guest step %s exited %s; see private phase log\n' "$step_id" "$phase_status" | tee -a "$work/results.txt"
+	fi
+	[ "$guest_phase" = after-reboot ] || return 0
+	# Retrieve both outcomes now, before password/keychain reset, uninstall or VM deletion. Copy failure is evidence
+	# loss, not a reason to re-run the probe or to substitute the later repaired-login result.
+	collection_failed=0
+	for operation in write cleanup; do
+		mkdir -m 0700 "$step_dir/$operation"
+		for artifact in status.json stderr; do
+			if sudo_vm /bin/cat "/var/root/.config/cucina/t14/probes/$step_id/$operation/$artifact" \
+				>"$step_dir/$operation/$artifact" 2>>"$step_dir/collection.stderr"; then :; else collection_failed=1; fi
+		done
+		if /usr/bin/perl -MJSON::PP -e '
+			my ($file,$id)=@ARGV; open my $f,"<",$file or exit 1; local $/; my $s=decode_json(<$f>);
+			exit !($s->{completed} && $s->{id} eq $id);
+		' "$step_dir/$operation/status.json" "$step_id-$operation" 2>>"$step_dir/collection.stderr"; then :; else collection_failed=1; fi
+	done
+	if [ "$collection_failed" != 0 ]; then
+		failed=1
+		pending_reason=probe-evidence-retrieval-failed
+		printf 'FAIL  incomplete private probe evidence for %s; original phase exit=%s retained\n' "$step_id" "$phase_status" | tee -a "$work/results.txt"
+		cucina_die "evidence recovery required; aborting before reset/uninstall/deletion (owned clone will be stopped and retained)"
+	fi
+	evidence_pending=0
+	pending_step_id='' pending_phase_dir='' pending_phase_status='' pending_reason=''
 }
 install_pkg() {
-	if sudo_vm installer -pkg "$GUEST/out/$1.pkg" -target / >"$work/$1.install.log" 2>&1; then
+	new_step "install-$1"
+	if sudo_vm installer -pkg "$GUEST/out/$1.pkg" -target / >"$step_dir/install.log" 2>&1; then
+		printf '0\n' >"$step_dir/exit-code"
 		printf 'PASS  installer %s (no -allowUntrusted)\n' "$1" | tee -a "$work/results.txt"
 	else
-		printf 'FAIL  installer %s; see private install log\n' "$1" | tee -a "$work/results.txt"
+		install_status=$?
+		printf '%s\n' "$install_status" >"$step_dir/exit-code"
+		printf 'FAIL  installer %s (exit=%s); see private step %s\n' "$1" "$install_status" "$step_id" | tee -a "$work/results.txt"
 		cucina_die "installer failed; aborting lifecycle"
 	fi
 }
@@ -211,24 +324,24 @@ set -- --signer-cert "$GUEST/out/installer.pem" --controller-url "$controller_ur
 if [ -n "$ca_cert" ]; then set -- "$@" --ca-cert "$GUEST/in/ca.pem"; else set -- "$@" --ca-pin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; fi
 sudo_vm sh "$GUEST/macos/pkg/scripts/simulate-mdm.sh" "$@" >"$work/simulate.log" 2>&1
 install_pkg cucina-host-0-1-0
-guest after-install 0.1.0
+guest initial-install after-install 0.1.0
 restart_vm cucina
-guest after-reboot
+guest initial-login after-reboot
 sudo_vm sysadminctl -autologin off >"$work/autologin-off.log" 2>&1
 restart_vm root
-guest no-login
+guest without-login no-login
 sudo_vm /usr/local/cucina/bin/cucina-host-setup autologin --reset-password >"$work/autologin-repair.log" 2>&1
 restart_vm cucina
-guest after-reboot
-sudo_vm sh "$GUEST/macos/pkg/test/t14-guest-checks.sh" mark >"$work/mark.log" 2>&1
+guest repaired-login after-reboot
+guest --private before-upgrade-marker mark
 install_pkg cucina-host-0-1-1
-guest after-upgrade 0.1.1
+guest upgraded after-upgrade 0.1.1
 sudo_vm /usr/local/cucina/bin/cucina-host-uninstall --yes >"$work/uninstall-script.log" 2>&1
-guest after-uninstall
+guest script-uninstalled after-uninstall
 install_pkg cucina-host-0-1-1
-sudo_vm sh "$GUEST/macos/pkg/test/t14-guest-checks.sh" mark >"$work/mark.log" 2>&1
+guest --private after-reinstall-marker mark
 install_pkg cucina-host-uninstall-0-1-1
-guest after-uninstall
+guest package-uninstalled after-uninstall
 printf '\nT14 package checks: %s passed, %s failed (private evidence: %s)\n' \
 	"$(grep -c '^PASS' "$work/results.txt" || true)" "$(grep -c '^FAIL' "$work/results.txt" || true)" "$work/results.txt"
 [ "$failed" = 0 ] && ! grep -q '^FAIL' "$work/results.txt"
