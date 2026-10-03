@@ -185,10 +185,10 @@ fn tui_session_in_a_pty() {
 
     let (_rt, mgmt, dir) = fixture();
     assert_pipes_are_not_a_terminal(dir.path());
-    // conpty 0.5 constructs CreateProcessW itself: Command's stdio settings are
-    // not applied and only explicitly set environment entries are forwarded.
-    // Bootstrap inside the real pseudoconsole, then open its console devices for
-    // the TUI rather than inheriting Bazel's redirected standard handles.
+    // conpty 0.5.1 constructs CreateProcessW itself and forwards only explicitly
+    // set environment entries. It attaches cmd to the pseudoconsole through
+    // STARTUPINFOEXW, without STARTF_USESTDHANDLES, so the TUI must inherit cmd's
+    // console handles, not reopen them with shell redirection.
     let mut cmd = support::command_at(std::path::Path::new("cmd.exe"), dir.path());
     for name in [
         "SystemRoot",
@@ -208,14 +208,12 @@ fn tui_session_in_a_pty() {
         "CUCINA_PTY_EXE",
         std::path::absolute(support::bin()).expect("absolute cucinactl path"),
     );
-    // conpty concatenates Command arguments verbatim, so use cmd's documented
-    // /S /C outer quotes. The executable path is expanded once inside quotes.
-    cmd.args([
-        "/d",
-        "/s",
-        "/c",
-        r#"""%CUCINA_PTY_EXE%" tui <CONIN$ >CONOUT$ 2>&1""#,
-    ]);
+    // conpty concatenates the program and arguments verbatim (no path quoting),
+    // so retain cmd's /S /C outer quotes and expand the executable path once.
+    // Guards: R-CLI-4 / Windows startup — `>CONOUT$` opens stdout write-only.
+    // Rust's IsTerminal calls GetConsoleMode, which requires GENERIC_READ even
+    // on stdout. Keep ConPTY's read/write console handles, not that redirection.
+    cmd.args(["/d", "/s", "/c", r#"""%CUCINA_PTY_EXE%" tui""#]);
     let mut p = Session::spawn(cmd).expect("spawn cucinactl tui in ConPTY");
     // ConPTY without a parent console starts tiny: give the TUI room.
     p.get_process_mut().resize(100, 30).expect("resize");
