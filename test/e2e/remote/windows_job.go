@@ -72,7 +72,9 @@ function New-OwnedGate([string]$name) {
  $gate=New-Object Threading.Mutex($false,($name+'.gate'),[ref]$created,$acl)
  return $gate
 }
-function Protect-OwnedDirectory([string]$path) {
+` + psProtectJobDirectory
+
+const psProtectJobDirectory = `function Protect-OwnedDirectory([string]$path) {
  New-Item -ItemType Directory -Force -Path $path | Out-Null
  if ((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'owned job directory is a reparse point' }
  $acl=New-Object Security.AccessControl.DirectorySecurity
@@ -87,37 +89,82 @@ function Protect-OwnedDirectory([string]$path) {
 
 func windowsJobName(id string) string { return `Local\CucinaE2E-` + id }
 
+// Diagnostic records contain only fixed phase names and an integer session ID,
+// never command lines, environment values, principals or payload contents.
+func psStartupTrace(dir, role string) string {
+	return "$ErrorActionPreference='Stop'\n" + psProtectJobDirectory + fmt.Sprintf(`
+$J=%s
+function Report-OwnedTraceFailure {
+ try { [Console]::Error.WriteLine('owned startup diagnostics unavailable') } catch { }
+}
+$script:OwnedTraceReady=$false
+try { Protect-OwnedDirectory $J; $script:OwnedTraceReady=$true } catch { Report-OwnedTraceFailure }
+function Write-OwnedStage([string]$phase) {
+ if (-not $script:OwnedTraceReady) { return }
+ $staging=$null; $previous=$null
+ try {
+  if ($phase -cnotin @('runtime-load','runtime-ready','open-job','assign-self','payload-start','payload-exit','cim-create','cim-created','supervisor-ready')) { throw 'invalid owned startup phase' }
+  $record=$phase+' '+[string]([Diagnostics.Process]::GetCurrentProcess().SessionId)
+  if ($record.Length -gt 96) { throw 'owned startup record exceeds its bound' }
+  $path=Join-Path $J %s
+  $staging=$path+'.tmp'; $previous=$path+'.previous'
+  [IO.File]::WriteAllText($staging,$record)
+  if ([IO.File]::Exists($path)) {
+   # PS5 marshals a null backup argument as an empty path. Supply a real,
+   # private same-directory backup so replacement remains atomic.
+   [IO.File]::Replace($staging,$path,$previous)
+  } else { [IO.File]::Move($staging,$path) }
+ } catch { Report-OwnedTraceFailure } finally {
+  foreach($file in @($staging,$previous)) {
+   try { if ($file -and [IO.File]::Exists($file)) { [IO.File]::Delete($file) } } catch { Report-OwnedTraceFailure }
+  }
+ }
+}
+Write-OwnedStage 'runtime-load'
+`, psQuote(dir), psQuote(role+"-stage"))
+}
+
 func psStartOwnedJob(dir, id, prepare string) string {
 	name := psQuote(windowsJobName(id))
 	q := psQuote(dir)
-	runner := "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+	runner := psStartupTrace(dir, "supervisor") + psOwnedJob + fmt.Sprintf(`
 $J=%s; $name=%s
+Write-OwnedStage 'runtime-ready'
+$startupPhase='runtime-ready'
 $gate=New-OwnedGate $name
 $h=[IntPtr]::Zero
 try {
  Lock-OwnedGate $gate
  try {
   if (Test-Path -LiteralPath (Join-Path $J 'stop')) { return }
+  $startupPhase='open-job'
   $h=[CucinaOwnedJob]::OpenForAssignment($name)
   if ($h -eq [IntPtr]::Zero) { throw 'owned job missing before payload assignment' }
+  $startupPhase='assign-self'
   [CucinaOwnedJob]::AssignSelf($h)
   [IO.File]::WriteAllText((Join-Path $J 'pid'),[string]$PID)
   [IO.File]::WriteAllText((Join-Path $J 'ready'),'owned')
  } finally { $gate.ReleaseMutex() }
+ $startupPhase='payload-start'
+ Write-OwnedStage $startupPhase
  %s
+ $startupPhase='payload-exit'
  Lock-OwnedGate $gate
  try {
   if (Test-Path -LiteralPath (Join-Path $J 'stop')) { throw 'job was canceled before completion' }
   [IO.File]::WriteAllText((Join-Path $J 'exit.tmp'),[string]$p.ExitCode)
   Move-Item -Force -LiteralPath (Join-Path $J 'exit.tmp') -Destination (Join-Path $J 'exit')
  } finally { $gate.ReleaseMutex() }
+ Write-OwnedStage $startupPhase
 } catch {
+ Write-OwnedStage $startupPhase
  [IO.File]::WriteAllText((Join-Path $J 'start-error'),'owned supervisor failed')
  throw
 } finally { [CucinaOwnedJob]::Close($h);$gate.Dispose() }
 `, q, name, psRunCmd(dir))
-	return "$ErrorActionPreference='Stop'\n" + psOwnedJob + fmt.Sprintf(`
+	return psStartupTrace(dir, "launcher") + psOwnedJob + fmt.Sprintf(`
 $J=%s; $name=%s
+Write-OwnedStage 'runtime-ready'
 Protect-OwnedDirectory $J
 $gate=New-OwnedGate $name
 $h=[IntPtr]::Zero
@@ -131,14 +178,17 @@ try {
  %s
  [IO.File]::WriteAllText((Join-Path $J 'run.ps1'),[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(%s)))
  $cl='powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+(Join-Path $J 'run.ps1')+'"'
+ Write-OwnedStage 'cim-create'
  $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$cl}
  if ($r.ReturnValue -ne 0) { throw 'owned supervisor creation failed' }
  $deadline=[DateTime]::UtcNow.AddSeconds(20)
+ Write-OwnedStage 'cim-created'
  while (-not (Test-Path -LiteralPath (Join-Path $J 'ready'))) {
   if ((Test-Path -LiteralPath (Join-Path $J 'start-error')) -or (Test-Path -LiteralPath (Join-Path $J 'stop'))) { throw 'owned supervisor did not start' }
   if ([DateTime]::UtcNow -ge $deadline) { throw 'owned supervisor startup timeout' }
   Start-Sleep -Milliseconds 25
  }
+ Write-OwnedStage 'supervisor-ready'
  'started'
 } catch {
  Lock-OwnedGate $gate

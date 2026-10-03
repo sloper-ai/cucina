@@ -182,8 +182,10 @@ func tunnelFixture() error {
 // psSSM executes the public transport's real PowerShell/CIM scripts locally.
 // It has no AWS client or credentials and retains results like the SSM port.
 type psSSM struct {
-	mu      sync.Mutex
-	results map[string]*ssm.GetCommandInvocationOutput
+	mu                sync.Mutex
+	results           map[string]*ssm.GetCommandInvocationOutput
+	transportFailures []string
+	active            int
 }
 
 func (s *psSSM) SendCommand(ctx context.Context, in *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
@@ -192,7 +194,20 @@ func (s *psSSM) SendCommand(ctx context.Context, in *ssm.SendCommandInput, _ ...
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
 	cmd.WaitDelay = time.Second
+	s.mu.Lock()
+	s.active++
+	s.mu.Unlock()
 	err := cmd.Run()
+	s.mu.Lock()
+	s.active--
+	if err != nil {
+		text := errOut.String()
+		if len(text) > 2000 {
+			text = text[len(text)-2000:]
+		}
+		s.transportFailures = append(s.transportFailures, fmt.Sprintf("PowerShell transport: %v; stderr: %s", err, text))
+	}
+	s.mu.Unlock()
 	result := &ssm.GetCommandInvocationOutput{Status: ssmtypes.CommandInvocationStatusSuccess, StandardOutputContent: aws.String(out.String()), StandardErrorContent: aws.String(errOut.String())}
 	if err != nil {
 		var exit *exec.ExitError
@@ -212,6 +227,11 @@ func (s *psSSM) failures() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out strings.Builder
+	fmt.Fprintf(&out, "active PowerShell transports=%d\n", s.active)
+	for _, failure := range s.transportFailures {
+		out.WriteString(failure)
+		out.WriteByte('\n')
+	}
 	for _, r := range s.results {
 		if r.Status == ssmtypes.CommandInvocationStatusFailed {
 			out.WriteString(aws.ToString(r.StandardErrorContent))
@@ -223,6 +243,36 @@ func (s *psSSM) failures() string {
 		text = text[len(text)-4000:]
 	}
 	return text
+}
+
+func (s *psSSM) jobDiagnostics(root string) string {
+	var stages []string
+	jobs, _ := filepath.Glob(filepath.Join(root, "jobs", "*"))
+	for _, job := range jobs {
+		var present []string
+		for _, name := range []string{"owner", "ready", "start-error", "exit", "stop", "stopped"} {
+			if _, err := os.Stat(filepath.Join(job, name)); err == nil {
+				present = append(present, name)
+			}
+		}
+		for _, role := range []string{"launcher", "supervisor"} {
+			data, err := os.ReadFile(filepath.Join(job, role+"-stage"))
+			if err == nil && len(data) <= 128 {
+				fields := strings.Fields(string(data))
+				if len(fields) == 2 {
+					session, err := strconv.Atoi(fields[1])
+					if err == nil && session >= 0 {
+						switch fields[0] {
+						case "runtime-load", "runtime-ready", "open-job", "assign-self", "payload-start", "payload-exit", "cim-create", "cim-created", "supervisor-ready":
+							present = append(present, fmt.Sprintf("%s=%s(session=%d)", role, fields[0], session))
+						}
+					}
+				}
+			}
+		}
+		stages = append(stages, "job markers="+strings.Join(present, ","))
+	}
+	return s.failures() + "; " + strings.Join(stages, "; ")
 }
 
 func (s *psSSM) GetCommandInvocation(_ context.Context, in *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
@@ -425,7 +475,7 @@ func TestWindowsOwnedJobLifecycle(t *testing.T) {
 			bystander := acceptPeer(t, listener)
 			peerObserved = true
 			j, err := h.Start(ctx, "& '"+strings.ReplaceAll(exe, "'", "''")+"'", remote.Opts{Env: map[string]string{"CUCINA_OWNER_ROLE": "payload", "CUCINA_OWNER_MODE": mode, "CUCINA_OWNER_CONTROL": listener.Addr().String()}})
-			require.NoError(t, err, api.failures())
+			require.NoError(t, err, api.jobDiagnostics(root))
 			t.Cleanup(func() {
 				cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 				defer stop()

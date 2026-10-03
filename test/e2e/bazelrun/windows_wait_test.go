@@ -34,13 +34,24 @@ import (
 // The server exits only when the test closes its loopback connection; neither
 // readiness nor completion depends on a synchronization sleep.
 func TestMain(m *testing.M) {
-	if strings.EqualFold(filepath.Base(os.Args[0]), "bazel.exe") {
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(99)
+	}
+	// Windows lookup may preserve an extensionless argv[0]. The copied image,
+	// not the caller's spelling, determines whether this is our Bazel fixture.
+	if strings.EqualFold(filepath.Base(executable), "bazel.exe") {
 		code, err := syntheticBazel(os.Args[1:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			code = 99
 		}
 		os.Exit(code)
+	}
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-test.") {
+		fmt.Fprintln(os.Stderr, "unrecognized fixture entry; refusing recursive test execution")
+		os.Exit(99)
 	}
 	os.Exit(m.Run())
 }
@@ -111,8 +122,10 @@ func syntheticBazel(args []string) (int, error) {
 // It keeps finished command results like SSM, but never makes a network request
 // or requires AWS credentials. Only the fixture server uses a loopback socket.
 type localPowerShellSSM struct {
-	mu      sync.Mutex
-	results map[string]*ssm.GetCommandInvocationOutput
+	mu                sync.Mutex
+	results           map[string]*ssm.GetCommandInvocationOutput
+	transportFailures []string
+	active            int
 }
 
 func (s *localPowerShellSSM) SendCommand(ctx context.Context, in *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
@@ -120,7 +133,16 @@ func (s *localPowerShellSSM) SendCommand(ctx context.Context, in *ssm.SendComman
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.WaitDelay = time.Second
+	s.mu.Lock()
+	s.active++
+	s.mu.Unlock()
 	err := cmd.Run()
+	s.mu.Lock()
+	s.active--
+	if err != nil {
+		s.transportFailures = append(s.transportFailures, fmt.Sprintf("PowerShell transport: %v; stderr: %s", err, boundedPSFailure(stderr.String())))
+	}
+	s.mu.Unlock()
 	result := &ssm.GetCommandInvocationOutput{
 		Status:                ssmtypes.CommandInvocationStatusSuccess,
 		StandardOutputContent: aws.String(stdout.String()),
@@ -138,6 +160,47 @@ func (s *localPowerShellSSM) SendCommand(ctx context.Context, in *ssm.SendComman
 	id := strconv.Itoa(len(s.results) + 1)
 	s.results[id] = result
 	return &ssm.SendCommandOutput{Command: &ssmtypes.Command{CommandId: aws.String(id)}}, nil
+}
+
+func boundedPSFailure(s string) string {
+	if len(s) > 2000 {
+		return s[len(s)-2000:]
+	}
+	return s
+}
+
+func (s *localPowerShellSSM) diagnostics(root string) string {
+	s.mu.Lock()
+	active := s.active
+	failures := strings.Join(s.transportFailures, "\n")
+	s.mu.Unlock()
+	var stages []string
+	jobs, _ := filepath.Glob(filepath.Join(root, "jobs", "*"))
+	for _, job := range jobs {
+		var present []string
+		for _, name := range []string{"owner", "ready", "start-error", "exit", "stop", "stopped"} {
+			if _, err := os.Stat(filepath.Join(job, name)); err == nil {
+				present = append(present, name)
+			}
+		}
+		for _, role := range []string{"launcher", "supervisor"} {
+			data, err := os.ReadFile(filepath.Join(job, role+"-stage"))
+			if err == nil && len(data) <= 128 {
+				fields := strings.Fields(string(data))
+				if len(fields) == 2 {
+					session, err := strconv.Atoi(fields[1])
+					if err == nil && session >= 0 {
+						switch fields[0] {
+						case "runtime-load", "runtime-ready", "open-job", "assign-self", "payload-start", "payload-exit", "cim-create", "cim-created", "supervisor-ready":
+							present = append(present, fmt.Sprintf("%s=%s(session=%d)", role, fields[0], session))
+						}
+					}
+				}
+			}
+		}
+		stages = append(stages, "job markers="+strings.Join(present, ","))
+	}
+	return fmt.Sprintf("active PowerShell transports=%d; %s; %s", active, boundedPSFailure(failures), strings.Join(stages, "; "))
 }
 
 func (s *localPowerShellSSM) GetCommandInvocation(_ context.Context, in *ssm.GetCommandInvocationInput, _ ...func(*ssm.Options)) (*ssm.GetCommandInvocationOutput, error) {
@@ -188,8 +251,10 @@ func TestWindowsCommandsDoNotWaitForBazelServer(t *testing.T) {
 				outcome  *bazelrun.Outcome
 				err      error
 			}
-			finished := make(chan result, 1)
+			var completed result // published once by closing stopped; cleanup never consumes it
+			stopped := make(chan struct{})
 			go func() {
+				defer close(stopped)
 				if kind == "baseline" {
 					path := os.Getenv("BASELINE_PS1")
 					if path == "" {
@@ -197,25 +262,36 @@ func TestWindowsCommandsDoNotWaitForBazelServer(t *testing.T) {
 					}
 					path, err := filepath.Abs(path)
 					if err != nil {
-						finished <- result{err: err}
+						completed = result{err: err}
 						return
 					}
 					script := fmt.Sprintf("& '%s' -Workspace '%s' -Out '%s' -BazelArgs @('--config=lane-windows')", strings.ReplaceAll(path, "'", "''"), root, filepath.Join(root, "baseline-out"))
 					_, res, err := remote.RunJob(ctx, host, script, remote.Opts{Env: env}, time.Millisecond, nil)
-					finished <- result{baseline: res, err: err}
+					completed = result{baseline: res, err: err}
 					return
 				}
 				env["CUCINA_WAIT_BUILD_EXIT"] = "7"
 				out, err := bazelrun.Run(ctx, bazelrun.Invocation{Name: "wait-fixture", Host: host, Workspace: root, Command: "build", Args: []string{"--config=lane-windows", "//absl/..."}, Env: env, Poll: time.Millisecond}, filepath.Join(root, "collected"))
-				finished <- result{outcome: out, err: err}
+				completed = result{outcome: out, err: err}
 			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-stopped:
+					if completed.err != nil {
+						t.Errorf("owned RunJob completion/cleanup error: %v; %s", completed.err, api.diagnostics(root))
+					}
+				case <-time.After(5 * time.Second):
+					t.Errorf("owned RunJob cleanup did not join: %s", api.diagnostics(root))
+				}
+			})
 			var conn net.Conn
 			select {
 			case conn = <-server:
-			case res := <-finished:
-				t.Fatalf("wrapper ended before starting its server: %+v", res)
+			case <-stopped:
+				t.Fatalf("wrapper ended before starting its server: %+v; %s", completed, api.diagnostics(root))
 			case <-ctx.Done():
-				t.Fatal("synthetic Bazel server never became ready")
+				t.Fatalf("synthetic Bazel server never became ready: %s", api.diagnostics(root))
 			}
 			require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
 			pidText, err := bufio.NewReader(conn).ReadString('\n')
@@ -231,20 +307,20 @@ func TestWindowsCommandsDoNotWaitForBazelServer(t *testing.T) {
 				require.True(t, state.Success(), "fixture server did not exit cleanly")
 			})
 			defer release()
-			var res result
 			select {
-			case res = <-finished:
+			case <-stopped:
 			case <-time.After(10 * time.Second):
 				// Release only this synthetic server before failing; the old
 				// process-tree wait can then unwind without orphaned jobs.
 				release()
 				select {
-				case <-finished:
+				case <-stopped:
 				case <-ctx.Done():
 				}
-				t.Fatal("completed Bazel client was held by its persistent server")
+				t.Fatalf("completed Bazel client was held by its persistent server: %s", api.diagnostics(root))
 			}
-			require.NoError(t, res.err)
+			res := completed
+			require.NoError(t, res.err, api.diagnostics(root))
 			if kind == "baseline" {
 				require.Zero(t, res.baseline.ExitCode)
 				var outcome struct{ BuildExit, TestExit int }
