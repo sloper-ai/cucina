@@ -160,7 +160,16 @@ jobs:
       - name: bazel build
         run: bazelisk build --config=ci -- //...
       - name: bazel test
+        id: tests
         run: bazelisk test --config=ci -- //...
+      - name: chart boot timeout diagnostics (Windows)
+        if: failure() && runner.os == 'Windows' && steps.tests.outcome == 'failure'
+        # Dump Go stacks before the unchanged 60-second Bazel deadline. This
+        # diagnostic never replaces the full suite or clears its failed result.
+        run: |
+          bazelisk test --config=ci --nocache_test_results --test_output=all \
+            --test_arg=-test.v --test_arg=-test.timeout=50s \
+            --test_env=GOTRACEBACK=all -- //charts/cucina/tests/boot:boot_test
       - name: cross-build Rust release targets (Linux musl, Windows gnullvm)
         if: runner.os == 'Linux'
         run: |
