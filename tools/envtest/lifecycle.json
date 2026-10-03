@@ -1,0 +1,19 @@
+{
+  "replacements": [
+    {
+      "file": "pkg/internal/testing/process/signal_other.go",
+      "old": "//go:build !aix && !darwin && !dragonfly && !freebsd && !linux && !netbsd && !openbsd && !solaris && !zos",
+      "new": "//go:build !aix && !darwin && !dragonfly && !freebsd && !linux && !netbsd && !openbsd && !solaris && !windows && !zos"
+    },
+    {
+      "file": "pkg/internal/testing/process/process.go",
+      "old": "func (ps *State) Stop() error {\n",
+      "new": "func (ps *State) Stop() error {\n\tif handled, err := stopPlatformSpecific(ps); handled {\n\t\treturn err\n\t}\n"
+    }
+  ],
+  "additions": {
+    "pkg/internal/testing/process/lifecycle_windows_test.go": "patches/lifecycle_windows_test.go.in",
+    "pkg/internal/testing/process/signal_windows.go": "patches/signal_windows.go.in",
+    "pkg/internal/testing/process/stop_other.go": "patches/stop_other.go.in"
+  }
+}

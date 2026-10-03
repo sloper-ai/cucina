@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+filegroup(
+    name = "generated_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//internal/envtest:__pkg__"],
+)
+
+go_library(
+    name = "flock",
+    testonly = True,  # keep
+    srcs = [
+        "doc.go",
+        "errors.go",
+        "flock_other.go",
+        "flock_unix.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/envtest/internal/flock",
+    visibility = ["//internal/envtest:__subpackages__"],
+    deps = select({
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "@org_golang_x_sys//unix",
+        ],
+        "//conditions:default": [],
+    }),
+)

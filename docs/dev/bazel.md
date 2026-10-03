@@ -71,7 +71,14 @@ cucina_sh_test(name = "chart_lint_test", srcs = ["lint.sh"], data = ["//tools:he
   (`//tools:tier_tags_test` proves the guard rejects one). See ADR 0104.
 * Never tag `exclusive` (it disables remote execution); use `exclusive-if-local`.
 * `envtest = True` adds the pinned envtest-v1.36.2 assets and `KUBEBUILDER_ASSETS`
-  (`//tools/envtest:assets`, built from `@envtest`; darwin/linux/windows).
+  (`//tools/envtest:assets`, built from `@envtest`; darwin/linux/windows). Tests import
+  `github.com/sloper-ai/cucina/internal/envtest`: the checksum-pinned, generated test-only
+  v0.24.1 closure repairs owned Windows child termination/reaping before temporary-state
+  removal (ADR 0112). Unix shutdown and timeouts are unchanged; production controller-runtime
+  is not forked. `//tools/envtest:drift_test` detects source/patch drift and extra `.go` files
+  in the actual checkout; this one static gate is local and uncached because remote declared
+  inputs cannot reveal undeclared sources. It does not infer the checkout from runfile
+  symlinks. Regeneration and the compatible-upstream removal criterion are in ADR 0112.
 * `runfiles_env = {"BB_STORAGE": "@bb_release//:bb_storage"}` (cucina_go_test) adds the label
   to `data` and sets the variable to a path valid from the test's working directory. Don't
   put `$(rootpath ...)` in a go_test's `env`: rules_go runs the test from its package

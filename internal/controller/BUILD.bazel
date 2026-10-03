@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
 load("@rules_go//go:def.bzl", "go_library")
 load("//bazel:tiers.bzl", "cucina_go_test")
 
@@ -119,6 +121,7 @@ cucina_go_test(
         "//internal/canary",
         "//internal/config",
         "//internal/domain",
+        "//internal/envtest",
         "//internal/fakes",
         "//internal/ports",
         "//internal/reconcile",
@@ -134,6 +137,5 @@ cucina_go_test(
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
         "@io_k8s_apimachinery//pkg/apis/meta/v1/unstructured",
         "@io_k8s_sigs_controller_runtime//pkg/client",
-        "@io_k8s_sigs_controller_runtime//pkg/envtest",
     ],
 )

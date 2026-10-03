@@ -61,6 +61,7 @@ use_repo(
     "dev_cel_cel_go",
     "in_yaml_go_yaml_v3",
     "io_k8s_api",
+    "io_k8s_apiextensions_apiserver",
     "io_k8s_apimachinery",
     "io_k8s_client_go",
     "io_k8s_klog_v2",
@@ -217,6 +218,22 @@ use_repo(
     "protoc_gen_connect_rust",
     "tflint",
 )
+
+# Test-only envtest source closure (ADR 0112). The zip and each selected file are
+# checksum-verified by //tools/envtest:drift_test; no Go module cache is patched.
+envtest_source_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+envtest_source_file(
+    name = "envtest_source_archive",
+    downloaded_file_path = "controller-runtime-v0.24.1.zip",
+    sha256 = "8b0383d6842b4dc0bdd35e5417e2fe997417066fc59439bfe1ec0972b8df29b0",
+    urls = ["https://proxy.golang.org/sigs.k8s.io/controller-runtime/@v/v0.24.1.zip"],
+)
+
+# The full source-inventory gate is local-only, like the existing gitleaks gate.
+envtest_source_root = use_repo_rule("//tools/envtest:workspace.bzl", "envtest_source_root")
+
+envtest_source_root(name = "envtest_source_root")
 
 # Inputs of the unsigned macOS host package (//release:host_pkg, ADR 0151).
 include("//macos/pkg:deps.MODULE.bazel")

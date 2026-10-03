@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+filegroup(
+    name = "generated_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//internal/envtest:__pkg__"],
+)
+
+go_library(
+    name = "certs",
+    testonly = True,  # keep
+    srcs = ["tinyca.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/envtest/internal/testing/certs",
+    visibility = ["//internal/envtest:__subpackages__"],
+    deps = ["@io_k8s_client_go//util/cert"],
+)

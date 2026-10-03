@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: FSL-1.1-ALv2
 # envtest assets (etcd, kube-apiserver, kubectl; envtest-v1.36.2) as one
 # directory for KUBEBUILDER_ASSETS. Use via cucina_go_test(envtest = True).
+# gazelle:exclude drift_test.go
+load("@envtest_source_root//:defs.bzl", "ENVTEST_SOURCE_ROOT")
 load("//bazel:envtest.bzl", "cucina_envtest_data")
 load("//bazel:tiers.bzl", "cucina_go_test")
 
@@ -18,7 +20,38 @@ cucina_go_test(
     envtest = True,
     tier = "integration",
     deps = [
+        "//internal/envtest",
         "@io_k8s_client_go//discovery",
-        "@io_k8s_sigs_controller_runtime//pkg/envtest",
+        "@io_k8s_client_go//rest",
     ],
+)
+
+filegroup(
+    name = "patch_inputs",
+    srcs = glob(["patches/*.go.in"]),
+)
+
+# keep
+cucina_go_test(
+    name = "drift_test",
+    srcs = ["drift_test.go"],
+    data = [
+        ":patch_inputs",
+        "//internal/envtest:generated_sources",
+    ],
+    # Inspect the actual checkout inventory, including undeclared .go files that
+    # a sandbox/remote action's declared runfiles would otherwise omit.
+    env = {"ENVTEST_SOURCE_ROOT": ENVTEST_SOURCE_ROOT},
+    runfiles_env = {
+        "ENVTEST_GENERATED_FILE": "//internal/envtest:server.go",
+        "ENVTEST_SOURCE_ARCHIVE": "@envtest_source_archive//file",
+        "ENVTEST_SOURCE_MANIFEST": ":upstream.json",
+        "ENVTEST_SOURCE_PATCHES": ":lifecycle.json",
+        "ENVTEST_SYNC_BIN": "//tools/envtest/cmd/sync",
+    },
+    tags = [
+        "external",
+        "local",
+    ],
+    tier = "static",
 )

@@ -1,0 +1,89 @@
+{
+  "module": "sigs.k8s.io/controller-runtime",
+  "version": "v0.24.1",
+  "archive_url": "https://proxy.golang.org/sigs.k8s.io/controller-runtime/@v/v0.24.1.zip",
+  "archive_sha256": "8b0383d6842b4dc0bdd35e5417e2fe997417066fc59439bfe1ec0972b8df29b0",
+  "license": "Apache-2.0",
+  "local_patch_license": "FSL-1.1-ALv2",
+  "upstream_windows_fix": "https://github.com/kubernetes-sigs/controller-runtime/pull/3519",
+  "files": {
+    "LICENSE": {
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    "pkg/envtest/binaries.go": {
+      "sha256": "a221ac80237b6b527db3f3defbbece9568f4428c1ea94bd1eb253aa11a692834"
+    },
+    "pkg/envtest/crd.go": {
+      "sha256": "f7197f314f114d0775ca0947784eab5ed8753a2e09f468368ca105e503c4584e"
+    },
+    "pkg/envtest/doc.go": {
+      "sha256": "e8817b71f50c294742b67f0693ddabd79dd682ac164c740eef4e11c257dcb32f"
+    },
+    "pkg/envtest/helper.go": {
+      "sha256": "67ff8fd21156e13e5b926ca6dc77fc108e00e42769e01cb7fcd3e7b0040e818d"
+    },
+    "pkg/envtest/server.go": {
+      "sha256": "9b4985f07df7a34b919f92b33ab95cbe7399c19fcaa620eef8cbca6e3807952c"
+    },
+    "pkg/envtest/webhook.go": {
+      "sha256": "60607e1c283d1051a77db10da721f2bb93f66091c63deea714b9c68abe088548"
+    },
+    "pkg/internal/flock/doc.go": {
+      "sha256": "21fd9b69d363502bf6116271778051bd027fc3ee8c47c3795f2dbc1ade664d1c"
+    },
+    "pkg/internal/flock/errors.go": {
+      "sha256": "f6f3b35f09d4cb642c4107dd3eaac82d82884fb34fde94f494172e12bfbbd7e1"
+    },
+    "pkg/internal/flock/flock_other.go": {
+      "sha256": "4db2e67888fe10f31cb7eba8922fc86fe99cc6ec6bf3ed9b6d1494a45aa2de37"
+    },
+    "pkg/internal/flock/flock_unix.go": {
+      "sha256": "b51b782b3f8dbc4bb486bdb2e902693b248a401c33d54d143572abac53dc0461"
+    },
+    "pkg/internal/log/log.go": {
+      "sha256": "768fa2567f0d1294e607ea0c43d6634ea1a92d4778a96a27af3dd3045ab21ce5"
+    },
+    "pkg/internal/testing/addr/manager.go": {
+      "sha256": "3aadc77c750e405a8f7484a26690ebccc738242a57643646c739aaecc03d7ac0"
+    },
+    "pkg/internal/testing/certs/tinyca.go": {
+      "sha256": "f4965b3ec877e602345067ebfca937dac27bf4ecb05ad22399125e97051b0772"
+    },
+    "pkg/internal/testing/controlplane/apiserver.go": {
+      "sha256": "3d980ac818aaac7fd017b9153cedf66a9e15b3cda1e8a5d7c0a6b61aaefc9207"
+    },
+    "pkg/internal/testing/controlplane/auth.go": {
+      "sha256": "26aa5c58c74bd7a9d5069d640d00f71e80e2e250eccf255013635ea5f953c2c9"
+    },
+    "pkg/internal/testing/controlplane/etcd.go": {
+      "sha256": "950177300b03a5cf92b1cf80e41f8d56a0062746b40ed34088b50699988ff956"
+    },
+    "pkg/internal/testing/controlplane/kubectl.go": {
+      "sha256": "cdf299d57525649d77923e31a5f0e164f826bb8fcc762610ed616c8e8f9cbeab"
+    },
+    "pkg/internal/testing/controlplane/plane.go": {
+      "sha256": "aa58ec6dd4e9d2c37ae7cad85bad0a914af1515ddc8db37bfcac937953ba4b76"
+    },
+    "pkg/internal/testing/process/arguments.go": {
+      "sha256": "202cb14dcf1e51d5f3903675d8b0079f35ac67fbb6acf84dc6f107085970ea14"
+    },
+    "pkg/internal/testing/process/bin_path_finder.go": {
+      "sha256": "83df059c0e2928c49aa0e919d285cf956e4e8c45f2a1a5b23e47942064daab46"
+    },
+    "pkg/internal/testing/process/procattr_other.go": {
+      "sha256": "4d8dc57ec489e01481e95522bd627b2142001a6b5345fa51d63fb6f2fc296a07"
+    },
+    "pkg/internal/testing/process/procattr_unix.go": {
+      "sha256": "38004c6beee134f17ac0ea8c9bf95c88885d93ccbfe20425aeaea7c46201293b"
+    },
+    "pkg/internal/testing/process/process.go": {
+      "sha256": "61175035993ec08afd0ab9fb4d4142d7db81c61aca58c96173659f6be36b24c9"
+    },
+    "pkg/internal/testing/process/signal_other.go": {
+      "sha256": "94da01ccca3d79d2a17f9c57408d5eca32e06116c550dbfe93e4f5b355bf540e"
+    },
+    "pkg/internal/testing/process/signal_unix.go": {
+      "sha256": "1642ca42ec126a6ca3965e8cbded4801b7f88140793084fa219c19d162cdc64a"
+    }
+  }
+}

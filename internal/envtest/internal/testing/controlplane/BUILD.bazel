@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+filegroup(
+    name = "generated_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//internal/envtest:__pkg__"],
+)
+
+go_library(
+    name = "controlplane",
+    testonly = True,  # keep
+    srcs = [
+        "apiserver.go",
+        "auth.go",
+        "etcd.go",
+        "kubectl.go",
+        "plane.go",
+    ],
+    importpath = "github.com/sloper-ai/cucina/internal/envtest/internal/testing/controlplane",
+    visibility = ["//internal/envtest:__subpackages__"],
+    deps = [
+        "//internal/envtest/internal/testing/addr",
+        "//internal/envtest/internal/testing/certs",
+        "//internal/envtest/internal/testing/process",
+        "@io_k8s_apimachinery//pkg/util/errors",
+        "@io_k8s_client_go//rest",
+        "@io_k8s_client_go//tools/clientcmd",
+        "@io_k8s_client_go//tools/clientcmd/api",
+    ],
+)

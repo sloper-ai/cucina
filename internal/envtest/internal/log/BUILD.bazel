@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: FSL-1.1-ALv2
+
+load("@rules_go//go:def.bzl", "go_library")
+
+filegroup(
+    name = "generated_sources",
+    srcs = glob(["*.go"]),
+    visibility = ["//internal/envtest:__pkg__"],
+)
+
+go_library(
+    name = "log",
+    testonly = True,  # keep
+    srcs = ["log.go"],
+    importpath = "github.com/sloper-ai/cucina/internal/envtest/internal/log",
+    visibility = ["//internal/envtest:__subpackages__"],
+    deps = [
+        "@com_github_go_logr_logr//:logr",
+        "@io_k8s_sigs_controller_runtime//pkg/log",
+    ],
+)

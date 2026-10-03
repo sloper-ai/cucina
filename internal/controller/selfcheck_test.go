@@ -15,10 +15,10 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/sloper-ai/cucina/internal/config"
 	"github.com/sloper-ai/cucina/internal/controller"
+	"github.com/sloper-ai/cucina/internal/envtest"
 	"github.com/sloper-ai/cucina/internal/fakes"
 )
 

@@ -15,9 +15,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/sloper-ai/cucina/internal/controller"
+	"github.com/sloper-ai/cucina/internal/envtest"
 )
 
 // The integration tests run a real kube-apiserver + etcd (envtest) with the

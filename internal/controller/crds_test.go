@@ -19,10 +19,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/sloper-ai/cucina/api/crds"
 	"github.com/sloper-ai/cucina/internal/controller"
+	"github.com/sloper-ai/cucina/internal/envtest"
 )
 
 var wantCRDs = []string{"machosts.cucina.sloper.ai", "trustpolicies.cucina.sloper.ai", "workerpools.cucina.sloper.ai"}

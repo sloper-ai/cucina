@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//go:build windows
+
+// Cucina's test-only lifecycle adapter. Upstream's process state owns the
+// *os.Process handle and its Wait goroutine; no PID lookup or global kill is used.
+package process
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path"
+	"syscall"
+	"time"
+)
+
+// os.Process.Signal does not implement Unix signals on Windows. This is the
+// owned-handle behavior in controller-runtime PR 3519, not process-tree killing.
+func signalProcess(process *os.Process, _ syscall.Signal) error {
+	return process.Kill()
+}
+
+func stopPlatformSpecific(ps *State) (bool, error) {
+	if ps.Cmd != nil && ps.Cmd.Process != nil {
+		if exited, _ := ps.Exited(); !exited {
+			killErr := ps.Cmd.Process.Kill()
+			// The existing stop budget bounds the one Wait goroutine. Do not
+			// remove certificates/data while any owned child may still use them.
+			timer := time.NewTimer(ps.StopTimeout)
+			defer timer.Stop()
+			select {
+			case <-ps.waitDone:
+				// Cmd.Wait can release the Windows handle before State publishes
+				// exited. EINVAL/ErrProcessDone are benign only after that join.
+				if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) && !errors.Is(killErr, syscall.EINVAL) {
+					return true, fmt.Errorf("unable to terminate owned process %s: %w", ps.Path, killErr)
+				}
+			case <-timer.C:
+				timeoutErr := fmt.Errorf("timeout waiting for process %s to stop: %w", path.Base(ps.Path), context.DeadlineExceeded)
+				if killErr != nil {
+					return true, errors.Join(timeoutErr, fmt.Errorf("unable to terminate owned process %s: %w", ps.Path, killErr))
+				}
+				return true, timeoutErr
+			}
+		}
+	}
+	ps.ready = false
+	if ps.DirNeedsCleaning {
+		return true, os.RemoveAll(ps.Dir)
+	}
+	return true, nil
+}

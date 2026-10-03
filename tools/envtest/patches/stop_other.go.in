@@ -1,0 +1,7 @@
+// SPDX-License-Identifier: FSL-1.1-ALv2
+//go:build !windows
+
+// All non-Windows platforms retain the upstream Stop body and signal behavior.
+package process
+
+func stopPlatformSpecific(_ *State) (bool, error) { return false, nil }
