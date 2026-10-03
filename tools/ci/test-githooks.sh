@@ -52,6 +52,17 @@ mkdir -p "$HOME"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_TERMINAL_PROMPT=0 GIT_EDITOR=true GIT_PAGER=cat
 
+# On macOS /usr/bin/git is a launcher. Avoid its repeated toolchain lookup in
+# fixture setup and direct staged checks, just as Git does for hook children.
+# Preserve explicitly selected Git wrappers and custom (possibly relative) helper
+# paths; other installations keep their existing command selection unchanged.
+if [ "$(command -v git)" = /usr/bin/git ] && [ -z "${GIT_EXEC_PATH+x}" ] && [ "$(uname -s)" = Darwin ]; then
+    git_exec_path="$(git --exec-path)"
+    if [ -x "$git_exec_path/git" ]; then
+        export PATH="$git_exec_path:$PATH"
+    fi
+fi
+
 passed=0
 failed=0
 out="$work/out.txt"
@@ -92,8 +103,10 @@ new_repo() {
     git config core.hooksPath "$hooks"
 }
 
-put() { # put <path>: write stdin to <path>, creating directories
-    mkdir -p "$(dirname "$1")"
+put() { # put <relative path>: write stdin to <path>, creating directories
+    local dir=.
+    case "$1" in */*) dir="${1%/*}" ;; esac
+    [ -d "$dir" ] || mkdir -p "$dir"
     cat >"$1"
 }
 
